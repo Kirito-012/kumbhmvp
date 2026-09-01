@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
       FROM kumbh.sector_plan
       WHERE $1::int IS NULL OR sector_no = $1
       GROUP BY class_group
-      ORDER BY hectares DESC;
+      ORDER BY class_group;
       `,
       [sectorNo],
     ),

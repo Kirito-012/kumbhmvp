@@ -189,3 +189,37 @@ input[type='checkbox'].kumbh-checkbox {
     transform: translateY(0) scale(1);
   }
 }
+
+/* Feature-click popup (MapView's showPopup) -- MapLibre wraps whatever HTML
+   we hand it in its own boxy, shadowless chrome by default. These overrides
+   strip that chrome so the card built in showPopup's markup (rounded-2xl,
+   soft elevation, matching Panel.tsx's look) is the only visible surface. */
+.kumbh-map .maplibregl-popup-content {
+  padding: 0;
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  overflow: hidden;
+}
+.kumbh-map .maplibregl-popup-close-button {
+  z-index: 1;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  color: #64748b;
+  border-radius: 999px;
+  transition: background-color 0.15s ease;
+}
+.kumbh-map .maplibregl-popup-close-button:hover {
+  background: rgba(15, 23, 42, 0.06);
+  color: #0f172a;
+}
+.kumbh-map .maplibregl-popup-tip {
+  border-top-color: #fff !important;
+  border-bottom-color: #fff !important;
+}

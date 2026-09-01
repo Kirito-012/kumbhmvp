@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState, type ReactNode } from 'react'
-import { ChevronDownIcon, XIcon } from '@/components/map/icons'
+import { ChevronDownIcon } from '@/components/map/icons'
 
 export default function Panel({
   icon,
@@ -9,25 +9,28 @@ export default function Panel({
   subtitle,
   side,
   children,
-  onClose,
   defaultCollapsed = false,
   resizable = false,
   defaultWidth = 288,
   minWidth = 260,
   maxWidth = 560,
+  overlayOpen = false,
 }: {
   icon: ReactNode
   title: string
   subtitle?: string
   side: 'left' | 'right'
   children: ReactNode
-  onClose?: () => void
   defaultCollapsed?: boolean
   /** Lets the user drag the panel's inner edge to resize it. */
   resizable?: boolean
   defaultWidth?: number
   minWidth?: number
   maxWidth?: number
+  /** Set while a child combobox/dropdown is open -- lifts the content area's
+   *  overflow clipping so the dropdown's menu isn't cut off/squashed inside
+   *  the panel's own scroll container. */
+  overlayOpen?: boolean
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const [width, setWidth] = useState(defaultWidth)
@@ -90,7 +93,20 @@ export default function Panel({
         </div>
       )}
 
-      <div className="flex items-center gap-2 px-3.5 py-3 border-b border-slate-900/8 shrink-0">
+      <div
+        onClick={() => setCollapsed((v) => !v)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setCollapsed((v) => !v)
+          }
+        }}
+        aria-label={collapsed ? `Expand ${title} panel` : `Collapse ${title} panel`}
+        aria-expanded={!collapsed}
+        className="flex items-center gap-2 px-3.5 py-3 border-b border-slate-900/8 shrink-0 cursor-pointer select-none"
+      >
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-blue-600/10 text-blue-700">
           <span className="h-4 w-4">{icon}</span>
         </span>
@@ -102,29 +118,19 @@ export default function Panel({
             <p className="truncate text-[11px] leading-tight text-slate-500">{subtitle}</p>
           )}
         </div>
-        <button
-          onClick={() => setCollapsed((v) => !v)}
-          aria-label={collapsed ? `Expand ${title} panel` : `Collapse ${title} panel`}
-          aria-expanded={!collapsed}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-900/5 hover:text-slate-700 cursor-pointer"
-        >
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-500">
           <ChevronDownIcon
             className={`h-4 w-4 transition-transform duration-200 ${collapsed ? '-rotate-90' : ''}`}
           />
-        </button>
-        {onClose && (
-          <button
-            onClick={onClose}
-            aria-label={`Close ${title} panel`}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-900/5 hover:text-slate-700 cursor-pointer"
-          >
-            <XIcon className="h-4 w-4" />
-          </button>
-        )}
+        </span>
       </div>
 
       {!collapsed && (
-        <div className="min-h-0 flex-1 overflow-y-auto px-3.5 py-3 kumbh-scroll">{children}</div>
+        <div
+          className={`min-h-0 flex-1 px-3.5 py-3 kumbh-scroll ${overlayOpen ? 'overflow-visible' : 'overflow-y-auto'}`}
+        >
+          {children}
+        </div>
       )}
     </div>
   )

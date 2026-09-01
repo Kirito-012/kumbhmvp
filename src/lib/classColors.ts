@@ -16,7 +16,7 @@ export const CLASS_GROUP_COLORS: Record<string, string> = {
 }
 
 export const ROAD_TYPE_COLORS: Record<string, string> = {
-  'Existing Road': '#374151',
+  'Existing Road': '#9ca3af',
   'Proposed Road': '#2563eb',
   'Emergency Exit': '#dc2626',
 }
@@ -78,4 +78,13 @@ export const POLYGON_LAYER_LABELS: Record<string, string> = {
   kumbh_land: 'Kumbh land',
   public_service_facilities: 'Public service facilities',
   river: 'River',
+}
+
+// Short signage codes shown as an on-map text label for a few POI point
+// layers, in place of the usual colour dot -- kept alongside the colour/label
+// maps above so every place a POI's dot swatch renders (map markers, the
+// Layers panel, the Stats panel) can consistently swap in the same badge.
+export const POI_SIGNAGE_CODES: Record<string, string> = {
+  bus_stop: 'BS',
+  kumbh_mela_2027_ghat: 'G',
 }

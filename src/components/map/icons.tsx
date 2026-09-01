@@ -123,3 +123,90 @@ export function CompassIcon({ className }: IconProps) {
     </svg>
   )
 }
+
+export function ParcelIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M4 8.5L12 4l8 4.5v7L12 20l-8-4.5v-7z"
+        className={base}
+        strokeWidth={1.6}
+        strokeLinejoin="round"
+      />
+      <path
+        d="M4 8.5L12 13l8-4.5M12 13v7"
+        className={base}
+        strokeWidth={1.6}
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+export function RoadIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path d="M9 3L5 21M15 3l4 18" className={base} strokeWidth={1.6} strokeLinecap="round" />
+      <path
+        d="M12 3v2.5M12 9.5v2.5M12 15.5v2.5"
+        className={base}
+        strokeWidth={1.6}
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+export function PinClusterIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M9 3.2c-2.4 0-4.3 1.9-4.3 4.3 0 3.2 4.3 7.8 4.3 7.8s4.3-4.6 4.3-7.8c0-2.4-1.9-4.3-4.3-4.3z"
+        className={base}
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+      />
+      <circle cx="9" cy="7.5" r="1.4" className={base} strokeWidth={1.4} />
+      <path
+        d="M15.5 9.6c1.7.3 3 1.7 3 3.4 0 2.2-3 5.4-3 5.4s-1.1-1.3-1.9-2.7"
+        className={base}
+        strokeWidth={1.4}
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+export function GridIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <rect x="3.5" y="3.5" width="7" height="7" rx="1.2" className={base} strokeWidth={1.6} />
+      <rect x="13.5" y="3.5" width="7" height="7" rx="1.2" className={base} strokeWidth={1.6} />
+      <rect x="3.5" y="13.5" width="7" height="7" rx="1.2" className={base} strokeWidth={1.6} />
+      <rect x="13.5" y="13.5" width="7" height="7" rx="1.2" className={base} strokeWidth={1.6} />
+    </svg>
+  )
+}
+
+export function RulerIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <rect
+        x="2.5"
+        y="9.5"
+        width="19"
+        height="5"
+        rx="1"
+        className={base}
+        strokeWidth={1.6}
+        transform="rotate(-45 12 12)"
+      />
+      <path
+        d="M8.5 8.5l1.4 1.4M11.2 5.8l1.4 1.4M14 3l1.4 1.4"
+        className={base}
+        strokeWidth={1.4}
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
