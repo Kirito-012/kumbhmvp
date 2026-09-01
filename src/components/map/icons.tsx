@@ -210,3 +210,31 @@ export function RulerIcon({ className }: IconProps) {
     </svg>
   )
 }
+
+export function UndoIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3"
+        className={base}
+        strokeWidth={1.6}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+export function RedoIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M15 15l6-6m0 0l-6-6m6 6H9a6 6 0 000 12h3"
+        className={base}
+        strokeWidth={1.6}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}

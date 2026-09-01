@@ -46,9 +46,11 @@ import {
   ChevronDownIcon,
   CompassIcon,
   LayersIcon,
+  RedoIcon,
   RulerIcon,
   SearchIcon,
   TagIcon,
+  UndoIcon,
 } from '@/components/map/icons'
 
 type Sector = {
@@ -381,24 +383,38 @@ export default function MapView({
   const measuringRef = useRef(false)
   const measurePointsRef = useRef<[number, number][]>([])
   const measureMarkersRef = useRef<Marker[]>([])
+  /** Mirrors `selectedSector` state for the same reason as measuringRef -- read by the
+   *  once-registered 'contextmenu' handler to right-click-deselect the current sector. */
+  const selectedSectorRef = useRef<number | 'all'>('all')
 
   const [sectors, setSectors] = useState<Sector[]>([])
   const [selectedSector, setSelectedSector] = useState<number | 'all'>(
     initialParcel?.sectorNo ?? 'all',
   )
-  const [visibility, setVisibility] = useState<Record<string, boolean>>(loadStoredVisibility)
+  // Initialized to the plain defaults (not loadStoredVisibility) so the first
+  // client render matches what the server rendered -- localStorage doesn't
+  // exist during SSR, and reading it in the initializer here would make the
+  // client's first render (real stored value) diverge from the server's
+  // (fallback), causing a hydration mismatch. The actual stored value is
+  // applied post-mount below instead.
+  const [visibility, setVisibility] = useState<Record<string, boolean>>(defaultVisibility)
   const [classFilter, setClassFilter] = useState<string | 'all'>('all')
   const [search, setSearch] = useState('')
   const [classSearch, setClassSearch] = useState('')
   const [classDropdownOpen, setClassDropdownOpen] = useState(false)
   const [sectorDropdownOpen, setSectorDropdownOpen] = useState(false)
-  const [poiLayersExpanded, setPoiLayersExpanded] = useState(loadStoredPoiLayersExpanded)
+  // Same SSR/client mismatch concern as `visibility` above -- starts false to
+  // match the server, then the stored value is applied post-mount below.
+  const [poiLayersExpanded, setPoiLayersExpanded] = useState(false)
   const [measuring, setMeasuring] = useState(false)
-  const [measureDistanceM, setMeasureDistanceM] = useState<number | null>(null)
-  /** Mirrors measurePointsRef.current.length purely so the "Click 1st/2nd point…" hint text
-   *  re-renders -- refs don't trigger renders, and the click handler that mutates the ref lives
-   *  in a one-time 'load' callback that can't call other state setters' closures directly. */
-  const [measurePointCount, setMeasurePointCount] = useState(0)
+  /** Committed measurement points plus a redo stack. A single object (rather than two
+   *  separate states) so undo/redo can move a point between the two atomically inside one
+   *  functional updater -- safe to call from the once-registered map handlers below, and
+   *  safe under StrictMode's double-invoke since the updaters are pure. */
+  const [measure, setMeasure] = useState<{ points: [number, number][]; redo: [number, number][] }>({
+    points: [],
+    redo: [],
+  })
   const classDropdownRef = useRef<HTMLDivElement>(null)
   const sectorDropdownRef = useRef<HTMLDivElement>(null)
 
@@ -425,6 +441,16 @@ export default function MapView({
       .then((r) => r.json())
       .then(setSectors)
       .catch(() => {})
+  }, [])
+
+  // Applies the real localStorage-persisted visibility/expanded state after
+  // mount, once hydration (which needs the SSR-matching defaults above) has
+  // already reconciled. Runs once; the effects below take over persisting
+  // further changes.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- SSR/hydration guard, same pattern as NotificationBell.tsx
+    setVisibility(loadStoredVisibility())
+    setPoiLayersExpanded(loadStoredPoiLayersExpanded())
   }, [])
 
   useEffect(() => {
@@ -877,63 +903,6 @@ export default function MapView({
         paint: { 'fill-color': '#000000', 'fill-opacity': 0.01 },
       })
 
-      // Measure-distance line -- plain client-side GeoJSON (not a vector
-      // tile source like everything else here), rewritten in place each
-      // time a measurement point is placed/cleared. See the measure-mode
-      // click handling below and the effect that resets it when `measuring`
-      // toggles off.
-      map.addSource('measure-line', {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] },
-      })
-      // Soft glow beneath the crisp dashed line, same technique as the
-      // sector hover highlight -- reads as a precise, "lifted" measuring
-      // line rather than a flat static stroke.
-      map.addLayer({
-        id: 'measure-line-glow',
-        type: 'line',
-        source: 'measure-line',
-        paint: { 'line-color': '#e11d48', 'line-width': 7, 'line-opacity': 0.22, 'line-blur': 3 },
-      })
-      map.addLayer({
-        id: 'measure-line',
-        type: 'line',
-        source: 'measure-line',
-        paint: {
-          'line-color': '#e11d48',
-          'line-width': 2,
-          'line-dasharray': [1.4, 1.4],
-        },
-      })
-
-      // Distance label -- a separate point source at the line's midpoint
-      // (computed alongside the line itself in updateMeasureLine), rather
-      // than trying to place text along the line geometry directly, which
-      // MapLibre doesn't give precise placement control over for a plain
-      // 2-point segment.
-      map.addSource('measure-label', {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] },
-      })
-      map.addLayer({
-        id: 'measure-label',
-        type: 'symbol',
-        source: 'measure-label',
-        layout: {
-          'text-field': ['get', 'label'],
-          'text-font': ['Noto Sans Bold'],
-          'text-size': 12,
-          'text-offset': [0, -1.1],
-          'text-anchor': 'bottom',
-          'text-allow-overlap': true,
-        },
-        paint: {
-          'text-color': '#e11d48',
-          'text-halo-color': '#ffffff',
-          'text-halo-width': 1.6,
-        },
-      })
-
       const NO_MATCH: FilterSpecification = ['==', ['get', 'sector_no'], -1]
 
       // Whole-sector hover highlight (muted slate) -- filter-driven rather
@@ -988,57 +957,118 @@ export default function MapView({
         paint: { 'line-color': '#7c3aed', 'line-width': 5, 'line-opacity': 1 },
       })
 
-      function updateMeasureLine(coords: [number, number][]) {
-        const lineSrc = map.getSource('measure-line')
-        const labelSrc = map.getSource('measure-label')
-        if (coords.length !== 2) {
-          if (lineSrc && 'setData' in lineSrc) {
-            ;(lineSrc as GeoJSONSource).setData({ type: 'FeatureCollection', features: [] })
-          }
-          if (labelSrc && 'setData' in labelSrc) {
-            ;(labelSrc as GeoJSONSource).setData({ type: 'FeatureCollection', features: [] })
-          }
-          return
-        }
+      // Measure-distance path -- plain client-side GeoJSON (not a vector tile
+      // source like everything else here), rewritten in place by the redraw
+      // effect below every time the committed point list changes. Placed
+      // after sector-selected-outline so a measurement drawn near/along a
+      // selected sector's boundary renders on top of it, not beneath.
+      map.addSource('measure-line', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+      // Soft glow beneath the crisp dashed line, same technique as the
+      // sector hover highlight -- reads as a precise, "lifted" measuring
+      // line rather than a flat static stroke.
+      map.addLayer({
+        id: 'measure-line-glow',
+        type: 'line',
+        source: 'measure-line',
+        paint: { 'line-color': '#e11d48', 'line-width': 7, 'line-opacity': 0.22, 'line-blur': 3 },
+      })
+      map.addLayer({
+        id: 'measure-line',
+        type: 'line',
+        source: 'measure-line',
+        paint: {
+          'line-color': '#e11d48',
+          'line-width': 2,
+          'line-dasharray': [1.4, 1.4],
+        },
+      })
 
-        if (lineSrc && 'setData' in lineSrc) {
-          ;(lineSrc as GeoJSONSource).setData({
-            type: 'FeatureCollection',
-            features: [
-              {
-                type: 'Feature',
-                properties: {},
-                geometry: { type: 'LineString', coordinates: coords },
-              },
-            ],
-          })
-        }
+      // Per-segment distance labels -- one point feature per committed
+      // segment, placed at its midpoint. MapLibre doesn't give precise
+      // placement control for text tied to arbitrary line geometry, so a
+      // dedicated point source (one feature per segment) is simpler and more
+      // reliable than symbol-placement: 'line-center' across a multi-segment
+      // LineString.
+      map.addSource('measure-label', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+      map.addLayer({
+        id: 'measure-label',
+        type: 'symbol',
+        source: 'measure-label',
+        layout: {
+          'text-field': ['get', 'label'],
+          'text-font': ['Noto Sans Bold'],
+          'text-size': 12,
+          'text-offset': [0, -1.1],
+          'text-anchor': 'bottom',
+          'text-allow-overlap': true,
+        },
+        paint: {
+          'text-color': '#e11d48',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 1.6,
+        },
+      })
 
-        if (labelSrc && 'setData' in labelSrc) {
-          const midpoint: [number, number] = [
-            (coords[0][0] + coords[1][0]) / 2,
-            (coords[0][1] + coords[1][1]) / 2,
-          ]
-          const label = formatDistance(haversineDistanceM(coords[0], coords[1]))
-          ;(labelSrc as GeoJSONSource).setData({
-            type: 'FeatureCollection',
-            features: [
-              {
-                type: 'Feature',
-                properties: { label },
-                geometry: { type: 'Point', coordinates: midpoint },
-              },
-            ],
-          })
-        }
-      }
+      // Rubber-band preview -- the tentative segment from the last committed
+      // point to the cursor. Kept in its own sources so the per-mousemove
+      // updates never touch React state or the committed sources (avoids a
+      // render on every mouse pixel, and avoids the preview flickering
+      // against the committed redraw effect).
+      map.addSource('measure-preview', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+      map.addLayer({
+        id: 'measure-preview-line',
+        type: 'line',
+        source: 'measure-preview',
+        paint: {
+          'line-color': '#e11d48',
+          'line-width': 2,
+          'line-dasharray': [1.4, 1.4],
+          'line-opacity': 0.55,
+        },
+      })
+      map.addSource('measure-preview-label', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+      map.addLayer({
+        id: 'measure-preview-label',
+        type: 'symbol',
+        source: 'measure-preview-label',
+        layout: {
+          'text-field': ['get', 'label'],
+          'text-font': ['Noto Sans Bold'],
+          'text-size': 12,
+          'text-offset': [0, -1.1],
+          'text-anchor': 'bottom',
+          'text-allow-overlap': true,
+        },
+        paint: {
+          'text-color': '#e11d48',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 1.6,
+          'text-opacity': 0.7,
+        },
+      })
 
       // Apply the initial layer visibility (POI layers default to off) right
       // away, synchronously with layer creation -- every layer above is
       // added with MapLibre's default 'visible' layout, so without this the
       // POI dots/lines/fills would render (or stay rendered indefinitely, if
       // the separate visibility-syncing effect below never re-runs) despite
-      // the sidebar's toggles showing off.
+      // the sidebar's toggles showing off. `visibility` here is always the
+      // SSR-safe defaults (not yet the localStorage-restored value -- see the
+      // mount effect near the other localStorage effects), so a user with
+      // customized visibility may see one frame of defaults before the
+      // visibility-syncing effect below reconciles it once storage loads.
       applyLayerVisibility(map, visibility)
 
       function setHoverFilter(sectorNo: number | null) {
@@ -1112,32 +1142,12 @@ export default function MapView({
         // Measure mode takes over every click while active -- checked via a
         // ref (not the `measuring` state directly) since this whole 'load'
         // callback runs once on mount and would otherwise close over a
-        // stale value forever.
+        // stale value forever. addMeasurePoint/clearPreview are safe to call
+        // here despite that same staleness because they only ever go through
+        // the stable setMeasure identity and pure functional updaters.
         if (measuringRef.current) {
-          const point: [number, number] = [e.lngLat.lng, e.lngLat.lat]
-          // A 3rd click starts a fresh measurement rather than extending
-          // past two points -- this feature is two-point-only by design.
-          if (measurePointsRef.current.length >= 2) {
-            measureMarkersRef.current.forEach((m) => m.remove())
-            measureMarkersRef.current = []
-            measurePointsRef.current = []
-            setMeasureDistanceM(null)
-            updateMeasureLine([])
-          }
-
-          measurePointsRef.current = [...measurePointsRef.current, point]
-          setMeasurePointCount(measurePointsRef.current.length)
-          const marker = new Marker({ element: makeMeasurePointElement() })
-            .setLngLat(point)
-            .addTo(map)
-          measureMarkersRef.current = [...measureMarkersRef.current, marker]
-
-          if (measurePointsRef.current.length === 2) {
-            updateMeasureLine(measurePointsRef.current)
-            setMeasureDistanceM(
-              haversineDistanceM(measurePointsRef.current[0], measurePointsRef.current[1]),
-            )
-          }
+          addMeasurePoint([e.lngLat.lng, e.lngLat.lat])
+          clearPreview()
           return
         }
 
@@ -1179,17 +1189,41 @@ export default function MapView({
         }
       })
 
-      // Live rubber-band: once the first measure point is placed but before
-      // the second click, the line and distance track the cursor
-      // continuously instead of only appearing after the 2nd click --
-      // reads as "measuring toward" a destination rather than a static
-      // after-the-fact result.
+      // Right-click: undoes the last committed point while measuring, or --
+      // otherwise -- deselects the current sector, mirroring the "click an
+      // empty area to deselect" gesture without having to find empty area.
+      // Suppresses both MapLibre's own default handling and the browser's
+      // native context menu either way.
+      map.on('contextmenu', (e) => {
+        if (measuringRef.current) {
+          e.preventDefault()
+          e.originalEvent?.preventDefault?.()
+          undoMeasurePoint()
+          clearPreview()
+          return
+        }
+        if (selectedSectorRef.current === 'all') return
+        e.preventDefault()
+        e.originalEvent?.preventDefault?.()
+        setSelectedSector('all')
+        popupRef.current?.remove()
+        popupParcelIdRef.current = null
+      })
+
+      // Live rubber-band: from the last committed point to the cursor,
+      // tracking continuously rather than only appearing after the next
+      // click -- reads as "measuring toward" a destination rather than a
+      // static after-the-fact result. Writes only the preview sources
+      // (never React state), so this runs on every mouse pixel without
+      // triggering a render.
       map.on('mousemove', (e) => {
-        if (!measuringRef.current || measurePointsRef.current.length !== 1) return
+        if (!measuringRef.current || measurePointsRef.current.length === 0) return
+        const last = measurePointsRef.current[measurePointsRef.current.length - 1]
         const live: [number, number] = [e.lngLat.lng, e.lngLat.lat]
-        const coords: [number, number][] = [measurePointsRef.current[0], live]
-        updateMeasureLine(coords)
-        setMeasureDistanceM(haversineDistanceM(coords[0], coords[1]))
+        setPreview(last, live)
+      })
+      map.on('mouseout', () => {
+        if (measuringRef.current) clearPreview()
       })
     })
 
@@ -1201,41 +1235,166 @@ export default function MapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- initial-view-only prop, map is created once
   }, [])
 
-  // Removes any in-progress measurement's markers/line from the map --
-  // pure external-system cleanup, no state updates (callers that also need
-  // to reset the React-side measureDistanceM/measurePointCount call those
-  // setters themselves alongside this).
-  function clearMeasurement() {
-    measureMarkersRef.current.forEach((m) => m.remove())
-    measureMarkersRef.current = []
-    measurePointsRef.current = []
-    const map = mapRef.current
-    const lineSrc = map?.getSource('measure-line')
-    if (lineSrc && 'setData' in lineSrc) {
-      ;(lineSrc as GeoJSONSource).setData({ type: 'FeatureCollection', features: [] })
-    }
-    const labelSrc = map?.getSource('measure-label')
-    if (labelSrc && 'setData' in labelSrc) {
-      ;(labelSrc as GeoJSONSource).setData({ type: 'FeatureCollection', features: [] })
+  // Measurement mutators -- pure functional updates, so these are safe to
+  // call from the map's once-registered click/contextmenu handlers (they
+  // close over stale state, but never over a stale setMeasure identity).
+  function addMeasurePoint(point: [number, number]) {
+    // A fresh point always clears the redo stack -- the standard undo/redo
+    // convention (redoing after a new action would silently discard it).
+    setMeasure((m) => ({ points: [...m.points, point], redo: [] }))
+  }
+  function undoMeasurePoint() {
+    setMeasure((m) =>
+      m.points.length === 0
+        ? m // nothing to undo -- stay in measure mode rather than exiting it
+        : {
+            points: m.points.slice(0, -1),
+            redo: [...m.redo, m.points[m.points.length - 1]],
+          },
+    )
+  }
+  function redoMeasurePoint() {
+    setMeasure((m) =>
+      m.redo.length === 0
+        ? m
+        : { points: [...m.points, m.redo[m.redo.length - 1]], redo: m.redo.slice(0, -1) },
+    )
+  }
+  function exitMeasureMode() {
+    setMeasuring(false)
+    setMeasure({ points: [], redo: [] })
+    clearPreview()
+  }
+
+  function setSourceData(sourceId: string, features: GeoJSON.Feature[]) {
+    const src = mapRef.current?.getSource(sourceId)
+    if (src && 'setData' in src) {
+      ;(src as GeoJSONSource).setData({ type: 'FeatureCollection', features })
     }
   }
 
-  // Keeps measuringRef in sync for the click handler above (registered once
-  // on mount, so it can't read `measuring` state directly) and swaps the
-  // cursor to a crosshair while active. Clearing in-progress state when
-  // measure mode turns off happens in the toggle button's onClick instead of
-  // here, since that's a real user action rather than external-system sync.
+  // Rubber-band preview -- the tentative segment from the last committed
+  // point to the live cursor position. Written directly from the map's
+  // mousemove handler, never through React state.
+  function setPreview(from: [number, number], to: [number, number]) {
+    setSourceData('measure-preview', [
+      {
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: [from, to] },
+      },
+    ])
+    const midpoint: [number, number] = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2]
+    const label = formatDistance(haversineDistanceM(from, to))
+    setSourceData('measure-preview-label', [
+      {
+        type: 'Feature',
+        properties: { label },
+        geometry: { type: 'Point', coordinates: midpoint },
+      },
+    ])
+  }
+  function clearPreview() {
+    setSourceData('measure-preview', [])
+    setSourceData('measure-preview-label', [])
+  }
+
+  // Redraws the committed measurement (markers, path, per-segment labels)
+  // whenever the point list changes -- the single source of truth for
+  // committed geometry, replacing the old per-click imperative updates.
+  // Also mirrors the points into measurePointsRef for the map's mousemove
+  // handler (registered once on mount, so it can't read `measure` state
+  // directly).
+  useEffect(() => {
+    measurePointsRef.current = measure.points
+    const map = mapRef.current
+    if (!map || !map.getSource('measure-line')) return
+
+    measureMarkersRef.current.forEach((m) => m.remove())
+    measureMarkersRef.current = measure.points.map((pt) =>
+      new Marker({ element: makeMeasurePointElement() }).setLngLat(pt).addTo(map),
+    )
+
+    setSourceData(
+      'measure-line',
+      measure.points.length >= 2
+        ? [
+            {
+              type: 'Feature',
+              properties: {},
+              geometry: { type: 'LineString', coordinates: measure.points },
+            },
+          ]
+        : [],
+    )
+
+    setSourceData(
+      'measure-label',
+      measure.points.slice(1).map((b, i) => {
+        const a = measure.points[i]
+        const midpoint: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+        return {
+          type: 'Feature',
+          properties: { label: formatDistance(haversineDistanceM(a, b)) },
+          geometry: { type: 'Point', coordinates: midpoint },
+        }
+      }),
+    )
+  }, [measure.points])
+
+  // Keeps measuringRef in sync for the map handlers above (registered once
+  // on mount, so they can't read `measuring` state directly), swaps the
+  // cursor to a crosshair while active, and disables double-click-to-zoom
+  // (a double-click while measuring would otherwise zoom the map AND drop
+  // two points in the same gesture).
   useEffect(() => {
     measuringRef.current = measuring
     const map = mapRef.current
-    if (map) map.getCanvas().style.cursor = measuring ? 'crosshair' : ''
+    if (!map) return
+    map.getCanvas().style.cursor = measuring ? 'crosshair' : ''
+    if (measuring) map.doubleClickZoom.disable()
+    else map.doubleClickZoom.enable()
   }, [measuring])
 
-  // Layer visibility -- reacts to toggling the sidebar's switches. The
-  // initial state (POI layers off) is also applied synchronously at
-  // layer-creation time inside the map's 'load' handler above, since this
-  // effect is keyed on `visibility` identity and a value that's merely
-  // *present* on mount (never *changed*) doesn't trigger it.
+  // Keeps selectedSectorRef in sync for the map's 'contextmenu' handler above
+  // (registered once on mount, so it can't read `selectedSector` state directly).
+  useEffect(() => {
+    selectedSectorRef.current = selectedSector
+  }, [selectedSector])
+
+  // Keyboard shortcuts while measuring: Escape exits the mode entirely,
+  // Ctrl/Cmd+Z undoes the last point, Ctrl+Y or Ctrl/Cmd+Shift+Z redoes.
+  // Only registered while measuring, and skipped when a text input has
+  // focus so it doesn't hijack the sector/class search boxes.
+  useEffect(() => {
+    if (!measuring) return
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      if (e.key === 'Escape') {
+        exitMeasureMode()
+        return
+      }
+      const key = e.key.toLowerCase()
+      if ((e.ctrlKey || e.metaKey) && key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        undoMeasurePoint()
+        clearPreview()
+      } else if ((e.ctrlKey || e.metaKey) && (key === 'y' || (key === 'z' && e.shiftKey))) {
+        e.preventDefault()
+        redoMeasurePoint()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mutators close over stable setMeasure/setMeasuring identities
+  }, [measuring])
+
+  // Layer visibility -- reacts to toggling the sidebar's switches, and also
+  // catches the one-time swap from SSR-safe defaults to the
+  // localStorage-restored value performed by the mount effect above (which
+  // changes `visibility` identity, so this effect re-runs and reconciles the
+  // map to match).
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
@@ -1374,46 +1533,70 @@ export default function MapView({
     })),
   ].sort((a, b) => a.label.localeCompare(b.label))
 
+  const measureTotalM = measure.points
+    .slice(1)
+    .reduce((sum, b, i) => sum + haversineDistanceM(measure.points[i], b), 0)
+
   return (
     <div className="kumbh-map relative h-screen w-full">
       <div ref={mapContainer} className="h-full w-full" />
 
-      {/* Measure distance -- floating button beside the hamburger menu
-          (SidebarToggle sits at left-4 top-4, h-10 w-10) rather than inside
-          the left panel, so it's reachable without opening the panel. */}
-      <button
-        type="button"
-        onClick={() => {
-          setMeasuring((v) => {
-            const next = !v
-            if (!next) {
-              clearMeasurement()
-              setMeasureDistanceM(null)
-              setMeasurePointCount(0)
-            }
-            return next
-          })
-        }}
-        aria-pressed={measuring}
-        aria-label="Measure distance"
-        title="Measure distance"
-        className={`fixed left-16 top-4 z-30 inline-flex h-10 items-center gap-1.5 rounded-lg border px-2.5 shadow-lg backdrop-blur-md transition-colors ${
-          measuring
-            ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
-            : 'border-slate-900/8 bg-white/92 text-slate-700 hover:bg-white hover:text-slate-900'
-        }`}
-      >
-        <RulerIcon className="h-4 w-4 shrink-0" />
+      {/* Measure distance -- floating button cluster beside the hamburger
+          menu (SidebarToggle sits at left-4 top-4, h-10 w-10) rather than
+          inside the left panel, so it's reachable without opening the
+          panel. Undo/redo appear beside it only while measuring. */}
+      <div className="fixed left-16 top-4 z-30 flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => (measuring ? exitMeasureMode() : setMeasuring(true))}
+          aria-pressed={measuring}
+          aria-label="Measure distance"
+          title="Measure distance"
+          className={`inline-flex h-10 items-center gap-1.5 rounded-lg border px-2.5 shadow-lg backdrop-blur-md transition-colors ${
+            measuring
+              ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+              : 'border-slate-900/8 bg-white/92 text-slate-700 hover:bg-white hover:text-slate-900'
+          }`}
+        >
+          <RulerIcon className="h-4 w-4 shrink-0" />
+          {measuring && (
+            <span className="text-[11.5px] font-semibold whitespace-nowrap">
+              {measure.points.length >= 2
+                ? formatDistance(measureTotalM)
+                : measure.points.length === 1
+                  ? 'Click to add points…'
+                  : 'Click to start measuring'}
+            </span>
+          )}
+        </button>
         {measuring && (
-          <span className="text-[11.5px] font-semibold whitespace-nowrap">
-            {measureDistanceM !== null
-              ? formatDistance(measureDistanceM)
-              : measurePointCount === 1
-                ? 'Click 2nd point…'
-                : 'Click 1st point…'}
-          </span>
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                undoMeasurePoint()
+                clearPreview()
+              }}
+              disabled={measure.points.length === 0}
+              aria-label="Undo point"
+              title="Undo point (Ctrl+Z or right-click)"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-900/8 bg-white/92 text-slate-700 shadow-lg backdrop-blur-md transition-colors hover:bg-white hover:text-slate-900 disabled:pointer-events-none disabled:opacity-40"
+            >
+              <UndoIcon className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={redoMeasurePoint}
+              disabled={measure.redo.length === 0}
+              aria-label="Redo point"
+              title="Redo point (Ctrl+Y)"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-900/8 bg-white/92 text-slate-700 shadow-lg backdrop-blur-md transition-colors hover:bg-white hover:text-slate-900 disabled:pointer-events-none disabled:opacity-40"
+            >
+              <RedoIcon className="h-4 w-4" />
+            </button>
+          </>
         )}
-      </button>
+      </div>
 
       <Panel
         icon={<CompassIcon className="h-full w-full" />}
