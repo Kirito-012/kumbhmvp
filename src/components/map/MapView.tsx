@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import type { Feature } from 'geojson'
 import {
   Map as MLMap,
   Marker,
@@ -1266,7 +1267,7 @@ export default function MapView({
     clearPreview()
   }
 
-  function setSourceData(sourceId: string, features: GeoJSON.Feature[]) {
+  function setSourceData(sourceId: string, features: Feature[]) {
     const src = mapRef.current?.getSource(sourceId)
     if (src && 'setData' in src) {
       ;(src as GeoJSONSource).setData({ type: 'FeatureCollection', features })
