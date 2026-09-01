@@ -93,6 +93,21 @@ function formatDistance(metres: number): string {
   return metres < 1000 ? `${Math.round(metres)} m` : `${(metres / 1000).toFixed(2)} km`
 }
 
+// Small solid dot + white ring + soft halo, replacing MapLibre's default
+// pin-shaped Marker (which reads as a generic "dropped location" pin) for
+// measure-mode points -- this is meant to feel like a precise survey point,
+// not a place marker.
+function makeMeasurePointElement(): HTMLDivElement {
+  const el = document.createElement('div')
+  el.style.width = '14px'
+  el.style.height = '14px'
+  el.style.borderRadius = '999px'
+  el.style.background = '#e11d48'
+  el.style.border = '2px solid #fff'
+  el.style.boxShadow = '0 0 0 3px rgba(225,29,72,0.25), 0 1px 3px rgba(0,0,0,0.3)'
+  return el
+}
+
 function matchExpr(
   field: string,
   colors: Record<string, string>,
@@ -311,6 +326,42 @@ type InitialParcel = {
   sectorNo: number | null
 }
 
+const VISIBILITY_STORAGE_KEY = 'tcsticket:mapView:visibility'
+const POI_LAYERS_EXPANDED_STORAGE_KEY = 'tcsticket:mapView:poiLayersExpanded'
+
+function defaultVisibility(): Record<string, boolean> {
+  return {
+    sector_plan: true,
+    sector_boundary: true,
+    ...Object.fromEntries(ROAD_TYPE_DEFS.map((d) => [d.key, true])),
+    ...Object.fromEntries(POI_LAYER_DEFS.map((d) => [d.key, false])),
+  }
+}
+
+// Merged over the defaults (rather than used as-is) so a layer key added to
+// ROAD_TYPE_DEFS/POI_LAYER_DEFS after a user's last visit still gets a sane
+// default instead of being missing/undefined.
+function loadStoredVisibility(): Record<string, boolean> {
+  const defaults = defaultVisibility()
+  try {
+    const raw = localStorage.getItem(VISIBILITY_STORAGE_KEY)
+    if (!raw) return defaults
+    const stored = JSON.parse(raw)
+    if (!stored || typeof stored !== 'object') return defaults
+    return { ...defaults, ...stored }
+  } catch {
+    return defaults
+  }
+}
+
+function loadStoredPoiLayersExpanded(): boolean {
+  try {
+    return localStorage.getItem(POI_LAYERS_EXPANDED_STORAGE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
 export default function MapView({
   initialParcel = null,
 }: {
@@ -335,18 +386,13 @@ export default function MapView({
   const [selectedSector, setSelectedSector] = useState<number | 'all'>(
     initialParcel?.sectorNo ?? 'all',
   )
-  const [visibility, setVisibility] = useState<Record<string, boolean>>(() => ({
-    sector_plan: true,
-    sector_boundary: true,
-    ...Object.fromEntries(ROAD_TYPE_DEFS.map((d) => [d.key, true])),
-    ...Object.fromEntries(POI_LAYER_DEFS.map((d) => [d.key, false])),
-  }))
+  const [visibility, setVisibility] = useState<Record<string, boolean>>(loadStoredVisibility)
   const [classFilter, setClassFilter] = useState<string | 'all'>('all')
   const [search, setSearch] = useState('')
   const [classSearch, setClassSearch] = useState('')
   const [classDropdownOpen, setClassDropdownOpen] = useState(false)
   const [sectorDropdownOpen, setSectorDropdownOpen] = useState(false)
-  const [poiLayersExpanded, setPoiLayersExpanded] = useState(false)
+  const [poiLayersExpanded, setPoiLayersExpanded] = useState(loadStoredPoiLayersExpanded)
   const [measuring, setMeasuring] = useState(false)
   const [measureDistanceM, setMeasureDistanceM] = useState<number | null>(null)
   /** Mirrors measurePointsRef.current.length purely so the "Click 1st/2nd point…" hint text
@@ -380,6 +426,18 @@ export default function MapView({
       .then(setSectors)
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VISIBILITY_STORAGE_KEY, JSON.stringify(visibility))
+    } catch {}
+  }, [visibility])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(POI_LAYERS_EXPANDED_STORAGE_KEY, String(poiLayersExpanded))
+    } catch {}
+  }, [poiLayersExpanded])
 
   // Values come from PostGIS, not live user input, but escaping is cheap
   // defense-in-depth for HTML injected via Popup.setHTML.
@@ -745,11 +803,12 @@ export default function MapView({
         })
       }
       for (const def of byGeomType('point')) {
-        // Ghat points and bus stops show only their signage label ("G"/"BS"),
-        // not the dot underneath -- still add the circle layer (kept as the
-        // hit-target for hover/click and the Layers-panel visibility toggle)
-        // but render it fully transparent.
-        const hideCircle = def.key === 'kumbh_mela_2027_ghat' || def.key === 'bus_stop'
+        // Any POI with a signage code (Ghat points, bus stops, fire
+        // hydrants -- "G"/"BS"/"FH") shows only that label, not the dot
+        // underneath -- still add the circle layer (kept as the hit-target
+        // for hover/click and the Layers-panel visibility toggle) but
+        // render it fully transparent.
+        const hideCircle = Boolean(POI_SIGNAGE_CODES[def.key])
         // The visible dot's own radius (2.5-6px) is too small a target to
         // reliably click/tap -- queryRenderedFeatures hit-tests against the
         // actual rendered geometry, so a miss just falls through to the
@@ -827,14 +886,51 @@ export default function MapView({
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
       })
+      // Soft glow beneath the crisp dashed line, same technique as the
+      // sector hover highlight -- reads as a precise, "lifted" measuring
+      // line rather than a flat static stroke.
+      map.addLayer({
+        id: 'measure-line-glow',
+        type: 'line',
+        source: 'measure-line',
+        paint: { 'line-color': '#e11d48', 'line-width': 7, 'line-opacity': 0.22, 'line-blur': 3 },
+      })
       map.addLayer({
         id: 'measure-line',
         type: 'line',
         source: 'measure-line',
         paint: {
-          'line-color': '#d97706',
-          'line-width': 2.5,
-          'line-dasharray': [1.5, 1.5],
+          'line-color': '#e11d48',
+          'line-width': 2,
+          'line-dasharray': [1.4, 1.4],
+        },
+      })
+
+      // Distance label -- a separate point source at the line's midpoint
+      // (computed alongside the line itself in updateMeasureLine), rather
+      // than trying to place text along the line geometry directly, which
+      // MapLibre doesn't give precise placement control over for a plain
+      // 2-point segment.
+      map.addSource('measure-label', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+      map.addLayer({
+        id: 'measure-label',
+        type: 'symbol',
+        source: 'measure-label',
+        layout: {
+          'text-field': ['get', 'label'],
+          'text-font': ['Noto Sans Bold'],
+          'text-size': 12,
+          'text-offset': [0, -1.1],
+          'text-anchor': 'bottom',
+          'text-allow-overlap': true,
+        },
+        paint: {
+          'text-color': '#e11d48',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 1.6,
         },
       })
 
@@ -892,6 +988,51 @@ export default function MapView({
         paint: { 'line-color': '#7c3aed', 'line-width': 5, 'line-opacity': 1 },
       })
 
+      function updateMeasureLine(coords: [number, number][]) {
+        const lineSrc = map.getSource('measure-line')
+        const labelSrc = map.getSource('measure-label')
+        if (coords.length !== 2) {
+          if (lineSrc && 'setData' in lineSrc) {
+            ;(lineSrc as GeoJSONSource).setData({ type: 'FeatureCollection', features: [] })
+          }
+          if (labelSrc && 'setData' in labelSrc) {
+            ;(labelSrc as GeoJSONSource).setData({ type: 'FeatureCollection', features: [] })
+          }
+          return
+        }
+
+        if (lineSrc && 'setData' in lineSrc) {
+          ;(lineSrc as GeoJSONSource).setData({
+            type: 'FeatureCollection',
+            features: [
+              {
+                type: 'Feature',
+                properties: {},
+                geometry: { type: 'LineString', coordinates: coords },
+              },
+            ],
+          })
+        }
+
+        if (labelSrc && 'setData' in labelSrc) {
+          const midpoint: [number, number] = [
+            (coords[0][0] + coords[1][0]) / 2,
+            (coords[0][1] + coords[1][1]) / 2,
+          ]
+          const label = formatDistance(haversineDistanceM(coords[0], coords[1]))
+          ;(labelSrc as GeoJSONSource).setData({
+            type: 'FeatureCollection',
+            features: [
+              {
+                type: 'Feature',
+                properties: { label },
+                geometry: { type: 'Point', coordinates: midpoint },
+              },
+            ],
+          })
+        }
+      }
+
       // Apply the initial layer visibility (POI layers default to off) right
       // away, synchronously with layer creation -- every layer above is
       // added with MapLibre's default 'visible' layout, so without this the
@@ -909,6 +1050,9 @@ export default function MapView({
       }
 
       map.on('mousemove', 'sector-hit-target', (e: MapLayerMouseEvent) => {
+        // Measure mode owns hover/cursor entirely while active -- see the
+        // map-wide mousemove handler below.
+        if (measuringRef.current) return
         const raw = e.features?.[0]?.properties?.sector_no
         const sectorNo = typeof raw === 'number' ? raw : null
         if (hoveredSectorRef.current !== sectorNo) {
@@ -918,6 +1062,7 @@ export default function MapView({
         map.getCanvas().style.cursor = 'pointer'
       })
       map.on('mouseleave', 'sector-hit-target', () => {
+        if (measuringRef.current) return
         hoveredSectorRef.current = null
         setHoverFilter(null)
         map.getCanvas().style.cursor = ''
@@ -939,9 +1084,11 @@ export default function MapView({
 
       for (const layerId of poiLayerIds) {
         map.on('mouseenter', layerId, () => {
+          if (measuringRef.current) return
           map.getCanvas().style.cursor = 'pointer'
         })
         map.on('mouseleave', layerId, () => {
+          if (measuringRef.current) return
           map.getCanvas().style.cursor = ''
         })
       }
@@ -975,32 +1122,18 @@ export default function MapView({
             measureMarkersRef.current = []
             measurePointsRef.current = []
             setMeasureDistanceM(null)
+            updateMeasureLine([])
           }
 
           measurePointsRef.current = [...measurePointsRef.current, point]
           setMeasurePointCount(measurePointsRef.current.length)
-          const marker = new Marker({ color: '#d97706', scale: 0.7 }).setLngLat(point).addTo(map)
+          const marker = new Marker({ element: makeMeasurePointElement() })
+            .setLngLat(point)
+            .addTo(map)
           measureMarkersRef.current = [...measureMarkersRef.current, marker]
 
-          const src = map.getSource('measure-line')
-          if (src && 'setData' in src) {
-            ;(src as GeoJSONSource).setData(
-              measurePointsRef.current.length === 2
-                ? {
-                    type: 'FeatureCollection',
-                    features: [
-                      {
-                        type: 'Feature',
-                        properties: {},
-                        geometry: { type: 'LineString', coordinates: measurePointsRef.current },
-                      },
-                    ],
-                  }
-                : { type: 'FeatureCollection', features: [] },
-            )
-          }
-
           if (measurePointsRef.current.length === 2) {
+            updateMeasureLine(measurePointsRef.current)
             setMeasureDistanceM(
               haversineDistanceM(measurePointsRef.current[0], measurePointsRef.current[1]),
             )
@@ -1045,6 +1178,19 @@ export default function MapView({
           popupParcelIdRef.current = null
         }
       })
+
+      // Live rubber-band: once the first measure point is placed but before
+      // the second click, the line and distance track the cursor
+      // continuously instead of only appearing after the 2nd click --
+      // reads as "measuring toward" a destination rather than a static
+      // after-the-fact result.
+      map.on('mousemove', (e) => {
+        if (!measuringRef.current || measurePointsRef.current.length !== 1) return
+        const live: [number, number] = [e.lngLat.lng, e.lngLat.lat]
+        const coords: [number, number][] = [measurePointsRef.current[0], live]
+        updateMeasureLine(coords)
+        setMeasureDistanceM(haversineDistanceM(coords[0], coords[1]))
+      })
     })
 
     return () => {
@@ -1063,9 +1209,14 @@ export default function MapView({
     measureMarkersRef.current.forEach((m) => m.remove())
     measureMarkersRef.current = []
     measurePointsRef.current = []
-    const src = mapRef.current?.getSource('measure-line')
-    if (src && 'setData' in src) {
-      ;(src as GeoJSONSource).setData({ type: 'FeatureCollection', features: [] })
+    const map = mapRef.current
+    const lineSrc = map?.getSource('measure-line')
+    if (lineSrc && 'setData' in lineSrc) {
+      ;(lineSrc as GeoJSONSource).setData({ type: 'FeatureCollection', features: [] })
+    }
+    const labelSrc = map?.getSource('measure-label')
+    if (labelSrc && 'setData' in labelSrc) {
+      ;(labelSrc as GeoJSONSource).setData({ type: 'FeatureCollection', features: [] })
     }
   }
 
@@ -1227,6 +1378,43 @@ export default function MapView({
     <div className="kumbh-map relative h-screen w-full">
       <div ref={mapContainer} className="h-full w-full" />
 
+      {/* Measure distance -- floating button beside the hamburger menu
+          (SidebarToggle sits at left-4 top-4, h-10 w-10) rather than inside
+          the left panel, so it's reachable without opening the panel. */}
+      <button
+        type="button"
+        onClick={() => {
+          setMeasuring((v) => {
+            const next = !v
+            if (!next) {
+              clearMeasurement()
+              setMeasureDistanceM(null)
+              setMeasurePointCount(0)
+            }
+            return next
+          })
+        }}
+        aria-pressed={measuring}
+        aria-label="Measure distance"
+        title="Measure distance"
+        className={`fixed left-16 top-4 z-30 inline-flex h-10 items-center gap-1.5 rounded-lg border px-2.5 shadow-lg backdrop-blur-md transition-colors ${
+          measuring
+            ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+            : 'border-slate-900/8 bg-white/92 text-slate-700 hover:bg-white hover:text-slate-900'
+        }`}
+      >
+        <RulerIcon className="h-4 w-4 shrink-0" />
+        {measuring && (
+          <span className="text-[11.5px] font-semibold whitespace-nowrap">
+            {measureDistanceM !== null
+              ? formatDistance(measureDistanceM)
+              : measurePointCount === 1
+                ? 'Click 2nd point…'
+                : 'Click 1st point…'}
+          </span>
+        )}
+      </button>
+
       <Panel
         icon={<CompassIcon className="h-full w-full" />}
         title="Kumbh Mela"
@@ -1235,42 +1423,6 @@ export default function MapView({
         overlayOpen={sectorDropdownOpen || classDropdownOpen}
       >
         <div className="flex flex-col gap-4">
-          {/* Measure distance */}
-          <div>
-            <button
-              type="button"
-              onClick={() => {
-                setMeasuring((v) => {
-                  const next = !v
-                  if (!next) {
-                    clearMeasurement()
-                    setMeasureDistanceM(null)
-                    setMeasurePointCount(0)
-                  }
-                  return next
-                })
-              }}
-              aria-pressed={measuring}
-              className={`flex w-full cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
-                measuring
-                  ? 'border-blue-200 bg-blue-50 text-blue-700'
-                  : 'border-slate-200 bg-white text-slate-800 hover:bg-slate-50'
-              }`}
-            >
-              <RulerIcon className="h-3.5 w-3.5 shrink-0" />
-              Measure distance
-              {measuring && (
-                <span className="ml-auto text-[11px] font-normal text-blue-500">
-                  {measureDistanceM !== null
-                    ? formatDistance(measureDistanceM)
-                    : measurePointCount === 1
-                      ? 'Click 2nd point…'
-                      : 'Click 1st point…'}
-                </span>
-              )}
-            </button>
-          </div>
-
           {/* Sector search / select combobox */}
           <div ref={sectorDropdownRef} className="relative">
             <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">

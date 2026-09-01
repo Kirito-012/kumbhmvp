@@ -64,7 +64,7 @@ export const POLYGON_LAYER_COLORS: Record<string, string> = {
   ashram: '#db2777',
   bus_terminal: '#2563eb',
   core_parking: '#6b7280',
-  ghat_area: '#0ea5e9',
+  ghat_area: '#d97706',
   kumbh_land: '#059669',
   public_service_facilities: '#ef4444',
   river: '#1d4ed8',
@@ -87,4 +87,5 @@ export const POLYGON_LAYER_LABELS: Record<string, string> = {
 export const POI_SIGNAGE_CODES: Record<string, string> = {
   bus_stop: 'BS',
   kumbh_mela_2027_ghat: 'G',
+  fh_location: 'FH',
 }
