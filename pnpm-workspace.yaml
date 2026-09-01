@@ -3,3 +3,17 @@ allowBuilds:
   mongodb-memory-server: true
   sharp: true
   unrs-resolver: true
+
+# jsdom@30 (a dependency of isomorphic-dompurify, used for server-side HTML
+# sanitization in src/lib/sanitize-html.ts) hard-pins html-encoding-sniffer@6.0.0,
+# which require()s its own dependency @exodus/bytes -- an ESM-only package
+# (every published version ships "type": "module"). Node's CommonJS require()
+# cannot load ESM synchronously, so this throws ERR_REQUIRE_ESM at runtime.
+# It doesn't surface locally, but breaks in Vercel's production Node runtime
+# with "Failed to load external module isomorphic-dompurify-<hash>". Pinned
+# back to 4.0.0, the last version before the @exodus/bytes dependency was
+# introduced (it used whatwg-encoding instead) -- same public API
+# (lib/html-encoding-sniffer.js, sniffHTMLEncoding()), so jsdom's usage is
+# unaffected.
+overrides:
+  html-encoding-sniffer: 4.0.0
