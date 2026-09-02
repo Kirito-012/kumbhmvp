@@ -1,4 +1,4 @@
-import DOMPurify from 'isomorphic-dompurify'
+import sanitize from 'sanitize-html'
 
 const ALLOWED_TAGS = [
   'p',
@@ -21,5 +21,8 @@ const ALLOWED_TAGS = [
 
 /** Sanitizes Tiptap-authored HTML before it's stored. Never trust client-supplied HTML. */
 export function sanitizeHtml(html: string) {
-  return DOMPurify.sanitize(html, { ALLOWED_TAGS, ALLOWED_ATTR: ['href', 'target', 'rel'] })
+  return sanitize(html, {
+    allowedTags: ALLOWED_TAGS,
+    allowedAttributes: { a: ['href', 'target', 'rel'] },
+  })
 }
