@@ -74,11 +74,11 @@ const ROLES = [
     ],
   },
   {
-    key: 'agent',
-    name: 'Agent',
+    key: 'surveyor',
+    name: 'Surveyor',
     rank: 2,
     isSystem: true,
-    // 'own' not 'group' — Groups/Teams/Departments aren't built. An Agent's ticket list and
+    // 'own' not 'group' — Groups/Teams/Departments aren't built. A Surveyor's ticket list and
     // dashboard are scoped server-side to assigneeId === self (see requireTicketScope() in
     // src/server/auth/session.ts). ticket:assign is NOT granted — only Admin/Manager assign.
     grants: [
@@ -225,11 +225,11 @@ async function seed() {
     { upsert: true },
   )
 
-  // Loginable test accounts for exercising the Manager/Agent roles (not service accounts —
+  // Loginable test accounts for exercising the Manager/Surveyor roles (not service accounts —
   // these have a real, fixed password so someone can actually log in as each role).
   const testAccounts = [
     { email: 'manager@test.local', fullname: 'Test Manager', roleKey: 'manager' },
-    { email: 'agent@test.local', fullname: 'Test Agent', roleKey: 'agent' },
+    { email: 'surveyor@test.local', fullname: 'Test Surveyor', roleKey: 'surveyor' },
   ] as const
   const testPassword = 'testpass123'
   const testPasswordHash = await bcrypt.hash(testPassword, 12)
@@ -263,7 +263,7 @@ async function seed() {
         email: botEmail,
         passwordHash: botPasswordHash,
         fullname: 'DroneSeva',
-        roleId: roleDocs.agent,
+        roleId: roleDocs.surveyor,
         isActive: true,
         deletedAt: null,
       },
@@ -283,7 +283,7 @@ async function seed() {
         email: importEmail,
         passwordHash: importPasswordHash,
         fullname: 'Kumbh Map Import',
-        roleId: roleDocs.agent,
+        roleId: roleDocs.surveyor,
         isActive: true,
         deletedAt: null,
       },

@@ -46,7 +46,7 @@ export function RegisterForm() {
             required
             maxLength={120}
             placeholder="Jane Doe"
-            className="h-10 w-full rounded-lg border border-border-strong bg-white/[0.03] pl-9 pr-3 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-white/[0.05] focus:ring-2 focus:ring-accent/20"
+            className="h-10 w-full rounded-lg border border-border-strong bg-overlay pl-9 pr-3 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20"
           />
         </div>
       </div>
@@ -64,7 +64,7 @@ export function RegisterForm() {
             autoComplete="email"
             required
             placeholder="you@company.com"
-            className="h-10 w-full rounded-lg border border-border-strong bg-white/[0.03] pl-9 pr-3 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-white/[0.05] focus:ring-2 focus:ring-accent/20"
+            className="h-10 w-full rounded-lg border border-border-strong bg-overlay pl-9 pr-3 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20"
           />
         </div>
       </div>
@@ -83,7 +83,7 @@ export function RegisterForm() {
             required
             minLength={8}
             placeholder="At least 8 characters"
-            className="h-10 w-full rounded-lg border border-border-strong bg-white/[0.03] pl-9 pr-9 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-white/[0.05] focus:ring-2 focus:ring-accent/20"
+            className="h-10 w-full rounded-lg border border-border-strong bg-overlay pl-9 pr-9 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20"
           />
           <button
             type="button"
@@ -100,13 +100,13 @@ export function RegisterForm() {
       <div>
         <p className="mb-1.5 block text-xs font-medium text-muted-strong">I am a</p>
         <div className="grid grid-cols-2 gap-3">
-          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-border-strong bg-white/[0.03] py-2.5 text-sm font-medium text-muted-strong transition-colors has-[:checked]:border-accent/50 has-[:checked]:bg-accent-soft has-[:checked]:text-accent-strong">
+          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-border-strong bg-overlay py-2.5 text-sm font-medium text-muted-strong transition-colors has-[:checked]:border-accent/50 has-[:checked]:bg-accent-soft has-[:checked]:text-accent-strong">
             <input type="radio" name="roleKey" value="manager" required className="sr-only" />
             Manager
           </label>
-          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-border-strong bg-white/[0.03] py-2.5 text-sm font-medium text-muted-strong transition-colors has-[:checked]:border-accent/50 has-[:checked]:bg-accent-soft has-[:checked]:text-accent-strong">
-            <input type="radio" name="roleKey" value="agent" required className="sr-only" />
-            Agent
+          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-border-strong bg-overlay py-2.5 text-sm font-medium text-muted-strong transition-colors has-[:checked]:border-accent/50 has-[:checked]:bg-accent-soft has-[:checked]:text-accent-strong">
+            <input type="radio" name="roleKey" value="surveyor" required className="sr-only" />
+            Surveyor
           </label>
         </div>
       </div>

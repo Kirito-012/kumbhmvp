@@ -37,7 +37,7 @@ export function ActivityTimeline({ events }: { events: EventView[] }) {
     <ol className="space-y-3">
       {events.map((e) => (
         <li key={e.id} className="flex items-start gap-2.5 text-xs">
-          <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/[0.04] text-muted">
+          <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-overlay text-muted">
             <Activity className="h-2.5 w-2.5" />
           </div>
           <p className="text-muted-strong">

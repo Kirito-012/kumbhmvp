@@ -26,7 +26,7 @@ export default function Error({
       <button
         type="button"
         onClick={() => unstable_retry()}
-        className="mt-2 inline-flex h-9 cursor-pointer items-center justify-center rounded-lg bg-accent px-4 text-sm font-medium text-black transition-colors hover:bg-accent-strong"
+        className="mt-2 inline-flex h-9 cursor-pointer items-center justify-center rounded-lg bg-accent px-4 text-sm font-medium text-background transition-colors hover:bg-accent-strong"
       >
         Try again
       </button>

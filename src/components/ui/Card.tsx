@@ -29,7 +29,7 @@ export function CardHeader({
     <div className="flex items-start justify-between gap-4 px-5 pt-5">
       <div className="flex items-start gap-3">
         {icon && (
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.04] border border-border text-muted-strong">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-overlay border border-border text-muted-strong">
             {icon}
           </div>
         )}

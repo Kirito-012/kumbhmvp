@@ -34,7 +34,7 @@ export default async function TicketDetailPage({
   const ticketDoc = await ticketService.getTicketByNumber(number)
   if (!ticketDoc) notFound()
 
-  // Agent-scoped: a ticket not assigned to them doesn't exist as far as they're concerned —
+  // Surveyor-scoped: a ticket not assigned to them doesn't exist as far as they're concerned —
   // same as it not existing, not a "you're not allowed" page (avoids confirming it exists).
   if (forcedAssigneeId) {
     const assignee = (ticketDoc as { assigneeId?: { _id?: unknown } | null }).assigneeId

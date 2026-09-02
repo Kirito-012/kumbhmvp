@@ -7,11 +7,16 @@ export const buttonVariants = cva(
   {
     variants: {
       variant: {
+        // Deliberately inverted, not `text-foreground`: dark mode wants near-black text, light
+        // mode wants near-white -- the *opposite* of what --foreground gives (that's tuned for
+        // body text against the page background, not this). --background already holds exactly
+        // those two values (near-black in dark, near-white in light), so reusing it as the text
+        // colour here gets the right pairing in both themes for free.
         primary:
-          'bg-accent text-black hover:bg-accent-strong shadow-[0_0_0_1px_rgba(16,185,129,0.3),0_8px_20px_-6px_rgba(16,185,129,0.45)]',
+          'bg-accent text-background hover:bg-accent-strong shadow-[0_0_0_1px_rgba(16,185,129,0.3),0_8px_20px_-6px_rgba(16,185,129,0.45)]',
         secondary:
-          'bg-white/[0.06] text-foreground border border-border-strong hover:bg-white/[0.1]',
-        ghost: 'text-muted-strong hover:bg-white/[0.06] hover:text-foreground',
+          'bg-overlay-strong text-foreground border border-border-strong hover:bg-overlay-strong',
+        ghost: 'text-muted-strong hover:bg-overlay-strong hover:text-foreground',
         danger: 'bg-danger/10 text-danger border border-danger/20 hover:bg-danger/20',
       },
       size: {

@@ -7,7 +7,7 @@ export const registerSchema = z.object({
   fullname: z.string().trim().min(1, 'Name is required').max(120),
   email: z.string().trim().toLowerCase().email('Enter a valid email'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
-  roleKey: z.enum(['manager', 'agent'], { message: 'Choose a role' }),
+  roleKey: z.enum(['manager', 'surveyor'], { message: 'Choose a role' }),
 })
 
 export type RegisterInput = z.infer<typeof registerSchema>

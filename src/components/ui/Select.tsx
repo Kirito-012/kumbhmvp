@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { Check, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePopoverPosition } from '@/lib/use-popover-position'
+import { readableTextOn, solidFillColor } from '@/lib/classColors'
 
 export type SelectOption = { value: string; label: string; color?: string }
 
@@ -95,15 +96,28 @@ export function Select({
 
   const triggerVariant = {
     field:
-      'w-full border border-border-strong bg-white/[0.03] focus:border-accent/50 focus:bg-white/[0.05] focus:ring-2 focus:ring-accent/20',
-    pill: 'w-auto rounded-full border-0 font-medium',
+      'w-full border border-border-strong bg-overlay focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20',
+    // No colour selected yet (e.g. a toolbar filter's "All ___" default) falls back to the same
+    // neutral field look as `ghost`, rather than rendering borderless/invisible.
+    pill: cn(
+      'w-auto rounded-full font-medium',
+      selected?.color
+        ? 'border-0'
+        : 'border border-border-strong bg-overlay text-muted-strong hover:bg-overlay-strong hover:text-foreground',
+    ),
     ghost:
-      'w-full border border-border bg-white/[0.02] font-medium text-muted-strong hover:bg-white/[0.06] hover:text-foreground focus:border-accent/40',
+      'w-full border border-border bg-overlay font-medium text-muted-strong hover:bg-overlay-strong hover:text-foreground focus:border-accent/40',
   }[variant]
 
+  // Solid fill (not a tint) so the selected option's colour reads at a glance, same treatment
+  // as SearchableSelect's class filter -- text flips to whichever of white/near-black is
+  // readable against that fill (see readableTextOn). Runs through solidFillColor first since a
+  // few DB-seeded colours sit right at readableTextOn's contrast threshold (e.g. the "Resolved"
+  // status), which otherwise makes same-set pills inconsistently mix black/white text.
+  const pillFill = selected?.color ? solidFillColor(selected.color) : undefined
   const pillStyle =
-    variant === 'pill' && selected?.color
-      ? { backgroundColor: `${selected.color}22`, color: selected.color }
+    variant === 'pill' && pillFill
+      ? { backgroundColor: pillFill, color: readableTextOn(pillFill) }
       : undefined
 
   const menuMinWidth = position
@@ -131,18 +145,12 @@ export function Select({
         )}
       >
         <span className="flex min-w-0 items-center gap-1.5">
-          {variant === 'pill' && selected?.color && (
-            <span
-              className="h-1.5 w-1.5 shrink-0 rounded-full"
-              style={{ backgroundColor: selected.color }}
-              aria-hidden
-            />
-          )}
           <span className="truncate">{selected?.label ?? placeholder}</span>
         </span>
         <ChevronDown
           className={cn(
-            'h-3.5 w-3.5 shrink-0 text-muted transition-transform',
+            'h-3.5 w-3.5 shrink-0 transition-transform',
+            pillStyle ? 'opacity-70' : 'text-muted',
             open && 'rotate-180',
           )}
         />
@@ -168,7 +176,7 @@ export function Select({
                 aria-selected={o.value === value}
                 onClick={() => choose(o)}
                 className={cn(
-                  'flex w-full cursor-pointer items-center gap-2 whitespace-nowrap rounded-md text-left transition-colors hover:bg-white/[0.06]',
+                  'flex w-full cursor-pointer items-center gap-2 whitespace-nowrap rounded-md text-left transition-colors hover:bg-overlay-strong',
                   SIZE_OPTION[size],
                   o.value === value ? 'text-foreground' : 'text-muted-strong',
                 )}

@@ -200,7 +200,7 @@ export const topGroups = [
   { name: 'Onboarding', count: 22, share: 0.24 },
 ]
 
-export const agentLeaderboard = [
+export const surveyorLeaderboard = [
   { person: people.aria, resolved: 58, avgHrs: 2.1 },
   { person: people.priya, resolved: 51, avgHrs: 2.6 },
   { person: people.marcus, resolved: 44, avgHrs: 3.2 },

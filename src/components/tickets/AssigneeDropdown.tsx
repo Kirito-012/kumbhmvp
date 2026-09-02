@@ -103,7 +103,7 @@ export function AssigneeDropdown({
         type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={pending}
-        className="flex items-center gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-white/[0.06] disabled:cursor-wait disabled:opacity-60"
+        className="flex items-center gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-overlay-strong disabled:cursor-wait disabled:opacity-60"
       >
         <Avatar person={person} size="sm" />
         <span className="max-w-[120px] truncate text-xs text-muted-strong">
@@ -126,14 +126,14 @@ export function AssigneeDropdown({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search people…"
-                className="h-8 w-full rounded-md border border-border-strong bg-white/[0.03] pl-8 pr-2 text-xs text-foreground placeholder:text-muted/60 outline-none focus:border-accent/50"
+                className="h-8 w-full rounded-md border border-border-strong bg-overlay pl-8 pr-2 text-xs text-foreground placeholder:text-muted/60 outline-none focus:border-accent/50"
               />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               <button
                 type="button"
                 onClick={() => choose(null)}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-strong hover:bg-white/[0.06]"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-strong hover:bg-overlay-strong"
               >
                 <Avatar person={UNASSIGNED} size="sm" />
                 Unassigned
@@ -146,7 +146,7 @@ export function AssigneeDropdown({
                   type="button"
                   onClick={() => choose(u)}
                   className={cn(
-                    'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-white/[0.06]',
+                    'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-overlay-strong',
                     current?.id === u.id ? 'text-foreground' : 'text-muted-strong',
                   )}
                 >

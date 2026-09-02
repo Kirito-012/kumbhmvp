@@ -1,9 +1,10 @@
 'use client'
 
 import Link from 'next/link'
-import { Search, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/Button'
 import { NotificationBell } from '@/components/layout/NotificationBell'
+import { GlobalSearch } from '@/components/layout/GlobalSearch'
 import { cn } from '@/lib/utils'
 
 export function Topbar({
@@ -22,17 +23,7 @@ export function Topbar({
         {description && <p className="truncate text-xs text-muted">{description}</p>}
       </div>
 
-      <label className="relative hidden w-72 shrink-0 sm:block">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
-        <input
-          type="search"
-          placeholder="Search tickets, people…"
-          className="h-9 w-full rounded-lg border border-border bg-white/[0.03] pl-9 pr-3 text-sm text-foreground placeholder:text-muted/70 outline-none transition-colors focus:border-accent/40 focus:bg-white/[0.05]"
-        />
-        <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border border-border bg-white/[0.04] px-1.5 py-0.5 text-[10px] font-medium text-muted">
-          ⌘K
-        </kbd>
-      </label>
+      <GlobalSearch />
 
       <NotificationBell />
 

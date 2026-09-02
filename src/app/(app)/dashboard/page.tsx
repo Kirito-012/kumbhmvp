@@ -3,8 +3,10 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/dashboard/StatCard'
 import { VolumeChart } from '@/components/dashboard/VolumeChart'
 import { PriorityBreakdown } from '@/components/dashboard/PriorityBreakdown'
+import { CategoryBreakdown } from '@/components/dashboard/CategoryBreakdown'
 import { WorkloadByAssignee } from '@/components/dashboard/WorkloadByAssignee'
 import { ActivityFeed } from '@/components/dashboard/ActivityFeed'
+import { DashboardAutoRefresh } from '@/components/dashboard/DashboardAutoRefresh'
 import { Inbox, CheckCircle2, UserX, Layers, TrendingUp, AlertTriangle, Users2 } from 'lucide-react'
 import { requireTicketScope } from '@/server/auth/session'
 import { getDashboardData } from '@/server/services/ticket.service'
@@ -15,6 +17,7 @@ export default async function DashboardPage() {
 
   return (
     <>
+      <DashboardAutoRefresh />
       <Topbar
         title="Dashboard"
         description="Here's what's happening across your workspace today"
@@ -29,6 +32,7 @@ export default async function DashboardPage() {
             value={data.openTicketsCount}
             icon={<Inbox className="h-4 w-4" />}
             accent="accent"
+            href="/tickets?status=open"
           />
           <StatCard
             label="Unassigned"
@@ -36,6 +40,7 @@ export default async function DashboardPage() {
             caption={forcedAssigneeId ? undefined : 'Waiting to be assigned'}
             icon={<UserX className="h-4 w-4" />}
             accent="warning"
+            href={forcedAssigneeId ? undefined : '/tickets?assignee=unassigned'}
           />
           <StatCard
             label="Resolved today"
@@ -86,6 +91,9 @@ export default async function DashboardPage() {
             </div>
           </Card>
         </div>
+
+        {/* Category breakdown — renders its own fixed-dark panel chrome, no Card wrapper */}
+        <CategoryBreakdown data={data.categoryBreakdown} />
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
           {/* Recent activity */}

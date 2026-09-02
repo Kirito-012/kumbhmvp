@@ -103,11 +103,11 @@ export function NotificationBell() {
         aria-haspopup="true"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="relative inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-border text-muted-strong transition-colors hover:bg-white/[0.06] hover:text-foreground"
+        className="relative inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-border text-muted-strong transition-colors hover:bg-overlay-strong hover:text-foreground"
       >
         <Bell className="h-4 w-4" />
         {loaded && unreadCount > 0 && (
-          <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-black shadow-[0_0_6px_1px_rgba(16,185,129,0.8)]">
+          <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-background shadow-[0_0_6px_1px_rgba(16,185,129,0.8)]">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
@@ -128,7 +128,7 @@ export function NotificationBell() {
                 type="button"
                 disabled={isPending || unreadCount === 0}
                 onClick={handleMarkAllRead}
-                className="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-strong transition-colors hover:bg-white/[0.06] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-strong transition-colors hover:bg-overlay-strong hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <CheckCheck className="h-3.5 w-3.5" />
                 Mark all as read
@@ -150,14 +150,14 @@ export function NotificationBell() {
                       key={item.id}
                       href={item.href}
                       onClick={() => handleItemClick(item)}
-                      className="group flex items-start gap-2.5 px-3.5 py-2.5 transition-colors hover:bg-white/[0.04]"
+                      className="group flex items-start gap-2.5 px-3.5 py-2.5 transition-colors hover:bg-overlay"
                     >
                       <div
                         className={cn(
                           'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
                           item.type === 'account'
                             ? 'bg-warning/15 text-warning'
-                            : 'bg-white/[0.05] text-muted-strong',
+                            : 'bg-overlay-strong text-muted-strong',
                         )}
                       >
                         {item.type === 'account' ? (

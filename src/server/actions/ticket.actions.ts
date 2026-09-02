@@ -49,7 +49,7 @@ export async function updateTicketFieldAction(
     throw new Error('You do not have permission to do that.')
   }
 
-  // Agent-scoped: block updates to tickets not assigned to them, even via a direct action call
+  // Surveyor-scoped: block updates to tickets not assigned to them, even via a direct action call
   // that bypasses the page's own visibility check (see tickets/[number]/page.tsx).
   if (forcedAssigneeId) {
     const ticket = await ticketService.getTicketByNumber(number)

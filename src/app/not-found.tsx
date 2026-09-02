@@ -4,7 +4,7 @@ import { SearchX } from 'lucide-react'
 export default function NotFound() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background px-6 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/[0.04] text-muted-strong">
+      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-overlay text-muted-strong">
         <SearchX className="h-6 w-6" strokeWidth={1.75} />
       </div>
       <div>
@@ -15,7 +15,7 @@ export default function NotFound() {
       </div>
       <Link
         href="/dashboard"
-        className="mt-2 inline-flex h-9 cursor-pointer items-center justify-center rounded-lg bg-accent px-4 text-sm font-medium text-black transition-colors hover:bg-accent-strong"
+        className="mt-2 inline-flex h-9 cursor-pointer items-center justify-center rounded-lg bg-accent px-4 text-sm font-medium text-background transition-colors hover:bg-accent-strong"
       >
         Back to dashboard
       </Link>

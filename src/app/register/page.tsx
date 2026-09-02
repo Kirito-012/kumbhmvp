@@ -11,7 +11,7 @@ export default function RegisterPage() {
 
         <div className="relative flex items-center gap-2.5">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent shadow-[0_0_20px_-4px_rgba(16,185,129,0.7)]">
-            <Sparkles className="h-4.5 w-4.5 text-black" strokeWidth={2.25} />
+            <Sparkles className="h-4.5 w-4.5 text-background" strokeWidth={2.25} />
           </div>
           <span className="text-[15px] font-semibold tracking-tight text-foreground">
             TheCraftSync
@@ -20,7 +20,7 @@ export default function RegisterPage() {
 
         <div className="relative max-w-md space-y-6">
           <p className="text-2xl font-medium leading-snug tracking-tight text-foreground">
-            Request access as a Manager or Agent — an admin reviews every request before you can
+            Request access as a Manager or Surveyor — an admin reviews every request before you can
             sign in.
           </p>
 
@@ -48,7 +48,7 @@ export default function RegisterPage() {
         <div className="w-full max-w-sm animate-fade-in">
           <div className="mb-8 flex items-center gap-2.5 lg:hidden">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent">
-              <Sparkles className="h-4.5 w-4.5 text-black" strokeWidth={2.25} />
+              <Sparkles className="h-4.5 w-4.5 text-background" strokeWidth={2.25} />
             </div>
             <span className="text-[15px] font-semibold tracking-tight text-foreground">
               TheCraftSync

@@ -46,12 +46,15 @@ import {
   ChartBarIcon,
   ChevronDownIcon,
   CompassIcon,
+  GridIcon,
   LayersIcon,
+  ParcelIcon,
   RedoIcon,
   RulerIcon,
   SearchIcon,
   TagIcon,
   UndoIcon,
+  XIcon,
 } from '@/components/map/icons'
 
 type Sector = {
@@ -183,8 +186,11 @@ class PitchToggleControl implements IControl {
     if (!map || !button) return
     const active = map.getPitch() > 5
     button.setAttribute('aria-pressed', String(active))
-    button.style.background = active ? '#2563eb' : '#fff'
-    button.style.color = active ? '#fff' : '#333'
+    // var() references resolve live against the document's current --map-* custom properties
+    // (set on <html> by the theme toggle), so this button follows theme changes without needing
+    // its own change listener.
+    button.style.background = active ? 'var(--map-accent)' : 'var(--map-surface)'
+    button.style.color = active ? '#fff' : 'var(--map-fg-muted)'
   }
 
   onAdd(map: MLMap) {
@@ -208,8 +214,8 @@ class PitchToggleControl implements IControl {
       fontWeight: '700',
       fontFamily: 'inherit',
       lineHeight: '1',
-      background: '#fff',
-      color: '#333',
+      background: 'var(--map-surface)',
+      color: 'var(--map-fg-muted)',
     })
     button.textContent = '3D'
     button.onclick = () => {
@@ -399,7 +405,10 @@ export default function MapView({
   // (fallback), causing a hydration mismatch. The actual stored value is
   // applied post-mount below instead.
   const [visibility, setVisibility] = useState<Record<string, boolean>>(defaultVisibility)
-  const [classFilter, setClassFilter] = useState<string | 'all'>('all')
+  // Empty array means "all classes" -- multiple classes can be selected at
+  // once, all rendering together on the map (same on/off model as
+  // poiVisibility/roadTypeVisibility rather than a single active choice).
+  const [classFilter, setClassFilter] = useState<string[]>([])
   const [search, setSearch] = useState('')
   const [classSearch, setClassSearch] = useState('')
   const [classDropdownOpen, setClassDropdownOpen] = useState(false)
@@ -520,16 +529,23 @@ export default function MapView({
         : poiDef
           ? poiDef.label
           : p.class
-    const accentColor = poiDef?.color ?? '#2563eb'
+    // poiDef.color is a plain hex string (the "18" suffix below appends alpha to it), but the
+    // non-POI fallback has to stay a CSS var() so it follows the theme -- color-mix() is the
+    // var()-safe equivalent of a hex alpha suffix (both land around ~9% opacity over the panel).
+    const accentColor = poiDef?.color
+    const iconBg = accentColor
+      ? `${accentColor}18`
+      : 'color-mix(in srgb, var(--map-accent) 9%, transparent)'
+    const iconFg = accentColor ?? 'var(--map-accent)'
 
     return `
-      <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 16px 12px;border-bottom:1px solid #f1f5f9">
-        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;background:${accentColor}18;color:${accentColor}">
+      <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 16px 12px;border-bottom:1px solid var(--map-popup-row-border)">
+        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;background:${iconBg};color:${iconFg}">
           <svg viewBox="0 0 24 24" fill="none" width="17" height="17">${POPUP_ICON_PATHS[kind]}</svg>
         </span>
         <div style="min-width:0">
-          <div style="font-size:13.5px;font-weight:700;color:#0f172a;line-height:1.3;overflow-wrap:anywhere">${escapeHtml(title)}</div>
-          ${subtitle ? `<div style="margin-top:1px;font-size:11.5px;color:#64748b">${escapeHtml(subtitle)}</div>` : ''}
+          <div style="font-size:13.5px;font-weight:700;color:var(--map-popup-heading);line-height:1.3;overflow-wrap:anywhere">${escapeHtml(title)}</div>
+          ${subtitle ? `<div style="margin-top:1px;font-size:11.5px;color:var(--map-popup-subtle)">${escapeHtml(subtitle)}</div>` : ''}
         </div>
       </div>`
   }
@@ -564,9 +580,9 @@ export default function MapView({
     return `<div style="padding:10px 16px 4px;display:flex;flex-direction:column">${visible
       .map(
         ([k, v], i) =>
-          `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:5px 0;${i > 0 ? 'border-top:1px solid #f8fafc' : ''}">
-            <span style="font-size:11.5px;color:#94a3b8">${escapeHtml(k)}</span>
-            <span style="font-size:12.5px;font-weight:600;color:#1e293b;text-align:right;overflow-wrap:anywhere">${
+          `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:5px 0;${i > 0 ? 'border-top:1px solid var(--map-popup-row-border)' : ''}">
+            <span style="font-size:11.5px;color:var(--map-popup-faint)">${escapeHtml(k)}</span>
+            <span style="font-size:12.5px;font-weight:600;color:var(--map-popup-heading);text-align:right;overflow-wrap:anywhere">${
               v === null || v === '' ? '—' : escapeHtml(v)
             }</span>
           </div>`,
@@ -587,13 +603,13 @@ export default function MapView({
           : ''
       }${escapeHtml(label)}</span>`
 
-    return `<div style="margin:12px 16px 14px;padding-top:12px;border-top:1px solid #f1f5f9">
+    return `<div style="margin:12px 16px 14px;padding-top:12px;border-top:1px solid var(--map-popup-row-border)">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;flex-wrap:wrap">
         ${ticket.status ? badge(ticket.status.name, ticket.status.color) : ''}
         ${ticket.priority ? badge(ticket.priority.name, ticket.priority.color) : ''}
       </div>
-      <p style="margin:0 0 9px;font-size:12.5px;line-height:1.45;color:#334155;overflow-wrap:anywhere">${escapeHtml(ticket.subject)}</p>
-      <a href="/tickets/${ticket.number}" style="display:inline-flex;align-items:center;gap:4px;color:#2563eb;font-weight:700;text-decoration:none;font-size:12px">Show the ticket <span style="font-size:13px">→</span></a>
+      <p style="margin:0 0 9px;font-size:12.5px;line-height:1.45;color:var(--map-popup-subtle);overflow-wrap:anywhere">${escapeHtml(ticket.subject)}</p>
+      <a href="/tickets/${ticket.number}" style="display:inline-flex;align-items:center;gap:4px;color:var(--map-accent);font-weight:700;text-decoration:none;font-size:12px">Show the ticket <span style="font-size:13px">→</span></a>
     </div>`
   }
 
@@ -602,7 +618,7 @@ export default function MapView({
     popupParcelIdRef.current = null
 
     const baseHtml = (ticketHtml: string) =>
-      `<div style="font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;width:240px;background:#fff;border-radius:16px">${popupHeaderHtml(feature)}${propertyRowsHtml(feature)}${ticketHtml}</div>`
+      `<div style="font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;width:240px;background:var(--map-popup-bg);border-radius:16px">${popupHeaderHtml(feature)}${propertyRowsHtml(feature)}${ticketHtml}</div>`
 
     const popup = new Popup({ closeButton: true, maxWidth: '260px' })
       .setLngLat(lngLat)
@@ -1411,7 +1427,11 @@ export default function MapView({
       selectedSector === 'all' ? null : ['==', ['get', 'sector_no'], selectedSector]
 
     const classCondition =
-      classFilter === 'all' ? null : ['==', ['get', 'class_group'], classFilter]
+      classFilter.length === 0
+        ? null
+        : classFilter.length === 1
+          ? ['==', ['get', 'class_group'], classFilter[0]]
+          : ['in', ['get', 'class_group'], ['literal', classFilter]]
 
     const combined = [sectorFilter, classCondition].filter(Boolean) as unknown[]
     const finalFilter =
@@ -1448,7 +1468,7 @@ export default function MapView({
     if (map.getLayer('sector-plan-parking-label')) {
       const NEVER_MATCH: FilterSpecification = ['==', ['get', 'class_group'], '__none__']
       const parkingFilter =
-        classFilter !== 'all' && classFilter !== 'Parking'
+        classFilter.length > 0 && !classFilter.includes('Parking')
           ? NEVER_MATCH
           : sectorFilter
             ? ([
@@ -1477,7 +1497,11 @@ export default function MapView({
             [s.xmin, s.ymin],
             [s.xmax, s.ymax],
           ],
-          { padding: 60, duration: 800 },
+          // Extra left padding accounts for the "Kumbh Mela" panel docked
+          // over the map's left edge (w-72 + its offset, ~320px) -- plain
+          // symmetric padding fits the sector to the map's full width and
+          // leaves its left edge hidden behind the panel.
+          { padding: { top: 60, bottom: 60, left: 340, right: 60 }, maxZoom: 16, duration: 800 },
         )
       }
     }
@@ -1498,21 +1522,30 @@ export default function MapView({
     }
   }
 
+  function toggleClassFilter(c: string) {
+    setClassFilter((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]))
+  }
+
   function goToClassSearch() {
     if (filteredClassGroups.length > 0) {
-      setClassFilter(filteredClassGroups[0])
-      setClassDropdownOpen(false)
+      toggleClassFilter(filteredClassGroups[0])
+      setClassSearch('')
     }
   }
 
   const selectedSectorObj =
     selectedSector !== 'all' ? sectors.find((s) => s.sector_no === selectedSector) : undefined
   const sectorInputValue = selectedSectorObj ? formatSectorLabel(selectedSectorObj) : search
-  const classInputValue = classFilter !== 'all' ? classFilter : classSearch
+  const classInputValue = classSearch
 
-  const baseLayerRows: Array<{ key: string; label: string; color?: string }> = [
-    { key: 'sector_plan', label: 'Sector plan' },
-    { key: 'sector_boundary', label: 'Boundaries' },
+  const baseLayerRows: Array<{
+    key: string
+    label: string
+    icon: typeof ParcelIcon
+    theme: 'blue' | 'teal'
+  }> = [
+    { key: 'sector_plan', label: 'Sector plan', icon: ParcelIcon, theme: 'blue' },
+    { key: 'sector_boundary', label: 'Boundaries', icon: GridIcon, theme: 'teal' },
   ]
   // "More layers" list -- the 16 POI layers plus the 3 road types, merged
   // into one alphabetically-sorted list (POI_LAYER_DEFS itself stays grouped
@@ -1553,11 +1586,20 @@ export default function MapView({
           aria-pressed={measuring}
           aria-label="Measure distance"
           title="Measure distance"
-          className={`inline-flex h-10 items-center gap-1.5 rounded-lg border px-2.5 shadow-lg backdrop-blur-md transition-colors ${
+          style={
             measuring
-              ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
-              : 'border-slate-900/8 bg-white/92 text-slate-700 hover:bg-white hover:text-slate-900'
-          }`}
+              ? {
+                  borderColor: 'var(--danger-soft)',
+                  background: 'var(--danger-soft)',
+                  color: 'var(--danger)',
+                }
+              : {
+                  borderColor: 'var(--map-panel-border)',
+                  background: 'var(--map-panel-bg)',
+                  color: 'var(--map-fg-muted)',
+                }
+          }
+          className="inline-flex h-10 items-center gap-1.5 rounded-lg border px-2.5 shadow-lg backdrop-blur-md transition-colors hover:brightness-95"
         >
           <RulerIcon className="h-4 w-4 shrink-0" />
           {measuring && (
@@ -1581,7 +1623,12 @@ export default function MapView({
               disabled={measure.points.length === 0}
               aria-label="Undo point"
               title="Undo point (Ctrl+Z or right-click)"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-900/8 bg-white/92 text-slate-700 shadow-lg backdrop-blur-md transition-colors hover:bg-white hover:text-slate-900 disabled:pointer-events-none disabled:opacity-40"
+              style={{
+                borderColor: 'var(--map-panel-border)',
+                background: 'var(--map-panel-bg)',
+                color: 'var(--map-fg-muted)',
+              }}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border shadow-lg backdrop-blur-md transition-colors hover:brightness-95 disabled:pointer-events-none disabled:opacity-40"
             >
               <UndoIcon className="h-4 w-4" />
             </button>
@@ -1591,7 +1638,12 @@ export default function MapView({
               disabled={measure.redo.length === 0}
               aria-label="Redo point"
               title="Redo point (Ctrl+Y)"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-900/8 bg-white/92 text-slate-700 shadow-lg backdrop-blur-md transition-colors hover:bg-white hover:text-slate-900 disabled:pointer-events-none disabled:opacity-40"
+              style={{
+                borderColor: 'var(--map-panel-border)',
+                background: 'var(--map-panel-bg)',
+                color: 'var(--map-fg-muted)',
+              }}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border shadow-lg backdrop-blur-md transition-colors hover:brightness-95 disabled:pointer-events-none disabled:opacity-40"
             >
               <RedoIcon className="h-4 w-4" />
             </button>
@@ -1609,12 +1661,25 @@ export default function MapView({
         <div className="flex flex-col gap-4">
           {/* Sector search / select combobox */}
           <div ref={sectorDropdownRef} className="relative">
-            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              <LayersIcon className="h-3.5 w-3.5" />
-              Sector
+            <div className="mb-1.5 flex items-center gap-1.5">
+              <span
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
+                style={{
+                  background: 'var(--map-section-blue-bg)',
+                  color: 'var(--map-section-blue-fg)',
+                }}
+              >
+                <LayersIcon className="h-3 w-3" />
+              </span>
+              <span
+                className="text-[11px] font-semibold uppercase tracking-wide"
+                style={{ color: 'var(--map-fg-muted)' }}
+              >
+                Sector
+              </span>
             </div>
             <div className="relative">
-              <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--map-fg-faint)]" />
               <input
                 type="text"
                 value={sectorInputValue}
@@ -1633,13 +1698,19 @@ export default function MapView({
                   if (e.key === 'Escape') setSectorDropdownOpen(false)
                 }}
                 placeholder="All sectors"
-                className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-2.5 text-[13px] text-slate-900 placeholder:text-slate-400 outline-none transition-shadow focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+                style={{
+                  borderColor: 'var(--map-border)',
+                  background: 'var(--map-input-bg)',
+                  color: 'var(--map-fg)',
+                }}
+                className="w-full rounded-lg border py-1.5 pl-8 pr-2.5 text-[13px] placeholder:text-[var(--map-fg-faint)] outline-none transition-shadow focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
               />
             </div>
             {sectorDropdownOpen && (
               <ul
                 role="listbox"
-                className="absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+                style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface)' }}
+                className="absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border py-1 shadow-lg"
               >
                 <li role="option" aria-selected={selectedSector === 'all'}>
                   <button
@@ -1649,13 +1720,23 @@ export default function MapView({
                       setSearch('')
                       setSectorDropdownOpen(false)
                     }}
-                    className={`w-full cursor-pointer px-2.5 py-1.5 text-left text-[13px] text-slate-900 hover:bg-slate-50 ${selectedSector === 'all' ? 'bg-slate-100' : ''}`}
+                    style={{
+                      color: 'var(--map-fg)',
+                      background:
+                        selectedSector === 'all' ? 'var(--map-surface-active)' : undefined,
+                    }}
+                    className="w-full cursor-pointer px-2.5 py-1.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
                   >
                     All sectors
                   </button>
                 </li>
                 {filteredSectors.length === 0 && (
-                  <li className="px-2.5 py-1.5 text-[12.5px] text-slate-400">No sectors match</li>
+                  <li
+                    className="px-2.5 py-1.5 text-[12.5px]"
+                    style={{ color: 'var(--map-fg-faint)' }}
+                  >
+                    No sectors match
+                  </li>
                 )}
                 {filteredSectors.map((s) => (
                   <li
@@ -1670,7 +1751,12 @@ export default function MapView({
                         setSearch('')
                         setSectorDropdownOpen(false)
                       }}
-                      className={`w-full cursor-pointer px-2.5 py-1.5 text-left text-[13px] text-slate-900 hover:bg-slate-50 ${selectedSector === s.sector_no ? 'bg-slate-100' : ''}`}
+                      style={{
+                        color: 'var(--map-fg)',
+                        background:
+                          selectedSector === s.sector_no ? 'var(--map-surface-active)' : undefined,
+                      }}
+                      className="w-full cursor-pointer px-2.5 py-1.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
                     >
                       {formatSectorLabel(s)}
                     </button>
@@ -1682,28 +1768,52 @@ export default function MapView({
 
           {/* Class search / select combobox */}
           <div ref={classDropdownRef} className="relative">
-            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              <TagIcon className="h-3.5 w-3.5" />
-              Class
+            <div className="mb-1.5 flex items-center gap-1.5">
+              <span
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
+                style={{
+                  background: 'var(--map-section-teal-bg)',
+                  color: 'var(--map-section-teal-fg)',
+                }}
+              >
+                <TagIcon className="h-3 w-3" />
+              </span>
+              <span
+                className="text-[11px] font-semibold uppercase tracking-wide"
+                style={{ color: 'var(--map-fg-muted)' }}
+              >
+                Class
+              </span>
             </div>
+            {classFilter.length > 0 && (
+              <div className="mb-1.5 flex flex-wrap gap-1">
+                {classFilter.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => toggleClassFilter(c)}
+                    style={{
+                      background: 'var(--map-accent-bg)',
+                      color: 'var(--map-accent-fg)',
+                    }}
+                    className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
+                  >
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ background: CLASS_GROUP_COLORS[c] }}
+                    />
+                    <span className="truncate max-w-[9rem]">{c}</span>
+                    <XIcon className="h-2.5 w-2.5 shrink-0" />
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="relative">
-              {classFilter !== 'all' ? (
-                <span
-                  className="pointer-events-none absolute left-2.5 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full"
-                  style={{ background: CLASS_GROUP_COLORS[classFilter] }}
-                />
-              ) : (
-                <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-              )}
+              <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--map-fg-faint)]" />
               <input
                 type="text"
                 value={classInputValue}
-                onFocus={() => {
-                  // Re-entering the box after a class is selected starts a
-                  // fresh search rather than editing the selected label.
-                  if (classFilter !== 'all') setClassSearch('')
-                  setClassDropdownOpen(true)
-                }}
+                onFocus={() => setClassDropdownOpen(true)}
                 onChange={(e) => {
                   setClassSearch(e.target.value)
                   setClassDropdownOpen(true)
@@ -1712,75 +1822,145 @@ export default function MapView({
                   if (e.key === 'Enter') goToClassSearch()
                   if (e.key === 'Escape') setClassDropdownOpen(false)
                 }}
-                placeholder="All classes"
-                className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-2.5 text-[13px] text-slate-900 placeholder:text-slate-400 outline-none transition-shadow focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+                placeholder={classFilter.length > 0 ? 'Add another class…' : 'All classes'}
+                style={{
+                  borderColor: 'var(--map-border)',
+                  background: 'var(--map-input-bg)',
+                  color: 'var(--map-fg)',
+                }}
+                className="w-full rounded-lg border py-1.5 pl-8 pr-2.5 text-[13px] placeholder:text-[var(--map-fg-faint)] outline-none transition-shadow focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
               />
             </div>
             {classDropdownOpen && (
               <ul
                 role="listbox"
-                className="absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+                aria-multiselectable="true"
+                style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface)' }}
+                className="absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border py-1 shadow-lg"
               >
-                <li role="option" aria-selected={classFilter === 'all'}>
+                <li role="option" aria-selected={classFilter.length === 0}>
                   <button
                     type="button"
                     onClick={() => {
-                      setClassFilter('all')
+                      setClassFilter([])
                       setClassSearch('')
                       setClassDropdownOpen(false)
                     }}
-                    className={`w-full cursor-pointer px-2.5 py-1.5 text-left text-[13px] text-slate-900 hover:bg-slate-50 ${classFilter === 'all' ? 'bg-slate-100' : ''}`}
+                    style={{
+                      color: 'var(--map-fg)',
+                      background:
+                        classFilter.length === 0 ? 'var(--map-surface-active)' : undefined,
+                    }}
+                    className="w-full cursor-pointer px-2.5 py-1.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
                   >
                     All classes
                   </button>
                 </li>
                 {filteredClassGroups.length === 0 && (
-                  <li className="px-2.5 py-1.5 text-[12.5px] text-slate-400">No classes match</li>
-                )}
-                {filteredClassGroups.map((c) => (
-                  <li key={c} role="option" aria-selected={classFilter === c}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setClassFilter(c)
-                        setClassSearch('')
-                        setClassDropdownOpen(false)
-                      }}
-                      className={`flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[13px] text-slate-900 hover:bg-slate-50 ${classFilter === c ? 'bg-slate-100' : ''}`}
-                    >
-                      <span
-                        className="h-2.5 w-2.5 shrink-0 rounded-full"
-                        style={{ background: CLASS_GROUP_COLORS[c] }}
-                      />
-                      <span className="truncate">{c}</span>
-                    </button>
+                  <li
+                    className="px-2.5 py-1.5 text-[12.5px]"
+                    style={{ color: 'var(--map-fg-faint)' }}
+                  >
+                    No classes match
                   </li>
-                ))}
+                )}
+                {filteredClassGroups.map((c) => {
+                  const isSelected = classFilter.includes(c)
+                  return (
+                    <li key={c} role="option" aria-selected={isSelected}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          toggleClassFilter(c)
+                          setClassSearch('')
+                        }}
+                        style={{
+                          color: 'var(--map-fg)',
+                          background: isSelected ? 'var(--map-surface-active)' : undefined,
+                        }}
+                        className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
+                      >
+                        <span
+                          className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                          style={{
+                            borderColor: isSelected ? CLASS_GROUP_COLORS[c] : 'var(--map-border)',
+                            background: isSelected ? CLASS_GROUP_COLORS[c] : 'transparent',
+                          }}
+                        >
+                          {isSelected && (
+                            <svg
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              className="h-2.5 w-2.5"
+                              aria-hidden="true"
+                            >
+                              <path
+                                d="M5 13l4 4L19 7"
+                                stroke="white"
+                                strokeWidth={3}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          )}
+                        </span>
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ background: CLASS_GROUP_COLORS[c] }}
+                        />
+                        <span className="truncate">{c}</span>
+                      </button>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>
 
           {/* Layers */}
-          <div className="border-t border-slate-100 pt-3">
-            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Layers
+          <div className="border-t pt-3" style={{ borderColor: 'var(--map-border)' }}>
+            <div className="mb-2 flex items-center gap-1.5">
+              <span
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
+                style={{
+                  background: 'var(--map-section-violet-bg)',
+                  color: 'var(--map-section-violet-fg)',
+                }}
+              >
+                <GridIcon className="h-3 w-3" />
+              </span>
+              <span
+                className="text-[11px] font-semibold uppercase tracking-wide"
+                style={{ color: 'var(--map-fg-muted)' }}
+              >
+                Layers
+              </span>
             </div>
 
             {/* Basics -- always visible, one per row like before */}
-            <div className="flex flex-col gap-2.5">
-              {baseLayerRows.map(({ key, label, color }) => (
+            <div className="flex flex-col gap-2">
+              {baseLayerRows.map(({ key, label, icon: Icon, theme }) => (
                 <div
                   key={key}
-                  className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50/60 px-2.5 py-2"
+                  style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface)' }}
+                  className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 shadow-sm"
                 >
                   <span className="flex min-w-0 items-center gap-2">
-                    {color && (
-                      <span
-                        className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
-                        style={{ background: color }}
-                      />
-                    )}
-                    <span className="truncate text-[13px] font-medium text-slate-800">{label}</span>
+                    <span
+                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
+                      style={{
+                        background: `var(--map-section-${theme}-bg)`,
+                        color: `var(--map-section-${theme}-fg)`,
+                      }}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                    </span>
+                    <span
+                      className="truncate text-[13px] font-medium"
+                      style={{ color: 'var(--map-fg)' }}
+                    >
+                      {label}
+                    </span>
                   </span>
                   <label className="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center">
                     <input
@@ -1789,8 +1969,8 @@ export default function MapView({
                       checked={visibility[key]}
                       onChange={(e) => setVisibility((v) => ({ ...v, [key]: e.target.checked }))}
                     />
-                    <span className="absolute inset-0 rounded-full bg-slate-300 transition-colors peer-checked:bg-blue-600 peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500/40" />
-                    <span className="absolute left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4" />
+                    <span className="absolute inset-0 rounded-full bg-[var(--map-switch-track)] transition-colors peer-checked:bg-[var(--map-accent)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--map-accent)]/40" />
+                    <span className="absolute left-0.5 h-4 w-4 rounded-full bg-[var(--map-switch-thumb)] shadow transition-transform peer-checked:translate-x-4" />
                   </label>
                 </div>
               ))}
@@ -1806,16 +1986,20 @@ export default function MapView({
               type="button"
               onClick={() => setPoiLayersExpanded((v) => !v)}
               aria-expanded={poiLayersExpanded}
-              className="mt-2.5 flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50/60 px-2.5 py-2 text-left hover:bg-slate-100/70"
+              style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface-alt)' }}
+              className="mt-2.5 flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-left hover:bg-[var(--map-surface-hover)]"
             >
-              <span className="text-[13px] font-medium text-slate-800">
+              <span className="text-[13px] font-medium" style={{ color: 'var(--map-fg-muted)' }}>
                 More layers
-                <span className="ml-1.5 text-[11.5px] font-normal text-slate-400">
+                <span
+                  className="ml-1.5 text-[11.5px] font-normal"
+                  style={{ color: 'var(--map-fg-faint)' }}
+                >
                   {moreLayerDefs.filter((d) => visibility[d.key]).length}/{moreLayerDefs.length} on
                 </span>
               </span>
               <ChevronDownIcon
-                className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${poiLayersExpanded ? 'rotate-180' : ''}`}
+                className={`h-3.5 w-3.5 shrink-0 text-[var(--map-fg-faint)] transition-transform ${poiLayersExpanded ? 'rotate-180' : ''}`}
               />
             </button>
             {poiLayersExpanded && (
@@ -1831,7 +2015,8 @@ export default function MapView({
                         return next
                       })
                     }}
-                    className="cursor-pointer text-[11px] font-semibold text-blue-600 hover:text-blue-700"
+                    className="cursor-pointer text-[11px] font-semibold hover:brightness-90"
+                    style={{ color: 'var(--map-accent)' }}
                   >
                     {moreLayerDefs.every((d) => visibility[d.key]) ? 'Deselect all' : 'Select all'}
                   </button>
@@ -1843,7 +2028,7 @@ export default function MapView({
                     return (
                       <div
                         key={key}
-                        className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-50"
+                        className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-[var(--map-surface-hover)]"
                       >
                         <span className="flex min-w-0 items-center gap-2">
                           {isRoad ? (
@@ -1868,7 +2053,12 @@ export default function MapView({
                               style={{ background: color }}
                             />
                           )}
-                          <span className="text-[12.5px] leading-snug text-slate-700">{label}</span>
+                          <span
+                            className="text-[12.5px] leading-snug"
+                            style={{ color: 'var(--map-fg-muted)' }}
+                          >
+                            {label}
+                          </span>
                         </span>
                         <label className="relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer items-center">
                           <input
@@ -1879,8 +2069,8 @@ export default function MapView({
                               setVisibility((v) => ({ ...v, [key]: e.target.checked }))
                             }
                           />
-                          <span className="absolute inset-0 rounded-full bg-slate-300 transition-colors peer-checked:bg-blue-600 peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500/40" />
-                          <span className="absolute left-0.5 h-3.5 w-3.5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-3.5" />
+                          <span className="absolute inset-0 rounded-full bg-[var(--map-switch-track)] transition-colors peer-checked:bg-[var(--map-accent)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--map-accent)]/40" />
+                          <span className="absolute left-0.5 h-3.5 w-3.5 rounded-full bg-[var(--map-switch-thumb)] shadow transition-transform peer-checked:translate-x-3.5" />
                         </label>
                       </div>
                     )
@@ -1905,7 +2095,7 @@ export default function MapView({
         }
         onClearSector={() => setSelectedSector('all')}
         classFilter={classFilter}
-        onClassFilterChange={setClassFilter}
+        onClassFilterChange={toggleClassFilter}
         poiVisibility={visibility}
         onTogglePoiLayer={(key) => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
         roadTypeVisibility={visibility}

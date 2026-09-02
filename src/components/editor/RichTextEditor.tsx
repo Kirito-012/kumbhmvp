@@ -44,7 +44,7 @@ export function RichTextEditor({
   if (!editor) return null
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border-strong bg-white/[0.03] focus-within:border-accent/50 focus-within:bg-white/[0.05] focus-within:ring-2 focus-within:ring-accent/20">
+    <div className="overflow-hidden rounded-lg border border-border-strong bg-overlay focus-within:border-accent/50 focus-within:bg-overlay-strong focus-within:ring-2 focus-within:ring-accent/20">
       {editable && (
         <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
           <ToolbarButton
@@ -110,7 +110,7 @@ function ToolbarButton({
         'inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors',
         active
           ? 'bg-accent-soft text-accent-strong'
-          : 'text-muted-strong hover:bg-white/[0.06] hover:text-foreground',
+          : 'text-muted-strong hover:bg-overlay-strong hover:text-foreground',
       )}
     >
       {children}

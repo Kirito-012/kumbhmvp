@@ -47,31 +47,14 @@ type Stats = {
   poiByLayer: { layer: string; features: number }[]
 }
 
+// Per-section accent hue, referencing the theme-aware CSS variables defined alongside
+// globals.css's --map-* group (dark: brighter hue over a translucent tint; light: the original
+// flat pastel fill) -- see the matching --map-section-* block in globals.css.
 const SECTION_THEMES = {
-  blue: {
-    bg: 'bg-blue-50',
-    text: 'text-blue-700',
-    badgeBg: 'bg-blue-100',
-    badgeText: 'text-blue-700',
-  },
-  amber: {
-    bg: 'bg-amber-50',
-    text: 'text-amber-700',
-    badgeBg: 'bg-amber-100',
-    badgeText: 'text-amber-700',
-  },
-  teal: {
-    bg: 'bg-teal-50',
-    text: 'text-teal-700',
-    badgeBg: 'bg-teal-100',
-    badgeText: 'text-teal-700',
-  },
-  violet: {
-    bg: 'bg-violet-50',
-    text: 'text-violet-700',
-    badgeBg: 'bg-violet-100',
-    badgeText: 'text-violet-700',
-  },
+  blue: { bg: 'var(--map-section-blue-bg)', text: 'var(--map-section-blue-fg)' },
+  amber: { bg: 'var(--map-section-amber-bg)', text: 'var(--map-section-amber-fg)' },
+  teal: { bg: 'var(--map-section-teal-bg)', text: 'var(--map-section-teal-fg)' },
+  violet: { bg: 'var(--map-section-violet-bg)', text: 'var(--map-section-violet-fg)' },
 } as const
 
 function Section({
@@ -93,14 +76,21 @@ function Section({
     <div>
       <div className="mb-2 flex items-center gap-2">
         <span
-          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${t.bg} ${t.text}`}
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
+          style={{ background: t.bg, color: t.text }}
         >
           <span className="h-3 w-3">{icon}</span>
         </span>
-        <h3 className="text-[11.5px] font-bold uppercase tracking-wide text-slate-700">{title}</h3>
+        <h3
+          className="text-[11.5px] font-bold uppercase tracking-wide"
+          style={{ color: 'var(--map-fg-muted)' }}
+        >
+          {title}
+        </h3>
         {count !== undefined && (
           <span
-            className={`ml-auto rounded-full ${t.badgeBg} ${t.badgeText} px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums`}
+            className="ml-auto rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums"
+            style={{ background: t.bg, color: t.text }}
           >
             {count}
           </span>
@@ -157,9 +147,10 @@ function Table({
             return (
               <th
                 key={i}
-                className={`${scrollable ? 'sticky top-0 z-10' : ''} bg-white pt-1 pb-1.5 ${
+                style={{ background: 'var(--map-surface)', color: 'var(--map-fg-faint)' }}
+                className={`${scrollable ? 'sticky top-0 z-10' : ''} pt-1 pb-1.5 ${
                   isFirst ? firstCellPad : ''
-                } ${isLast ? lastCellPad : 'pr-2'} text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 ${
+                } ${isLast ? lastCellPad : 'pr-2'} text-[10.5px] font-semibold uppercase tracking-wide ${
                   c.align === 'right' ? 'text-right' : 'text-left'
                 }`}
               >
@@ -173,18 +164,18 @@ function Table({
         {rows.map((row, ri) => {
           const isActive = activeSet ? activeSet.has(ri) : activeRow === ri
           const swatch = activeColors?.[ri]
+          // color-mix (not a hex alpha suffix) so the same swatch tints consistently across
+          // themes -- a fixed alpha suffix reads as a much harsher block over the dark panel
+          // than the light one for the same saturated color (e.g. Emergency Exit's red).
+          const rowTint = swatch
+            ? `color-mix(in srgb, ${swatch} var(--map-row-tint-pct), transparent)`
+            : 'var(--map-accent-bg)'
           return (
             <tr
               key={ri}
               onClick={onRowClick ? () => onRowClick(ri) : undefined}
-              className={`${ri % 2 === 1 && !isActive ? 'bg-slate-50/70' : ''} ${
-                onRowClick ? 'cursor-pointer hover:bg-slate-100/80' : ''
-              } ${isActive ? 'bg-[var(--row-tint)]' : ''}`}
-              style={
-                isActive
-                  ? ({ '--row-tint': swatch ? `${swatch}17` : '#eff6ff' } as React.CSSProperties)
-                  : undefined
-              }
+              className={`${onRowClick && !isActive ? 'cursor-pointer hover:bg-[var(--map-surface-hover)]' : onRowClick ? 'cursor-pointer' : ''}`}
+              style={isActive ? { background: rowTint } : undefined}
             >
               {row.map((cell, ci) => {
                 const isFirst = ci === 0
@@ -192,17 +183,18 @@ function Table({
                 return (
                   <td
                     key={ci}
+                    style={{ color: isActive ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
                     className={`relative py-1.5 ${isFirst ? firstCellPad : ''} ${
                       isLast ? lastCellPad : 'pr-2'
-                    } text-slate-700 ${
-                      columns[ci]?.align === 'right' ? 'text-right tabular-nums' : 'text-left'
-                    } ${isActive ? 'font-semibold text-slate-900' : ''}`}
+                    } ${columns[ci]?.align === 'right' ? 'text-right tabular-nums' : 'text-left'} ${
+                      isActive ? 'font-semibold' : ''
+                    }`}
                   >
                     {isActive && isFirst && (
                       <span
                         aria-hidden="true"
                         className="absolute inset-y-1 left-0 w-[3px] rounded-full"
-                        style={{ background: swatch ?? '#3b82f6' }}
+                        style={{ background: swatch ?? 'var(--map-accent)' }}
                       />
                     )}
                     {cell}
@@ -217,7 +209,10 @@ function Table({
   )
 
   return scrollable ? (
-    <div className="kumbh-scroll max-h-56 overflow-y-auto rounded-lg border border-slate-100">
+    <div
+      className="kumbh-scroll max-h-56 overflow-y-auto rounded-lg border"
+      style={{ borderColor: 'var(--map-border)' }}
+    >
       {table}
     </div>
   ) : (
@@ -242,9 +237,11 @@ export default function StatsPanel({
   sectorNo: number | null
   sectorLabel?: string
   onClearSector?: () => void
-  /** Currently active class in "Area by class" -- 'all' means no row is active. */
-  classFilter: string | 'all'
-  onClassFilterChange: (next: string | 'all') => void
+  /** Currently active classes in "Area by class" -- empty means no row is
+   *  active (all classes shown). Several rows can be active at once. */
+  classFilter: string[]
+  /** Toggles a single class in/out of the active set. */
+  onClassFilterChange: (className: string) => void
   /** Same on/off map keyed by POI layer key as the Layers panel's toggles --
    * shared state so a row clicked here and a switch flipped there always
    * agree, same as classFilter driving the Class dropdown. */
@@ -294,20 +291,38 @@ export default function StatsPanel({
       {filtered && onClearSector && (
         <button
           onClick={onClearSector}
-          className="mb-3 inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11.5px] font-medium text-blue-700 transition-colors hover:bg-blue-100 cursor-pointer"
+          style={{
+            borderColor: 'var(--map-accent-bg-hover)',
+            background: 'var(--map-accent-bg)',
+            color: 'var(--map-accent-fg)',
+          }}
+          className="mb-3 inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11.5px] font-medium transition-colors hover:brightness-95 cursor-pointer"
         >
           ← Show all sectors
         </button>
       )}
 
       {loading && (
-        <div className="flex items-center gap-2 py-6 text-[12.5px] text-slate-500">
-          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600" />
+        <div
+          className="flex items-center gap-2 py-6 text-[12.5px]"
+          style={{ color: 'var(--map-fg-muted)' }}
+        >
+          <span
+            className="h-3.5 w-3.5 animate-spin rounded-full border-2"
+            style={{ borderColor: 'var(--map-switch-track)', borderTopColor: 'var(--map-accent)' }}
+          />
           Loading stats…
         </div>
       )}
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[12.5px] text-red-700">
+        <div
+          className="rounded-lg border px-2.5 py-2 text-[12.5px]"
+          style={{
+            borderColor: 'var(--danger-soft)',
+            background: 'var(--danger-soft)',
+            color: 'var(--danger)',
+          }}
+        >
           Failed to load stats: {error}
         </div>
       )}
@@ -321,7 +336,9 @@ export default function StatsPanel({
             count={stats.byClass.length}
           >
             {stats.byClass.length === 0 ? (
-              <p className="text-[12px] text-slate-400">No sector-plan features in this sector.</p>
+              <p className="text-[12px]" style={{ color: 'var(--map-fg-faint)' }}>
+                No sector-plan features in this sector.
+              </p>
             ) : (
               <Table
                 columns={[
@@ -340,14 +357,13 @@ export default function StatsPanel({
                   row.features,
                   row.hectares,
                 ])}
-                activeRow={stats.byClass.findIndex((row) => row.class_group === classFilter)}
+                activeRows={stats.byClass
+                  .map((row, i) => (classFilter.includes(row.class_group) ? i : -1))
+                  .filter((i) => i !== -1)}
                 activeColors={stats.byClass.map(
                   (row) => CLASS_GROUP_COLORS[row.class_group] ?? '#cbd5e1',
                 )}
-                onRowClick={(i) => {
-                  const clicked = stats.byClass[i].class_group
-                  onClassFilterChange(classFilter === clicked ? 'all' : clicked)
-                }}
+                onRowClick={(i) => onClassFilterChange(stats.byClass[i].class_group)}
               />
             )}
           </Section>
@@ -359,7 +375,9 @@ export default function StatsPanel({
             count={stats.roadByType.length}
           >
             {stats.roadByType.length === 0 ? (
-              <p className="text-[12px] text-slate-400">No road segments in this sector.</p>
+              <p className="text-[12px]" style={{ color: 'var(--map-fg-faint)' }}>
+                No road segments in this sector.
+              </p>
             ) : (
               <Table
                 columns={[
@@ -404,7 +422,9 @@ export default function StatsPanel({
             count={stats.poiByLayer.filter((row) => row.features > 0).length}
           >
             {stats.poiByLayer.every((row) => row.features === 0) ? (
-              <p className="text-[12px] text-slate-400">No POI features in this sector.</p>
+              <p className="text-[12px]" style={{ color: 'var(--map-fg-faint)' }}>
+                No POI features in this sector.
+              </p>
             ) : (
               (() => {
                 const poiRows = stats.poiByLayer

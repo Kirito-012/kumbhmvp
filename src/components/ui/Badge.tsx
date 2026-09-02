@@ -39,7 +39,23 @@ const statusStyles: Record<Status, string> = {
   open: 'bg-info-soft text-info ring-1 ring-inset ring-info/20',
   pending: 'bg-warning-soft text-warning ring-1 ring-inset ring-warning/20',
   resolved: 'bg-accent-soft text-accent-strong ring-1 ring-inset ring-accent/20',
-  closed: 'bg-white/5 text-muted ring-1 ring-inset ring-white/10',
+  closed: 'bg-overlay text-muted ring-1 ring-inset ring-overlay-strong',
+}
+
+/** Solid-fill counterpart of `statusStyles`, e.g. for an active filter tab where the status's
+ *  colour should read as a filled selection rather than a soft badge tint. The `--violet`/
+ *  `--info`/`--warning`/`--accent-strong` tokens are tuned as *text* accents on a dark surface,
+ *  not as fill backgrounds -- several fail WCAG AA against white text once used as a solid fill
+ *  (worst case: violet in dark mode is ~3:1). So these use fixed, deliberately deeper shades in
+ *  the same hue family, calibrated for >=4.5:1 with white text in both themes, rather than the
+ *  raw tokens. `closed` has no distinct brand colour (it's the neutral/muted status) so it
+ *  solidifies the overlay tokens instead of introducing a one-off grey. */
+export const statusSolidStyles: Record<Status, string> = {
+  new: 'bg-[#5b52d6] text-white',
+  open: 'bg-[#1d64d8] text-white',
+  pending: 'bg-[#a85d00] text-white',
+  resolved: 'bg-[#047a54] text-white',
+  closed: 'bg-overlay-strong text-foreground',
 }
 
 const statusLabel: Record<Status, string> = {
@@ -94,7 +110,7 @@ export function DynamicBadge({
 
 export function Tag({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center rounded-md border border-border bg-white/[0.03] px-2 py-0.5 text-[11px] font-medium text-muted-strong">
+    <span className="inline-flex items-center rounded-md border border-border bg-overlay px-2 py-0.5 text-[11px] font-medium text-muted-strong">
       {children}
     </span>
   )

@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { Select } from '@/components/ui/Select'
+import { readableTextOn, solidFillColor } from '@/lib/classColors'
 import { updateTicketFieldAction } from '@/server/actions/ticket.actions'
 
 type StatusOption = { id: string; name: string; color: string }
@@ -33,19 +34,16 @@ export function StatusSelect({
   }
 
   if (disabled) {
-    return current ? (
+    if (!current) return null
+    const fill = solidFillColor(current.color)
+    return (
       <span
         className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium"
-        style={{ backgroundColor: `${current.color}22`, color: current.color }}
+        style={{ backgroundColor: fill, color: readableTextOn(fill) }}
       >
-        <span
-          className="h-1.5 w-1.5 rounded-full"
-          style={{ backgroundColor: current.color }}
-          aria-hidden
-        />
         {current.name}
       </span>
-    ) : null
+    )
   }
 
   return (

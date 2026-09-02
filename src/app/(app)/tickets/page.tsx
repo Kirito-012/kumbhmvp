@@ -40,9 +40,12 @@ export default async function TicketsPage({
     q: get('q'),
     classGroup: get('class'),
     sectorNo: sector ? Number(sector) : undefined,
-    // Agent role: server-forced to their own tickets regardless of any assignee param a client
-    // might send — see requireTicketScope() in src/server/auth/session.ts.
-    assigneeId: forcedAssigneeId,
+    // Surveyor role: server-forced to their own tickets regardless of any assignee param a client
+    // might send — see requireTicketScope() in src/server/auth/session.ts. Admin/Manager (no
+    // forcedAssigneeId) may filter by a chosen assignee, e.g. clicking a "People" search result
+    // (?assignee=<id>) or a workload chart segment -- forcedAssigneeId still wins whenever it's
+    // set, so this can never widen a Surveyor's own scope.
+    assigneeId: forcedAssigneeId ?? get('assignee'),
     sortField:
       (get('sort') as 'lastActivityAt' | 'createdAt' | 'number' | undefined) ?? 'lastActivityAt',
     sortDir: (get('dir') as 'asc' | 'desc' | undefined) ?? 'desc',
@@ -89,9 +92,14 @@ export default async function TicketsPage({
         <TicketsToolbar
           statusCounts={statusCounts.byStatus}
           total={statusCounts.total}
-          priorities={priorities.map((p) => ({ slug: p.slug, name: p.name }))}
+          priorities={priorities.map((p) => ({ slug: p.slug, name: p.name, color: p.color }))}
           classGroups={locationOptions.classGroups}
           sectors={locationOptions.sectors}
+          assignees={
+            canAssign
+              ? users.map((u) => ({ id: String(u._id), name: u.fullname || u.email || 'Unknown' }))
+              : []
+          }
         />
 
         <Card>
@@ -104,6 +112,14 @@ export default async function TicketsPage({
             }))}
             canUpdate={canUpdate}
             canAssign={canAssign}
+            hasActiveFilters={Boolean(
+              params.status ||
+              params.priority ||
+              params.q ||
+              params.classGroup ||
+              sector ||
+              get('assignee'),
+            )}
           />
 
           <div className="flex items-center justify-between border-t border-border px-5 py-3.5">
@@ -122,7 +138,7 @@ export default async function TicketsPage({
                   'inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-strong transition-colors',
                   page <= 1
                     ? 'pointer-events-none cursor-not-allowed text-muted/40'
-                    : 'cursor-pointer hover:bg-white/[0.06]',
+                    : 'cursor-pointer hover:bg-overlay-strong',
                 )}
               >
                 <ChevronLeft className="h-4 w-4" />
@@ -137,7 +153,7 @@ export default async function TicketsPage({
                   'inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-strong transition-colors',
                   page >= totalPages
                     ? 'pointer-events-none cursor-not-allowed text-muted/40'
-                    : 'cursor-pointer hover:bg-white/[0.06]',
+                    : 'cursor-pointer hover:bg-overlay-strong',
                 )}
               >
                 <ChevronRight className="h-4 w-4" />

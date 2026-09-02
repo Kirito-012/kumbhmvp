@@ -1,3 +1,38 @@
+// WCAG relative-luminance check to pick readable text (white vs near-black)
+// against an arbitrary solid background colour -- used wherever a class's
+// colour becomes a filled pill/background rather than just an accent dot.
+export function readableTextOn(hex: string): string {
+  const clean = hex.replace('#', '')
+  const r = parseInt(clean.slice(0, 2), 16) / 255
+  const g = parseInt(clean.slice(2, 4), 16) / 255
+  const b = parseInt(clean.slice(4, 6), 16) / 255
+  const toLinear = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
+  const luminance = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b)
+  return luminance > 0.45 ? '#0f172a' : '#ffffff'
+}
+
+// A handful of seeded DB colours (ticket statuses/priorities/tags) sit right at
+// readableTextOn's black/white threshold -- e.g. the "Resolved" status's #34d399 (luminance
+// .496) narrowly resolves to dark text while every sibling status resolves to white, so a row
+// of solid-fill status pills reads as an inconsistent mix of black and white labels even though
+// each pill individually has fine contrast. This is a display-only fix (the DB value is left
+// alone) that swaps a known light/borderline colour for a deliberately deepened shade in the
+// same hue family before it ever reaches readableTextOn, so it reliably lands on the same side
+// as the rest of the set. Keyed by the DB's exact stored hex; extend as new borderline colours
+// turn up rather than trying to auto-darken everything (auto-darkening would shift hues that
+// are already fine and don't need it).
+const SOLID_FILL_COLOR_OVERRIDES: Record<string, string> = {
+  '#34d399': '#047a54', // "Resolved" status -- matches statusSolidStyles.resolved in Badge.tsx
+}
+
+/** Resolves a DB-stored colour to the shade that should actually be used for a solid-fill pill
+ *  background, applying SOLID_FILL_COLOR_OVERRIDES when the raw colour is a known borderline
+ *  case. Pass the *result* of this to readableTextOn, not the raw DB colour, when rendering a
+ *  solid fill (dot/tint usages are unaffected and can keep using the raw colour). */
+export function solidFillColor(hex: string): string {
+  return SOLID_FILL_COLOR_OVERRIDES[hex.toLowerCase()] ?? hex
+}
+
 // Matches kumbh.sector_plan.class_group buckets produced by the loader
 // (Dashboard/scripts/load_kumbh.py) — top classes get their own colour,
 // the long tail is bucketed into "Other".

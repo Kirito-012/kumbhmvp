@@ -39,7 +39,7 @@ export async function requireAbility(grant?: { action: string; subject: string }
 
 /**
  * Ticket-list/dashboard visibility scoping. Groups/Teams/Departments don't exist, so this is
- * deliberately coarse: an Agent (`ticket:read:own`, not `ticket:read:all`) only ever sees
+ * deliberately coarse: a Surveyor (`ticket:read:own`, not `ticket:read:all`) only ever sees
  * tickets assigned to them — the caller's `assigneeId` filter is force-overridden server-side,
  * not just hidden in the UI. Admin/Manager (`ticket:read:all`) see everything.
  *

@@ -12,14 +12,22 @@ export function SidebarToggle({ variant = 'overlay' }: { variant?: 'pinned' | 'o
       type="button"
       onClick={() => setOpen(true)}
       aria-label="Open menu"
+      style={
+        variant === 'overlay'
+          ? {
+              borderColor: 'var(--map-panel-border)',
+              background: 'var(--map-panel-bg)',
+              color: 'var(--map-fg-muted)',
+            }
+          : undefined
+      }
       className={cn(
         'fixed left-4 top-4 z-30 inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg shadow-lg transition-colors',
-        // 'overlay' variant is the full-bleed map page, which keeps a fixed
-        // light "chrome" palette regardless of app theme (see the note in
-        // components/map/Panel.tsx) -- the toggle needs to match that light
-        // surface here instead of the app's normal dark theme.
+        // 'overlay' variant is the full-bleed map page, which follows the --map-* glass palette
+        // (see the note in components/map/Panel.tsx) via the inline style above rather than
+        // Tailwind classes, matching every other piece of map chrome.
         variant === 'overlay'
-          ? 'border border-slate-900/8 bg-white/92 text-slate-700 backdrop-blur-md hover:bg-white hover:text-slate-900'
+          ? 'border backdrop-blur-md hover:brightness-95'
           : 'border border-border bg-background-elevated text-muted-strong hover:bg-surface-hover hover:text-foreground',
         variant === 'pinned' && 'lg:hidden',
       )}

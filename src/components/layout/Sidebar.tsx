@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { LayoutDashboard, Map, Ticket, Users, Sparkles, LogOut, X } from 'lucide-react'
 import { cn, initialsFor } from '@/lib/utils'
 import { Avatar } from '@/components/ui/Avatar'
+import { ThemeToggle } from '@/components/ui/ThemeToggle'
 import { useSidebar } from '@/components/layout/SidebarContext'
 import { logout } from '@/server/actions/auth.actions'
 
@@ -82,7 +83,7 @@ export function Sidebar({
       >
         <div className="flex h-16 items-center gap-2.5 px-5">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent shadow-[0_0_20px_-4px_rgba(16,185,129,0.7)]">
-            <Sparkles className="h-4.5 w-4.5 text-black" strokeWidth={2.25} />
+            <Sparkles className="h-4.5 w-4.5 text-background" strokeWidth={2.25} />
           </div>
           <span className="flex-1 text-[15px] font-semibold tracking-tight text-foreground">
             TheCraftSync
@@ -92,7 +93,7 @@ export function Sidebar({
             onClick={() => setOpen(false)}
             aria-label="Close menu"
             className={cn(
-              'inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-muted-strong hover:bg-white/[0.06]',
+              'inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-muted-strong hover:bg-overlay-strong',
               pinned && 'lg:hidden',
             )}
           >
@@ -120,7 +121,7 @@ export function Sidebar({
                         'group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors duration-150',
                         isActive
                           ? 'bg-accent-soft text-accent-strong'
-                          : 'text-muted-strong hover:bg-white/[0.05] hover:text-foreground',
+                          : 'text-muted-strong hover:bg-overlay-strong hover:text-foreground',
                       )}
                     >
                       {isActive && (
@@ -136,7 +137,7 @@ export function Sidebar({
                               ? 'bg-warning/20 text-warning'
                               : isActive
                                 ? 'bg-accent/20 text-accent-strong'
-                                : 'bg-white/[0.06] text-muted',
+                                : 'bg-overlay-strong text-muted',
                           )}
                         >
                           {item.badge}
@@ -151,18 +152,19 @@ export function Sidebar({
         </nav>
 
         <div className="space-y-3 border-t border-border p-3">
-          <div className="flex items-center gap-2.5 rounded-lg border border-border bg-white/[0.02] px-2.5 py-2">
+          <div className="flex items-center gap-2.5 rounded-lg border border-border bg-overlay px-2.5 py-2">
             <Avatar person={person} size="sm" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13px] font-medium text-foreground">{displayName}</p>
               <p className="truncate text-[11px] text-muted">{user.roleName}</p>
             </div>
+            <ThemeToggle />
             <form action={logout}>
               <button
                 type="submit"
                 aria-label="Log out"
                 title="Log out"
-                className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted hover:bg-white/[0.06] hover:text-foreground"
+                className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted hover:bg-overlay hover:text-foreground"
               >
                 <LogOut className="h-3.5 w-3.5" strokeWidth={2} />
               </button>

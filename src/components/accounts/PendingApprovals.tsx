@@ -44,7 +44,7 @@ export function PendingApprovals({ users }: { users: PendingRow[] }) {
               type="button"
               disabled={pending}
               onClick={() => startTransition(() => approveUserAction(u.id))}
-              className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-medium text-black transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-medium text-background transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Check className="h-3.5 w-3.5" />
               Approve
@@ -53,7 +53,7 @@ export function PendingApprovals({ users }: { users: PendingRow[] }) {
               type="button"
               disabled={pending}
               onClick={() => startTransition(() => rejectUserAction(u.id))}
-              className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border-strong bg-white/[0.03] px-3 text-xs font-medium text-muted-strong transition-colors hover:bg-white/[0.07] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border-strong bg-overlay px-3 text-xs font-medium text-muted-strong transition-colors hover:bg-overlay-strong hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
             >
               <X className="h-3.5 w-3.5" />
               Reject

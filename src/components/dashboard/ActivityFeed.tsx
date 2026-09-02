@@ -21,6 +21,8 @@ const ACTION_LABEL: Record<string, string> = {
   due_date_changed: 'set a due date on',
 }
 
+const STAGGER_MS = 45
+
 export function ActivityFeed({ items }: { items: ActivityItem[] }) {
   if (items.length === 0) {
     return (
@@ -32,13 +34,14 @@ export function ActivityFeed({ items }: { items: ActivityItem[] }) {
 
   return (
     <div className="divide-y divide-border">
-      {items.map((item) => (
+      {items.map((item, i) => (
         <Link
           key={item.id}
           href={item.ticketNumber ? `/tickets/${item.ticketNumber}` : '#'}
-          className="group flex items-center gap-3 px-5 py-3 transition-colors hover:bg-white/[0.025]"
+          className="group flex items-center gap-3 px-5 py-3 opacity-0 transition-colors animate-fade-in hover:bg-overlay"
+          style={{ animationDelay: `${i * STAGGER_MS}ms`, animationFillMode: 'both' }}
         >
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.04] text-muted-strong">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-overlay text-muted-strong transition-colors group-hover:bg-overlay-strong">
             <TicketIcon className="h-3.5 w-3.5" />
           </div>
           <div className="min-w-0 flex-1">

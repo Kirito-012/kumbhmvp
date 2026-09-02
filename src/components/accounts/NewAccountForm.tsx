@@ -34,7 +34,7 @@ export function NewAccountForm({ roles }: { roles: RoleOption[] }) {
           required
           maxLength={120}
           placeholder="Jane Doe"
-          className="h-10 w-full rounded-lg border border-border-strong bg-white/[0.03] px-3 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-white/[0.05] focus:ring-2 focus:ring-accent/20"
+          className="h-10 w-full rounded-lg border border-border-strong bg-overlay px-3 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20"
         />
       </div>
 
@@ -48,7 +48,7 @@ export function NewAccountForm({ roles }: { roles: RoleOption[] }) {
           type="email"
           required
           placeholder="jane@company.com"
-          className="h-10 w-full rounded-lg border border-border-strong bg-white/[0.03] px-3 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-white/[0.05] focus:ring-2 focus:ring-accent/20"
+          className="h-10 w-full rounded-lg border border-border-strong bg-overlay px-3 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20"
         />
       </div>
 
@@ -63,7 +63,7 @@ export function NewAccountForm({ roles }: { roles: RoleOption[] }) {
           required
           minLength={8}
           placeholder="At least 8 characters"
-          className="h-10 w-full rounded-lg border border-border-strong bg-white/[0.03] px-3 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-white/[0.05] focus:ring-2 focus:ring-accent/20"
+          className="h-10 w-full rounded-lg border border-border-strong bg-overlay px-3 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20"
         />
       </div>
 

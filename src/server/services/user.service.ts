@@ -30,6 +30,24 @@ export async function listRoles() {
   return RoleModel.find().sort({ rank: 1 }).lean()
 }
 
+/** Global search's "People" results. No text index on User (fullname/email are low-cardinality,
+ *  short strings), so a case-insensitive prefix/substring regex is fine at this scale — matches
+ *  the same active/non-pending scope as listUsers(). Caller is responsible for the account:read
+ *  authorization check (see /api/search) since this has no session context of its own. */
+export async function searchUsers(query: string, limit = 5) {
+  await dbConnect()
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const pattern = new RegExp(escaped, 'i')
+  return UserModel.find({
+    deletedAt: null,
+    status: { $ne: 'pending' },
+    $or: [{ fullname: pattern }, { email: pattern }],
+  })
+    .select('fullname email avatarUrl')
+    .limit(limit)
+    .lean()
+}
+
 export async function createUser(input: {
   fullname: string
   email: string
@@ -63,7 +81,7 @@ export async function setUserActive(userId: string, isActive: boolean) {
 
 /**
  * Public self-registration — creates a `status: 'pending'` account that cannot sign in (see
- * auth.ts) until an Admin calls approveUser(). roleKey is restricted to 'manager' | 'agent' by
+ * auth.ts) until an Admin calls approveUser(). roleKey is restricted to 'manager' | 'surveyor' by
  * the caller's Zod schema (src/lib/schemas/register.ts); re-checked here too since this is the
  * one service function reachable by an unauthenticated caller.
  */
@@ -71,7 +89,7 @@ export async function registerPendingUser(input: {
   fullname: string
   email: string
   password: string
-  roleKey: 'manager' | 'agent'
+  roleKey: 'manager' | 'surveyor'
 }) {
   await dbConnect()
 

@@ -112,7 +112,7 @@ export function TicketDetailSidebar({
           onChange={(e) =>
             update('dueDate', e.target.value ? new Date(e.target.value).toISOString() : null)
           }
-          className="h-9 w-full rounded-lg border border-border-strong bg-white/[0.03] px-2.5 text-sm text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          className="h-9 w-full rounded-lg border border-border-strong bg-overlay px-2.5 text-sm text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-60"
         />
         {values.dueDate && (
           <p className="mt-1 text-[11px] text-muted">Due {timeAgo(values.dueDate)}</p>

@@ -11,6 +11,7 @@ import { TicketTypeModel } from '@/server/db/models/ticket-type.model'
 import { TagModel } from '@/server/db/models/tag.model'
 import { UserModel } from '@/server/db/models/user.model'
 import { nextSequence } from '@/server/db/models/counter.model'
+import { CLASS_GROUP_COLORS } from '@/lib/classColors'
 
 const POPULATE = [
   { path: 'ownerId', select: 'fullname email avatarUrl' },
@@ -22,9 +23,13 @@ const POPULATE = [
 ]
 
 export type ListTicketsParams = {
+  /** A status slug (new/open/pending/resolved/closed), or the sentinel 'open' — see below —
+   *  handled the same way as any other slug won't work since "open" isn't itself a status row;
+   *  it's expressed as "not a resolved status" instead. */
   status?: string
   priority?: string
   type?: string
+  /** A user id, or the sentinel 'unassigned' to match tickets with no assignee. */
   assigneeId?: string
   tag?: string
   q?: string
@@ -48,18 +53,28 @@ export async function listTickets(params: ListTicketsParams) {
 
   const filter: QueryFilter<Ticket> = { deletedAt: null }
 
-  const [status, priority, type, tag] = await Promise.all([
-    params.status ? TicketStatusModel.findOne({ slug: params.status }).lean() : null,
+  // 'open' isn't a real TicketStatus row (it's "new" + "open" + "pending" — anything not
+  // resolved/closed) so it's resolved against isResolved rather than looked up by slug, matching
+  // the dashboard's own "Open tickets" stat (see getDashboardData()'s openMatch).
+  const isOpenSentinel = params.status === 'open'
+
+  const [status, resolvedIds, priority, type, tag] = await Promise.all([
+    params.status && !isOpenSentinel
+      ? TicketStatusModel.findOne({ slug: params.status }).lean()
+      : null,
+    isOpenSentinel ? TicketStatusModel.find({ isResolved: true }).select('_id').lean() : null,
     params.priority ? TicketPriorityModel.findOne({ slug: params.priority }).lean() : null,
     params.type ? TicketTypeModel.findOne({ slug: params.type }).lean() : null,
     params.tag ? TagModel.findOne({ slug: params.tag }).lean() : null,
   ])
 
   if (status) filter.statusId = status._id
+  else if (resolvedIds) filter.statusId = { $nin: resolvedIds.map((s) => s._id) }
   if (priority) filter.priorityId = priority._id
   if (type) filter.typeId = type._id
   if (tag) filter.tagIds = tag._id
-  if (params.assigneeId) filter.assigneeId = params.assigneeId
+  if (params.assigneeId === 'unassigned') filter.assigneeId = null
+  else if (params.assigneeId) filter.assigneeId = params.assigneeId
   if (params.q) filter.$text = { $search: params.q }
   if (params.classGroup) filter['location.classGroup'] = params.classGroup
   if (params.sectorNo !== undefined) filter['location.sectorNo'] = params.sectorNo
@@ -84,6 +99,26 @@ export async function listTickets(params: ListTicketsParams) {
   ])
 
   return { items, total, page, pageSize }
+}
+
+/** Global search's "Tickets" results (see /api/search). Reuses the subject/issue text index
+ *  already used by listTickets's `q` param, but as its own lean query rather than routing
+ *  through listTickets -- a type-ahead has no pagination/sort UI to serve, and doesn't need the
+ *  full POPULATE (owner/type/tags) that the tickets table renders. `forcedAssigneeId` is the
+ *  same Surveyor-scoping value requireTicketScope() returns elsewhere; passing it here (rather than
+ *  trusting a client-supplied assignee filter) is what keeps a Surveyor's search results limited
+ *  to their own tickets, matching every other ticket list in the app. */
+export async function searchTickets(query: string, forcedAssigneeId?: string, limit = 5) {
+  await dbConnect()
+  const filter: QueryFilter<Ticket> = { deletedAt: null, $text: { $search: query } }
+  if (forcedAssigneeId) filter.assigneeId = forcedAssigneeId
+
+  return TicketModel.find(filter, { score: { $meta: 'textScore' } })
+    .sort({ score: { $meta: 'textScore' } })
+    .limit(limit)
+    .populate({ path: 'statusId', select: 'name slug color' })
+    .select('number subject statusId')
+    .lean()
 }
 
 /**
@@ -133,7 +168,7 @@ export async function getLocationFilterOptions() {
 
 /**
  * Counts of non-deleted tickets per status, keyed by status slug, plus a grand total.
- * Pass `assigneeId` to scope the counts to one user's queue (Agent role — see
+ * Pass `assigneeId` to scope the counts to one user's queue (Surveyor role — see
  * `requireTicketScope()` in `src/server/auth/session.ts`).
  */
 export async function countTicketsByStatus(assigneeId?: string) {
@@ -162,7 +197,7 @@ export async function countTicketsByStatus(assigneeId?: string) {
 
 /**
  * Everything the dashboard page needs, in one call. All widgets accept `assigneeId` for
- * Agent-role scoping (see `requireTicketScope()`) — Admin/Manager pass `undefined` and see
+ * Surveyor-role scoping (see `requireTicketScope()`) — Admin/Manager pass `undefined` and see
  * workspace-wide data.
  */
 export async function getDashboardData(assigneeId?: string) {
@@ -188,17 +223,30 @@ export async function getDashboardData(assigneeId?: string) {
   const toLocalISODate = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
-  const [resolvedTodayCount, priorityRows, volumeRows, resolvedStatusIds] = await Promise.all([
+  // Fetched up front (not inside the big Promise.all below) so the priority/category aggregations
+  // can match directly against resolvedIds instead of $lookup-joining ticketstatuses per ticket —
+  // a small, cheap query traded for dropping a $lookup + $unwind from two much larger aggregations.
+  const resolvedStatusIds = await TicketStatusModel.find({ isResolved: true }).select('_id').lean()
+  const resolvedIds = resolvedStatusIds.map((s) => s._id)
+
+  const [resolvedTodayCount, priorityRows, categoryRows, volumeRows] = await Promise.all([
     TicketModel.countDocuments({
       ...baseMatch,
       resolvedAt: { $gte: startOfToday },
     }),
     TicketModel.aggregate([
-      { $match: baseMatch },
-      { $lookup: { from: 'ticketstatuses', localField: 'statusId', foreignField: '_id', as: 's' } },
-      { $unwind: '$s' },
-      { $match: { 's.isResolved': false } },
+      { $match: { ...baseMatch, statusId: { $nin: resolvedIds } } },
       { $group: { _id: '$priorityId', count: { $sum: 1 } } },
+    ]),
+    TicketModel.aggregate([
+      { $match: { ...baseMatch, 'location.classGroup': { $ne: null } } },
+      {
+        $group: {
+          _id: '$location.classGroup',
+          total: { $sum: 1 },
+          completed: { $sum: { $cond: [{ $in: ['$statusId', resolvedIds] }, 1, 0] } },
+        },
+      },
     ]),
     TicketModel.aggregate([
       {
@@ -236,7 +284,6 @@ export async function getDashboardData(assigneeId?: string) {
         },
       },
     ]),
-    TicketStatusModel.find({ isResolved: true }).select('_id').lean(),
   ])
 
   const priorities = await TicketPriorityModel.find().sort({ order: 1 }).lean()
@@ -247,6 +294,19 @@ export async function getDashboardData(assigneeId?: string) {
     color: p.color,
     value: priorityCountById.get(String(p._id)) ?? 0,
   }))
+
+  // Fixed order/color per CLASS_GROUP_COLORS (not sorted by count) so the grid position of each
+  // category card stays stable across reloads instead of reshuffling as counts change.
+  const categoryByGroup = new Map(categoryRows.map((r) => [r._id as string, r]))
+  const categoryBreakdown = Object.entries(CLASS_GROUP_COLORS).map(([name, color]) => {
+    const row = categoryByGroup.get(name)
+    return {
+      name,
+      color,
+      total: row?.total ?? 0,
+      completed: row?.completed ?? 0,
+    }
+  })
 
   const days: string[] = []
   for (let i = 0; i < 7; i++) {
@@ -267,15 +327,22 @@ export async function getDashboardData(assigneeId?: string) {
     resolved: resolvedByDay.get(iso) ?? 0,
   }))
 
-  const resolvedIds = resolvedStatusIds.map((s) => s._id)
   const openMatch: QueryFilter<Ticket> = { ...baseMatch, statusId: { $nin: resolvedIds } }
   const [openTicketsCount, totalCount, unassignedCount] = await Promise.all([
     TicketModel.countDocuments(openMatch),
     TicketModel.countDocuments(baseMatch),
     // Workspace-wide, not scoped by assigneeId — "how many need a home" is inherently an
-    // Admin/Manager question. null for an Agent's dashboard (their view is assignee-locked to
+    // Admin/Manager question. null for a Surveyor's dashboard (their view is assignee-locked to
     // themselves, so an "unassigned" count in their own scope is always zero/meaningless).
-    assigneeId ? null : TicketModel.countDocuments({ deletedAt: null, assigneeId: null }),
+    // statusId excludes resolved/closed tickets — an already-resolved ticket doesn't "need" an
+    // assignee, so it shouldn't inflate this count.
+    assigneeId
+      ? null
+      : TicketModel.countDocuments({
+          deletedAt: null,
+          assigneeId: null,
+          statusId: { $nin: resolvedIds },
+        }),
   ])
 
   // Recent activity — most recent events, scoped to the caller's tickets when assigneeId is set.
@@ -293,9 +360,9 @@ export async function getDashboardData(assigneeId?: string) {
     ])
     .lean()
 
-  // Workload by assignee — open tickets grouped by who holds them. For an Agent (assigneeId set)
+  // Workload by assignee — open tickets grouped by who holds them. For a Surveyor (assigneeId set)
   // this degenerates to at most their own row, deliberately: their dashboard shouldn't reveal
-  // other agents' queues.
+  // other surveyors' queues.
   const workloadRows = await TicketModel.aggregate([
     { $match: openMatch },
     { $match: { assigneeId: { $ne: null } } },
@@ -309,6 +376,7 @@ export async function getDashboardData(assigneeId?: string) {
     .lean()
   const nameById = new Map(workloadUsers.map((u) => [String(u._id), u.fullname]))
   const workloadByAssignee = workloadRows.map((r) => ({
+    id: String(r._id),
     name: nameById.get(String(r._id)) ?? 'Unknown',
     count: r.count as number,
   }))
@@ -319,6 +387,7 @@ export async function getDashboardData(assigneeId?: string) {
     unassignedCount,
     resolvedTodayCount,
     priorityBreakdown,
+    categoryBreakdown,
     ticketVolume,
     workloadByAssignee,
     recentActivity: recentEvents.map((e) => {
