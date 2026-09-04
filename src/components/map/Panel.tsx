@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronDownIcon } from '@/components/map/icons'
 
 export default function Panel({
@@ -15,6 +15,7 @@ export default function Panel({
   minWidth = 260,
   maxWidth = 560,
   overlayOpen = false,
+  onRenderedWidthChange,
 }: {
   icon: ReactNode
   title: string
@@ -31,11 +32,24 @@ export default function Panel({
    *  overflow clipping so the dropdown's menu isn't cut off/squashed inside
    *  the panel's own scroll container. */
   overlayOpen?: boolean
+  /** Reports the panel's current on-screen width (0 while collapsed) so a
+   *  parent positioning something else around it -- e.g. the map's
+   *  fitBounds/flyTo padding, which needs to know how much of the viewport
+   *  this panel actually occludes right now -- doesn't have to guess a
+   *  fixed constant that drifts wrong the moment the panel is resized or
+   *  collapsed. Fires on mount, on every collapse/expand, and on every
+   *  resize-drag frame. */
+  onRenderedWidthChange?: (width: number) => void
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const [width, setWidth] = useState(defaultWidth)
   const [dragging, setDragging] = useState(false)
   const dragState = useRef({ startX: 0, startWidth: defaultWidth })
+
+  useEffect(() => {
+    onRenderedWidthChange?.(collapsed ? 0 : width)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onRenderedWidthChange is expected to be a stable setter identity from the caller, not a dep that should re-fire this
+  }, [collapsed, width])
 
   function startDrag(e: React.PointerEvent) {
     e.preventDefault()

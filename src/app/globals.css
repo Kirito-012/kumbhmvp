@@ -503,6 +503,33 @@ input[type='checkbox'].kumbh-checkbox {
   }
 }
 
+/* Sector Report drawer's swipe-in/swipe-out -- unlike panel-in above (a
+   subtle fade+scale for the docked side panels, which never unmount), the
+   bottom drawer fully slides off-screen on open/close since it mounts and
+   unmounts with sector selection. Kept as separate named keyframes (not a
+   single reversible animation) so SectorReportDrawer can pick whichever one
+   applies via a plain class swap instead of juggling animation-direction. */
+@keyframes drawer-swipe-in {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes drawer-swipe-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+}
+
 /* Feature-click popup (MapView's showPopup) -- MapLibre wraps whatever HTML
    we hand it in its own boxy, shadowless chrome by default. These overrides
    strip that chrome so the card built in showPopup's markup (rounded-2xl,

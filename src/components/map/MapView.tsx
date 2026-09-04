@@ -41,6 +41,7 @@ import {
   POI_SIGNAGE_CODES,
 } from '@/lib/classColors'
 import StatsPanel from '@/components/map/StatsPanel'
+import SectorReportDrawer from '@/components/map/SectorReportDrawer'
 import Panel from '@/components/map/Panel'
 import {
   ChartBarIcon,
@@ -48,8 +49,10 @@ import {
   CompassIcon,
   GridIcon,
   LayersIcon,
+  MapPinIcon,
   ParcelIcon,
   RedoIcon,
+  RoadIcon,
   RulerIcon,
   SearchIcon,
   TagIcon,
@@ -71,6 +74,15 @@ type Sector = {
 
 const CENTER: [number, number] = [78.0995, 29.9396]
 const INITIAL_ZOOM = 10
+
+// Fixed emphasis color for the active class/sub-class filter's glow+outline
+// (sector-plan-filter-glow/-outline below) -- deliberately NOT any class's
+// own color, since several classes are themselves greys/neutrals that
+// nearly vanish against the dimmed basemap those layers render over. Warm
+// gold reads clearly against both the light and dark dimmed basemap and
+// doesn't collide with the map's other fixed accent colors (blue = general
+// UI accent, violet = selected-sector outline, red = measure tool).
+const FILTER_EMPHASIS_COLOR = '#f59e0b'
 
 // `name` comes from PostGIS as "BAHADRABAD-01" (title-then-number) -- strip
 // that trailing "-NN" and lead with the zero-padded sector_no instead, since
@@ -336,13 +348,12 @@ type InitialParcel = {
 }
 
 const VISIBILITY_STORAGE_KEY = 'tcsticket:mapView:visibility'
-const POI_LAYERS_EXPANDED_STORAGE_KEY = 'tcsticket:mapView:poiLayersExpanded'
 
 function defaultVisibility(): Record<string, boolean> {
   return {
     sector_plan: true,
     sector_boundary: true,
-    ...Object.fromEntries(ROAD_TYPE_DEFS.map((d) => [d.key, true])),
+    ...Object.fromEntries(ROAD_TYPE_DEFS.map((d) => [d.key, false])),
     ...Object.fromEntries(POI_LAYER_DEFS.map((d) => [d.key, false])),
   }
 }
@@ -360,14 +371,6 @@ function loadStoredVisibility(): Record<string, boolean> {
     return { ...defaults, ...stored }
   } catch {
     return defaults
-  }
-}
-
-function loadStoredPoiLayersExpanded(): boolean {
-  try {
-    return localStorage.getItem(POI_LAYERS_EXPANDED_STORAGE_KEY) === 'true'
-  } catch {
-    return false
   }
 }
 
@@ -393,8 +396,74 @@ export default function MapView({
   /** Mirrors `selectedSector` state for the same reason as measuringRef -- read by the
    *  once-registered 'contextmenu' handler to right-click-deselect the current sector. */
   const selectedSectorRef = useRef<number | 'all'>('all')
+  /** Live on-screen width of the right-docked Stats panel (0 while
+   *  collapsed), reported by Panel.tsx -- read by every fitBounds/flyTo
+   *  call below so the map centers results in the space actually left of
+   *  the panel instead of flying results half-hidden behind it. A ref
+   *  (not state) since this only feeds imperative map calls and shouldn't
+   *  itself trigger a re-render on every resize-drag frame. */
+  const statsPanelWidthRef = useRef(0)
+
+  // Right-panel-aware padding for fitBounds/flyTo -- same left-side
+  // constant as before (accounts for the fixed-width "Kumbh Mela" panel,
+  // ~w-72 + its offset), but the right side now reads the Stats panel's
+  // actual live width (0 when collapsed) instead of a guessed constant, so
+  // results center in whatever space is really free of both docked panels.
+  function mapFlyPadding() {
+    return {
+      top: 60,
+      bottom: 60,
+      left: 340,
+      // +24 accounts for the panel's own right-3 (12px) edge offset plus a
+      // little breathing room, same idea as the left panel's constant.
+      right: statsPanelWidthRef.current > 0 ? statsPanelWidthRef.current + 24 : 60,
+    }
+  }
 
   const [sectors, setSectors] = useState<Sector[]>([])
+  // Sub-class names + counts per class_group, for the left panel's search
+  // tree -- fetched independently of StatsPanel's own /api/stats call (same
+  // self-fetching pattern as `sectors` above) rather than threading it down.
+  // Re-fetched whenever selectedSector changes so counts here match the
+  // Stats panel's own sector-scoped numbers instead of always showing every
+  // sector's total.
+  const [subclassStats, setSubclassStats] = useState<
+    { class_group: string; subclass: string; features: number }[]
+  >([])
+  // Bounding box + per-feature centroids for the *single* class or
+  // sub-class the filter currently narrows to -- powers both the map's
+  // auto zoom-to-fit and the Stats panel's locator list under the selected
+  // row. Only ever populated for a single-target selection (one class with
+  // nothing else selected, or one (class, subclass) pair): with multiple
+  // classes selected there's no one meaningful place to fly to, so this
+  // stays null and the map just leaves the view where it was.
+  const [locateResult, setLocateResult] = useState<{
+    classGroup: string
+    subclass: string | null
+    total: number
+    bbox: [number, number, number, number] | null
+    features: {
+      id: number
+      sector_no: number | null
+      plot_no: string | null
+      block: string | null
+      label: string | null
+      lng: number
+      lat: number
+    }[]
+  } | null>(null)
+  // Which POI layer to fetch bbox/feature centroids for -- set explicitly by
+  // clicking a "Points of interest" row in the Stats panel (not by flipping
+  // a visibility checkbox alone, since several POI layers can be visible at
+  // once and toggling one on shouldn't yank the viewport out from under an
+  // already-visible layer the user was looking at).
+  const [poiLocateTarget, setPoiLocateTarget] = useState<string | null>(null)
+  const [poiLocateResult, setPoiLocateResult] = useState<{
+    layer: string
+    total: number
+    bbox: [number, number, number, number] | null
+    features: { id: number; label: string | null; lng: number; lat: number }[]
+  } | null>(null)
   const [selectedSector, setSelectedSector] = useState<number | 'all'>(
     initialParcel?.sectorNo ?? 'all',
   )
@@ -409,13 +478,28 @@ export default function MapView({
   // once, all rendering together on the map (same on/off model as
   // poiVisibility/roadTypeVisibility rather than a single active choice).
   const [classFilter, setClassFilter] = useState<string[]>([])
-  const [search, setSearch] = useState('')
-  const [classSearch, setClassSearch] = useState('')
-  const [classDropdownOpen, setClassDropdownOpen] = useState(false)
-  const [sectorDropdownOpen, setSectorDropdownOpen] = useState(false)
-  // Same SSR/client mismatch concern as `visibility` above -- starts false to
-  // match the server, then the stored value is applied post-mount below.
-  const [poiLayersExpanded, setPoiLayersExpanded] = useState(false)
+  // Sub-class selections for classes that are only *partially* checked --
+  // a class fully checked into classFilter implies all its sub-classes, so
+  // this only ever holds entries for classes not already in classFilter.
+  // Keyed by class_group, value is the set of selected subclass strings.
+  const [subclassFilter, setSubclassFilter] = useState<Record<string, string[]>>({})
+  // Which classes have their sub-class list expanded in the left panel's
+  // tree (UI-only, not persisted -- same per-item disclosure pattern as
+  // collapsedGroups below, just per-class rather than per-group).
+  const [expandedFilterClasses, setExpandedFilterClasses] = useState<Set<string>>(new Set())
+  // Single search query driving the unified sector/class/road/POI combobox
+  // below (merges what used to be two separate `search`/`classSearch` text
+  // states now that there's one input for all four taxonomies).
+  const [query, setQuery] = useState('')
+  const [panelDropdownOpen, setPanelDropdownOpen] = useState(false)
+  // Which browse-mode groups are collapsed when the query is empty (ignored
+  // while typing, when every matching group is shown expanded). "Jump to
+  // sector" starts collapsed since navigating to a sector is a different
+  // kind of action than toggling a filter on -- not persisted, same as the
+  // dropdown-open state it lives alongside.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    () => new Set(['Jump to sector']),
+  )
   const [measuring, setMeasuring] = useState(false)
   /** Committed measurement points plus a redo stack. A single object (rather than two
    *  separate states) so undo/redo can move a point between the two atomically inside one
@@ -425,26 +509,16 @@ export default function MapView({
     points: [],
     redo: [],
   })
-  const classDropdownRef = useRef<HTMLDivElement>(null)
-  const sectorDropdownRef = useRef<HTMLDivElement>(null)
+  const searchDropdownRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!classDropdownOpen) return
+    if (!panelDropdownOpen) return
     function onPointerDown(e: PointerEvent) {
-      if (!classDropdownRef.current?.contains(e.target as Node)) setClassDropdownOpen(false)
+      if (!searchDropdownRef.current?.contains(e.target as Node)) setPanelDropdownOpen(false)
     }
     document.addEventListener('pointerdown', onPointerDown)
     return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [classDropdownOpen])
-
-  useEffect(() => {
-    if (!sectorDropdownOpen) return
-    function onPointerDown(e: PointerEvent) {
-      if (!sectorDropdownRef.current?.contains(e.target as Node)) setSectorDropdownOpen(false)
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [sectorDropdownOpen])
+  }, [panelDropdownOpen])
 
   useEffect(() => {
     fetch('/api/sectors')
@@ -453,6 +527,14 @@ export default function MapView({
       .catch(() => {})
   }, [])
 
+  useEffect(() => {
+    const url = selectedSector !== 'all' ? `/api/stats?sector=${selectedSector}` : '/api/stats'
+    fetch(url)
+      .then((r) => r.json())
+      .then((data) => setSubclassStats(data.bySubclass ?? []))
+      .catch(() => {})
+  }, [selectedSector])
+
   // Applies the real localStorage-persisted visibility/expanded state after
   // mount, once hydration (which needs the SSR-matching defaults above) has
   // already reconciled. Runs once; the effects below take over persisting
@@ -460,7 +542,6 @@ export default function MapView({
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- SSR/hydration guard, same pattern as NotificationBell.tsx
     setVisibility(loadStoredVisibility())
-    setPoiLayersExpanded(loadStoredPoiLayersExpanded())
   }, [])
 
   useEffect(() => {
@@ -468,12 +549,6 @@ export default function MapView({
       localStorage.setItem(VISIBILITY_STORAGE_KEY, JSON.stringify(visibility))
     } catch {}
   }, [visibility])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(POI_LAYERS_EXPANDED_STORAGE_KEY, String(poiLayersExpanded))
-    } catch {}
-  }, [poiLayersExpanded])
 
   // Values come from PostGIS, not live user input, but escaping is cheap
   // defense-in-depth for HTML injected via Popup.setHTML.
@@ -741,6 +816,48 @@ export default function MapView({
         paint: {
           'fill-color': matchExpr('class_group', CLASS_GROUP_COLORS, '#cbd5e1'),
           'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.95, 0.75],
+        },
+      })
+      // Visual emphasis for an active class/sub-class filter -- everything
+      // already NOT matching the filter is excluded by sector-plan-fill's
+      // own setFilter (below), so this is purely about making the surviving
+      // parcels easy to spot against the basemap/road clutter rather than
+      // reading as a plain flat fill (same glow+outline pairing as the
+      // sector-hover-* layers above). NO_MATCH keeps it invisible until the
+      // filter effect below turns it on, same pattern as sector-hover-*.
+      //
+      // Uses a single fixed accent color (FILTER_EMPHASIS_COLOR), not the
+      // matched class's own color -- several classes (Parking #6b7280, Road
+      // #78716c, Other #cbd5e1) are themselves greys close to the dimmed
+      // basemap's tone, so a same-colored glow/outline on those classes was
+      // nearly invisible. A fixed, distinctly saturated color guarantees
+      // contrast regardless of which class is selected -- same reasoning as
+      // sector-selected-outline below being hardcoded violet rather than
+      // reusing another layer's color.
+      const FILTER_NO_MATCH: FilterSpecification = ['==', ['get', 'id'], -1]
+      map.addLayer({
+        id: 'sector-plan-filter-glow',
+        type: 'line',
+        source: 'sector_plan',
+        'source-layer': 'sector_plan',
+        filter: FILTER_NO_MATCH,
+        paint: {
+          'line-color': FILTER_EMPHASIS_COLOR,
+          'line-width': 7,
+          'line-opacity': 0.4,
+          'line-blur': 5,
+        },
+      })
+      map.addLayer({
+        id: 'sector-plan-filter-outline',
+        type: 'line',
+        source: 'sector_plan',
+        'source-layer': 'sector_plan',
+        filter: FILTER_NO_MATCH,
+        paint: {
+          'line-color': FILTER_EMPHASIS_COLOR,
+          'line-width': 2.5,
+          'line-opacity': 1,
         },
       })
       // Peripheral areas (outside any numbered sector) get a dashed accent
@@ -1382,7 +1499,7 @@ export default function MapView({
   // Keyboard shortcuts while measuring: Escape exits the mode entirely,
   // Ctrl/Cmd+Z undoes the last point, Ctrl+Y or Ctrl/Cmd+Shift+Z redoes.
   // Only registered while measuring, and skipped when a text input has
-  // focus so it doesn't hijack the sector/class search boxes.
+  // focus so it doesn't hijack the search box.
   useEffect(() => {
     if (!measuring) return
     function onKeyDown(e: KeyboardEvent) {
@@ -1426,18 +1543,61 @@ export default function MapView({
     const sectorFilter =
       selectedSector === 'all' ? null : ['==', ['get', 'sector_no'], selectedSector]
 
+    // A feature matches if its class_group is fully selected, OR its exact
+    // (class_group, subclass) pair is individually selected via a partial
+    // class's sub-class checkboxes. No selection at all (both empty) means
+    // "show everything", same as classFilter alone used to mean.
+    const subclassPairs = Object.entries(subclassFilter).flatMap(([cls, subs]) =>
+      subs.map((sub) => [cls, sub]),
+    )
     const classCondition =
       classFilter.length === 0
         ? null
         : classFilter.length === 1
           ? ['==', ['get', 'class_group'], classFilter[0]]
           : ['in', ['get', 'class_group'], ['literal', classFilter]]
+    const subclassCondition =
+      subclassPairs.length === 0
+        ? null
+        : [
+            'any',
+            ...subclassPairs.map(([cls, sub]) => [
+              'all',
+              ['==', ['get', 'class_group'], cls],
+              ['==', ['get', 'subclass'], sub],
+            ]),
+          ]
+    const classOrSubclassCondition =
+      classCondition && subclassCondition
+        ? ['any', classCondition, subclassCondition]
+        : (classCondition ?? subclassCondition)
 
-    const combined = [sectorFilter, classCondition].filter(Boolean) as unknown[]
+    const combined = [sectorFilter, classOrSubclassCondition].filter(Boolean) as unknown[]
     const finalFilter =
       combined.length === 0 ? null : combined.length === 1 ? combined[0] : ['all', ...combined]
 
     map.setFilter('sector-plan-fill', finalFilter as FilterSpecification | null)
+
+    // Visual emphasis (glow + outline) tracks the exact same combined
+    // filter as the fill itself -- only shown at all once a class/sub-class
+    // filter is actually narrowing things down (a bare sector selection
+    // with no class filter shouldn't outline literally everything in it).
+    const emphasisActive = !!classOrSubclassCondition
+    const NEVER_MATCH: FilterSpecification = ['==', ['get', 'id'], -1]
+    const emphasisFilter = emphasisActive ? (finalFilter as FilterSpecification) : NEVER_MATCH
+    if (map.getLayer('sector-plan-filter-glow')) {
+      map.setFilter('sector-plan-filter-glow', emphasisFilter)
+    }
+    if (map.getLayer('sector-plan-filter-outline')) {
+      map.setFilter('sector-plan-filter-outline', emphasisFilter)
+    }
+    // Dim the basemap so the (now outlined/glowing) matched parcels read as
+    // the obvious focus instead of competing with road/label clutter --
+    // fill-opacity alone stops being a distinguishing signal once the map is
+    // already filtered down to a single class.
+    if (map.getLayer('osm')) {
+      map.setPaintProperty('osm', 'raster-opacity', emphasisActive ? 0.45 : 1)
+    }
 
     // road-line is one shared layer for all 3 road types -- which ones
     // actually draw is expressed here as a `type` filter (not layout
@@ -1467,8 +1627,11 @@ export default function MapView({
     // any other class's parcels would be.
     if (map.getLayer('sector-plan-parking-label')) {
       const NEVER_MATCH: FilterSpecification = ['==', ['get', 'class_group'], '__none__']
+      const anyFilterActive = classFilter.length > 0 || subclassPairs.length > 0
+      const parkingReachable =
+        classFilter.includes('Parking') || subclassPairs.some(([cls]) => cls === 'Parking')
       const parkingFilter =
-        classFilter.length > 0 && !classFilter.includes('Parking')
+        anyFilterActive && !parkingReachable
           ? NEVER_MATCH
           : sectorFilter
             ? ([
@@ -1501,42 +1664,190 @@ export default function MapView({
           // over the map's left edge (w-72 + its offset, ~320px) -- plain
           // symmetric padding fits the sector to the map's full width and
           // leaves its left edge hidden behind the panel.
-          { padding: { top: 60, bottom: 60, left: 340, right: 60 }, maxZoom: 16, duration: 800 },
+          { padding: mapFlyPadding(), maxZoom: 16, duration: 800 },
         )
       }
     }
-  }, [selectedSector, classFilter, sectors, visibility])
+  }, [selectedSector, classFilter, subclassFilter, sectors, visibility])
+
+  // Resolves the current filter down to a single (class, subclass|null)
+  // "locate target", when there is exactly one -- i.e. exactly one class
+  // selected with nothing else, whether that's the whole class or a
+  // partial selection of exactly one of its sub-classes. Anything broader
+  // (multiple classes, no selection at all) has no single place to zoom to.
+  const partialEntries = Object.entries(subclassFilter).filter(([, subs]) => subs.length > 0)
+  const locateTarget: { classGroup: string; subclass: string | null } | null =
+    classFilter.length === 1 && partialEntries.length === 0
+      ? { classGroup: classFilter[0], subclass: null }
+      : classFilter.length === 0 && partialEntries.length === 1 && partialEntries[0][1].length === 1
+        ? { classGroup: partialEntries[0][0], subclass: partialEntries[0][1][0] }
+        : null
+
+  // Auto zoom-to-fit + locator list data: fetches the bbox/feature
+  // centroids for the resolved single-target selection above and flies the
+  // map to it, but only when the user hasn't already manually picked a
+  // sector -- a sector selection already drives its own fitBounds above,
+  // and re-flying on top of that would fight the user's explicit choice.
+  useEffect(() => {
+    if (!locateTarget || selectedSector !== 'all') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing derived state that's no longer valid once its own dependency (locateTarget/selectedSector) stops supporting a single locate target, not state driven by an external system
+      setLocateResult(null)
+      return
+    }
+    let cancelled = false
+    const params = new URLSearchParams({ class_group: locateTarget.classGroup })
+    if (locateTarget.subclass !== null) params.set('subclass', locateTarget.subclass)
+    fetch(`/api/sector-plan/locate?${params}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return
+        setLocateResult({
+          classGroup: locateTarget.classGroup,
+          subclass: locateTarget.subclass,
+          total: data.total ?? 0,
+          bbox: data.bbox ?? null,
+          features: data.features ?? [],
+        })
+        const map = mapRef.current
+        if (map && data.bbox) {
+          const [xmin, ymin, xmax, ymax] = data.bbox as [number, number, number, number]
+          map.fitBounds(
+            [
+              [xmin, ymin],
+              [xmax, ymax],
+            ],
+            // Same left padding as the sector fitBounds above (accounts for
+            // the docked "Kumbh Mela" panel), but a lower maxZoom -- a
+            // single-parcel bbox would otherwise zoom in tighter than is
+            // useful for orienting on where the parcel actually is.
+            { padding: mapFlyPadding(), maxZoom: 15, duration: 800 },
+          )
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLocateResult(null)
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- locateTarget is derived fresh each render from classFilter/subclassFilter, which are already tracked
+  }, [locateTarget?.classGroup, locateTarget?.subclass, selectedSector])
+
+  /** Flies the map to one specific matched feature (from the Stats panel's
+   *  locator list) at a close, readable zoom -- the point of the list is
+   *  visiting one result at a time instead of relying on the (possibly
+   *  wide, for scattered matches) bbox fit above. */
+  function flyToLocateFeature(lng: number, lat: number) {
+    mapRef.current?.flyTo({
+      center: [lng, lat],
+      zoom: 17,
+      padding: mapFlyPadding(),
+      duration: 700,
+    })
+  }
+
+  // Fetches bbox/feature centroids for poiLocateTarget and flies the map to
+  // fit it -- same shape as the class/sub-class locate effect above, but
+  // fires from an explicit click (see onPoiRowClick below) rather than
+  // whenever visibility changes, since several POI layers can be on at once
+  // and there's no single "the selection" to auto-fit the way there is for
+  // classFilter/subclassFilter narrowing to one target.
+  useEffect(() => {
+    if (!poiLocateTarget) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing derived state that's no longer valid once its own dependency (poiLocateTarget) goes null, not state driven by an external system
+      setPoiLocateResult(null)
+      return
+    }
+    let cancelled = false
+    fetch(`/api/poi/locate?layer=${encodeURIComponent(poiLocateTarget)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return
+        setPoiLocateResult({
+          layer: poiLocateTarget,
+          total: data.total ?? 0,
+          bbox: data.bbox ?? null,
+          features: data.features ?? [],
+        })
+        const map = mapRef.current
+        if (map && data.bbox) {
+          const [xmin, ymin, xmax, ymax] = data.bbox as [number, number, number, number]
+          map.fitBounds(
+            [
+              [xmin, ymin],
+              [xmax, ymax],
+            ],
+            { padding: mapFlyPadding(), maxZoom: 15, duration: 800 },
+          )
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPoiLocateResult(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [poiLocateTarget])
+
+  /** Stats panel POI row click -- toggles the layer's visibility (existing
+   *  behavior) and, when that turns it on, also sets it as the locate
+   *  target so the map flies to fit it and the panel shows its locator
+   *  list. Clicking an already-visible row just turns it off, same as
+   *  before, and clears any locate result for it. */
+  function handlePoiRowClick(layerKey: string) {
+    const turningOn = !visibility[layerKey]
+    setVisibility((v) => ({ ...v, [layerKey]: !v[layerKey] }))
+    setPoiLocateTarget(turningOn ? layerKey : null)
+  }
 
   const classGroups = Object.keys(CLASS_GROUP_COLORS).sort((a, b) => a.localeCompare(b))
-  const filteredSectors = search.trim()
-    ? sectors.filter((s) => s.name.toLowerCase().includes(search.trim().toLowerCase()))
-    : sectors
-  const filteredClassGroups = classSearch.trim()
-    ? classGroups.filter((c) => c.toLowerCase().includes(classSearch.trim().toLowerCase()))
-    : classGroups
-
-  function goToSearch() {
-    if (filteredSectors.length > 0) {
-      setSelectedSector(filteredSectors[0].sector_no)
-      setSectorDropdownOpen(false)
-    }
-  }
 
   function toggleClassFilter(c: string) {
     setClassFilter((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]))
+    // Checking/unchecking the whole class supersedes any partial sub-class
+    // picks within it -- drop them so the two selection modes never fight
+    // (e.g. a class re-checked after being partially selected shouldn't
+    // silently stay pinned to its old partial subset).
+    setSubclassFilter((prev) => {
+      if (!(c in prev)) return prev
+      const next = { ...prev }
+      delete next[c]
+      return next
+    })
   }
 
-  function goToClassSearch() {
-    if (filteredClassGroups.length > 0) {
-      toggleClassFilter(filteredClassGroups[0])
-      setClassSearch('')
-    }
+  function toggleSubclassFilter(cls: string, sub: string) {
+    // Toggling a sub-class while its whole class is checked "splits off"
+    // that class into a partial selection: every other sub-class stays
+    // implicitly selected (classFilter no longer includes it, but every
+    // sibling sub-class is added explicitly so nothing visually changes)
+    // except the one just unchecked. If the class wasn't selected at all
+    // (no filter active), the click instead starts a fresh partial
+    // selection containing just that one sub-class.
+    const wasFullyChecked = classFilter.includes(cls)
+    setClassFilter((prev) => prev.filter((x) => x !== cls))
+    setSubclassFilter((prev) => {
+      const current = prev[cls] ?? (wasFullyChecked ? classSubclassNames(cls) : [])
+      const next = current.includes(sub) ? current.filter((x) => x !== sub) : [...current, sub]
+      return { ...prev, [cls]: next }
+    })
   }
 
-  const selectedSectorObj =
-    selectedSector !== 'all' ? sectors.find((s) => s.sector_no === selectedSector) : undefined
-  const sectorInputValue = selectedSectorObj ? formatSectorLabel(selectedSectorObj) : search
-  const classInputValue = classSearch
+  function toggleExpandedFilterClass(cls: string) {
+    setExpandedFilterClasses((prev) => {
+      const next = new Set(prev)
+      if (next.has(cls)) next.delete(cls)
+      else next.add(cls)
+      return next
+    })
+  }
+
+  /** All known sub-class names for a class, from the fetched stats -- used
+   *  as the starting point when a class goes from "fully selected" to
+   *  "partially selected" via a single sub-class checkbox click. */
+  function classSubclassNames(cls: string): string[] {
+    return subclassStats.filter((r) => r.class_group === cls).map((r) => r.subclass)
+  }
 
   const baseLayerRows: Array<{
     key: string
@@ -1547,25 +1858,64 @@ export default function MapView({
     { key: 'sector_plan', label: 'Sector plan', icon: ParcelIcon, theme: 'blue' },
     { key: 'sector_boundary', label: 'Boundaries', icon: GridIcon, theme: 'teal' },
   ]
-  // "More layers" list -- the 16 POI layers plus the 3 road types, merged
-  // into one alphabetically-sorted list (POI_LAYER_DEFS itself stays grouped
-  // by geometry type since that order also drives map paint order, see
-  // byGeomType usage above, so this is a sorted copy just for the sidebar).
-  const moreLayerDefs = [
-    ...POI_LAYER_DEFS.map((d) => ({
-      key: d.key,
-      label: d.label,
-      color: d.color,
-      isRoad: false as const,
-    })),
-    ...ROAD_TYPE_DEFS.map((d) => ({
-      key: d.key,
-      label: d.label,
-      color: d.color,
-      isRoad: true as const,
-      dash: d.dash,
-    })),
-  ].sort((a, b) => a.label.localeCompare(b.label))
+  // --- Unified search panel -------------------------------------------
+  // Merges what used to be three separate widgets (SECTOR box, CLASS box,
+  // LAYERS/"More layers" disclosure) into one grouped, searchable list.
+  // Nothing new is fetched here -- every group is built from state/constants
+  // that already existed for the old widgets (sectors, classGroups,
+  // ROAD_TYPE_DEFS, POI_LAYER_DEFS, baseLayerRows).
+  type SearchGroupName =
+    'Jump to sector' | 'Sector classes' | 'Roads' | 'POI layers' | 'Base layers'
+
+  const q = query.trim().toLowerCase()
+  function matchesQuery(...labels: string[]): boolean {
+    if (!q) return true
+    return labels.some((l) => l.toLowerCase().includes(q))
+  }
+
+  const searchGroups: Array<{ group: SearchGroupName; rows: number }> = []
+  const matchedSectors = sectors.filter((s) => matchesQuery(s.name))
+  const matchedClasses = classGroups.filter((c) => matchesQuery(c, ...classSubclassNames(c)))
+  const matchedRoads = ROAD_TYPE_DEFS.filter((d) => matchesQuery(d.label))
+  const matchedPois = POI_LAYER_DEFS.filter((d) => matchesQuery(d.label))
+  const matchedBaseLayers = baseLayerRows.filter((b) => matchesQuery(b.label))
+  if (matchedSectors.length > 0)
+    searchGroups.push({ group: 'Jump to sector', rows: matchedSectors.length })
+  if (matchedClasses.length > 0)
+    searchGroups.push({ group: 'Sector classes', rows: matchedClasses.length })
+  if (matchedRoads.length > 0) searchGroups.push({ group: 'Roads', rows: matchedRoads.length })
+  if (matchedPois.length > 0) searchGroups.push({ group: 'POI layers', rows: matchedPois.length })
+  if (matchedBaseLayers.length > 0)
+    searchGroups.push({ group: 'Base layers', rows: matchedBaseLayers.length })
+
+  function toggleCollapsedGroup(group: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(group)) next.delete(group)
+      else next.add(group)
+      return next
+    })
+  }
+  function isGroupCollapsed(group: string) {
+    // While actively searching, every matching group is always expanded --
+    // collapsedGroups only governs the empty-query browse view.
+    return q === '' && collapsedGroups.has(group)
+  }
+
+  const groupIcon: Record<SearchGroupName, typeof ParcelIcon> = {
+    'Jump to sector': LayersIcon,
+    'Sector classes': TagIcon,
+    Roads: RoadIcon,
+    'POI layers': MapPinIcon,
+    'Base layers': GridIcon,
+  }
+  const groupTheme: Record<SearchGroupName, 'blue' | 'teal' | 'amber' | 'violet'> = {
+    'Jump to sector': 'blue',
+    'Sector classes': 'teal',
+    Roads: 'amber',
+    'POI layers': 'violet',
+    'Base layers': 'teal',
+  }
 
   const measureTotalM = measure.points
     .slice(1)
@@ -1656,136 +2006,47 @@ export default function MapView({
         title="Kumbh Mela"
         subtitle="Sector plan · Haridwar–Rishikesh"
         side="left"
-        overlayOpen={sectorDropdownOpen || classDropdownOpen}
+        overlayOpen={panelDropdownOpen}
       >
         <div className="flex flex-col gap-4">
-          {/* Sector search / select combobox */}
-          <div ref={sectorDropdownRef} className="relative">
-            <div className="mb-1.5 flex items-center gap-1.5">
-              <span
-                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
+          {/* Unified search -- merges the old SECTOR box, CLASS box (with its
+              subclass tree), and the "More layers" POI/road disclosure into
+              one searchable, grouped, multi-select combobox. Pinned above the
+              base layer switches so it's the first thing reachable when the
+              panel opens. */}
+          <div ref={searchDropdownRef} className="relative">
+            {selectedSector !== 'all' && (
+              <div
                 style={{
-                  background: 'var(--map-section-blue-bg)',
-                  color: 'var(--map-section-blue-fg)',
+                  background: 'var(--map-accent-bg)',
+                  borderColor: 'var(--map-accent-bg-hover)',
+                  color: 'var(--map-accent-fg)',
                 }}
+                className="mb-1.5 flex items-center gap-2 rounded-[10px] border px-2.5 py-1.5 text-[12.5px] font-medium"
               >
-                <LayersIcon className="h-3 w-3" />
-              </span>
-              <span
-                className="text-[11px] font-semibold uppercase tracking-wide"
-                style={{ color: 'var(--map-fg-muted)' }}
-              >
-                Sector
-              </span>
-            </div>
-            <div className="relative">
-              <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--map-fg-faint)]" />
-              <input
-                type="text"
-                value={sectorInputValue}
-                onFocus={() => {
-                  // Re-entering the box after a sector is selected starts a
-                  // fresh search rather than editing the "N. Name" label.
-                  if (selectedSectorObj) setSearch('')
-                  setSectorDropdownOpen(true)
-                }}
-                onChange={(e) => {
-                  setSearch(e.target.value)
-                  setSectorDropdownOpen(true)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') goToSearch()
-                  if (e.key === 'Escape') setSectorDropdownOpen(false)
-                }}
-                placeholder="All sectors"
-                style={{
-                  borderColor: 'var(--map-border)',
-                  background: 'var(--map-input-bg)',
-                  color: 'var(--map-fg)',
-                }}
-                className="w-full rounded-lg border py-1.5 pl-8 pr-2.5 text-[13px] placeholder:text-[var(--map-fg-faint)] outline-none transition-shadow focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
-              />
-            </div>
-            {sectorDropdownOpen && (
-              <ul
-                role="listbox"
-                style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface)' }}
-                className="absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border py-1 shadow-lg"
-              >
-                <li role="option" aria-selected={selectedSector === 'all'}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedSector('all')
-                      setSearch('')
-                      setSectorDropdownOpen(false)
-                    }}
-                    style={{
-                      color: 'var(--map-fg)',
-                      background:
-                        selectedSector === 'all' ? 'var(--map-surface-active)' : undefined,
-                    }}
-                    className="w-full cursor-pointer px-2.5 py-1.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
-                  >
-                    All sectors
-                  </button>
-                </li>
-                {filteredSectors.length === 0 && (
-                  <li
-                    className="px-2.5 py-1.5 text-[12.5px]"
-                    style={{ color: 'var(--map-fg-faint)' }}
-                  >
-                    No sectors match
-                  </li>
-                )}
-                {filteredSectors.map((s) => (
-                  <li
-                    key={s.sector_no}
-                    role="option"
-                    aria-selected={selectedSector === s.sector_no}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedSector(s.sector_no)
-                        setSearch('')
-                        setSectorDropdownOpen(false)
-                      }}
-                      style={{
-                        color: 'var(--map-fg)',
-                        background:
-                          selectedSector === s.sector_no ? 'var(--map-surface-active)' : undefined,
-                      }}
-                      className="w-full cursor-pointer px-2.5 py-1.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
-                    >
-                      {formatSectorLabel(s)}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+                <MapPinIcon className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">
+                  You&apos;re in{' '}
+                  <b className="font-bold">
+                    {(() => {
+                      const s = sectors.find((x) => x.sector_no === selectedSector)
+                      return s ? formatSectorLabel(s) : `Sector ${selectedSector}`
+                    })()}
+                  </b>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedSector('all')}
+                  className="shrink-0 cursor-pointer rounded-md px-1.5 py-0.5 text-[11px] font-semibold opacity-85 hover:bg-white/10 hover:opacity-100"
+                >
+                  Clear
+                </button>
+              </div>
             )}
-          </div>
-
-          {/* Class search / select combobox */}
-          <div ref={classDropdownRef} className="relative">
-            <div className="mb-1.5 flex items-center gap-1.5">
-              <span
-                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
-                style={{
-                  background: 'var(--map-section-teal-bg)',
-                  color: 'var(--map-section-teal-fg)',
-                }}
-              >
-                <TagIcon className="h-3 w-3" />
-              </span>
-              <span
-                className="text-[11px] font-semibold uppercase tracking-wide"
-                style={{ color: 'var(--map-fg-muted)' }}
-              >
-                Class
-              </span>
-            </div>
-            {classFilter.length > 0 && (
+            {(classFilter.length > 0 ||
+              Object.values(subclassFilter).some((subs) => subs.length > 0) ||
+              ROAD_TYPE_DEFS.some((d) => visibility[d.key]) ||
+              POI_LAYER_DEFS.some((d) => visibility[d.key])) && (
               <div className="mb-1.5 flex flex-wrap gap-1">
                 {classFilter.map((c) => (
                   <button
@@ -1806,110 +2067,521 @@ export default function MapView({
                     <XIcon className="h-2.5 w-2.5 shrink-0" />
                   </button>
                 ))}
+                {Object.entries(subclassFilter)
+                  .filter(([, subs]) => subs.length > 0)
+                  .map(([c, subs]) => {
+                    const total = subclassStats.filter((r) => r.class_group === c).length
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() =>
+                          setSubclassFilter((prev) => {
+                            const next = { ...prev }
+                            delete next[c]
+                            return next
+                          })
+                        }
+                        style={{
+                          background: 'var(--map-accent-bg)',
+                          color: 'var(--map-accent-fg)',
+                        }}
+                        className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
+                      >
+                        <span
+                          className="h-2 w-2 shrink-0 rounded-full"
+                          style={{ background: CLASS_GROUP_COLORS[c] }}
+                        />
+                        <span className="truncate max-w-[9rem]">
+                          {c} ({subs.length}/{total})
+                        </span>
+                        <XIcon className="h-2.5 w-2.5 shrink-0" />
+                      </button>
+                    )
+                  })}
+                {ROAD_TYPE_DEFS.filter((d) => visibility[d.key]).map((d) => (
+                  <button
+                    key={d.key}
+                    type="button"
+                    onClick={() => setVisibility((v) => ({ ...v, [d.key]: false }))}
+                    style={{ background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
+                    className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
+                  >
+                    <span
+                      className="h-0 w-2.5 shrink-0"
+                      style={{
+                        borderTopWidth: 2,
+                        borderTopColor: d.color,
+                        borderTopStyle: d.dash ? 'dashed' : 'solid',
+                      }}
+                    />
+                    <span className="truncate max-w-[9rem]">{d.label}</span>
+                    <XIcon className="h-2.5 w-2.5 shrink-0" />
+                  </button>
+                ))}
+                {POI_LAYER_DEFS.filter((d) => visibility[d.key]).map((d) => (
+                  <button
+                    key={d.key}
+                    type="button"
+                    onClick={() => setVisibility((v) => ({ ...v, [d.key]: false }))}
+                    style={{ background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
+                    className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
+                  >
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ background: d.color }}
+                    />
+                    <span className="truncate max-w-[9rem]">{d.label}</span>
+                    <XIcon className="h-2.5 w-2.5 shrink-0" />
+                  </button>
+                ))}
               </div>
             )}
             <div className="relative">
-              <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--map-fg-faint)]" />
+              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--map-fg-faint)]" />
               <input
                 type="text"
-                value={classInputValue}
-                onFocus={() => setClassDropdownOpen(true)}
+                value={query}
+                onFocus={() => setPanelDropdownOpen(true)}
                 onChange={(e) => {
-                  setClassSearch(e.target.value)
-                  setClassDropdownOpen(true)
+                  setQuery(e.target.value)
+                  setPanelDropdownOpen(true)
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') goToClassSearch()
-                  if (e.key === 'Escape') setClassDropdownOpen(false)
+                  if (e.key === 'Escape') setPanelDropdownOpen(false)
                 }}
-                placeholder={classFilter.length > 0 ? 'Add another class…' : 'All classes'}
+                placeholder="What do you want to see?"
                 style={{
                   borderColor: 'var(--map-border)',
                   background: 'var(--map-input-bg)',
                   color: 'var(--map-fg)',
                 }}
-                className="w-full rounded-lg border py-1.5 pl-8 pr-2.5 text-[13px] placeholder:text-[var(--map-fg-faint)] outline-none transition-shadow focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
+                className="w-full rounded-xl border py-2.5 pl-9 pr-3 text-[14px] placeholder:text-[var(--map-fg-faint)] outline-none transition-shadow focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
               />
             </div>
-            {classDropdownOpen && (
+            {panelDropdownOpen && (
               <ul
                 role="listbox"
                 aria-multiselectable="true"
                 style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface)' }}
-                className="absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border py-1 shadow-lg"
+                className="kumbh-scroll absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border py-1 shadow-lg"
               >
-                <li role="option" aria-selected={classFilter.length === 0}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setClassFilter([])
-                      setClassSearch('')
-                      setClassDropdownOpen(false)
-                    }}
-                    style={{
-                      color: 'var(--map-fg)',
-                      background:
-                        classFilter.length === 0 ? 'var(--map-surface-active)' : undefined,
-                    }}
-                    className="w-full cursor-pointer px-2.5 py-1.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
-                  >
-                    All classes
-                  </button>
-                </li>
-                {filteredClassGroups.length === 0 && (
+                {searchGroups.length === 0 && (
                   <li
                     className="px-2.5 py-1.5 text-[12.5px]"
                     style={{ color: 'var(--map-fg-faint)' }}
                   >
-                    No classes match
+                    No matches for &ldquo;{query}&rdquo;
                   </li>
                 )}
-                {filteredClassGroups.map((c) => {
-                  const isSelected = classFilter.includes(c)
+                {searchGroups.map(({ group, rows }) => {
+                  const GroupIcon = groupIcon[group]
+                  const theme = groupTheme[group]
+                  const collapsed = isGroupCollapsed(group)
                   return (
-                    <li key={c} role="option" aria-selected={isSelected}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          toggleClassFilter(c)
-                          setClassSearch('')
+                    <li key={group} role="presentation">
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => toggleCollapsedGroup(group)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            toggleCollapsedGroup(group)
+                          }
                         }}
-                        style={{
-                          color: 'var(--map-fg)',
-                          background: isSelected ? 'var(--map-surface-active)' : undefined,
-                        }}
-                        className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
+                        aria-expanded={!collapsed}
+                        className="flex w-full cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-left hover:bg-[var(--map-surface-hover)]"
                       >
+                        <ChevronDownIcon
+                          className={`h-3 w-3 shrink-0 text-[var(--map-fg-faint)] transition-transform ${collapsed ? '-rotate-90' : ''}`}
+                        />
                         <span
-                          className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                          className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px]"
                           style={{
-                            borderColor: isSelected ? CLASS_GROUP_COLORS[c] : 'var(--map-border)',
-                            background: isSelected ? CLASS_GROUP_COLORS[c] : 'transparent',
+                            background: `var(--map-section-${theme}-bg)`,
+                            color: `var(--map-section-${theme}-fg)`,
                           }}
                         >
-                          {isSelected && (
-                            <svg
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              className="h-2.5 w-2.5"
-                              aria-hidden="true"
-                            >
-                              <path
-                                d="M5 13l4 4L19 7"
-                                stroke="white"
-                                strokeWidth={3}
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
-                            </svg>
-                          )}
+                          <GroupIcon className="h-2.5 w-2.5" />
                         </span>
                         <span
-                          className="h-2.5 w-2.5 shrink-0 rounded-full"
-                          style={{ background: CLASS_GROUP_COLORS[c] }}
-                        />
-                        <span className="truncate">{c}</span>
-                      </button>
+                          className="flex-1 text-[10.5px] font-bold uppercase tracking-wide"
+                          style={{ color: 'var(--map-fg-muted)' }}
+                        >
+                          {group}
+                        </span>
+                        <span
+                          className="shrink-0 text-[10.5px] tabular-nums"
+                          style={{ color: 'var(--map-fg-faint)' }}
+                        >
+                          {rows}
+                        </span>
+                      </div>
+                      {!collapsed && group === 'Jump to sector' && (
+                        <ul>
+                          {matchedSectors.map((s) => (
+                            <li
+                              key={s.sector_no}
+                              role="option"
+                              aria-selected={selectedSector === s.sector_no}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedSector(s.sector_no)
+                                  setQuery('')
+                                  setPanelDropdownOpen(false)
+                                }}
+                                style={{
+                                  color: 'var(--map-fg)',
+                                  background:
+                                    selectedSector === s.sector_no
+                                      ? 'var(--map-surface-active)'
+                                      : undefined,
+                                }}
+                                className="w-full cursor-pointer py-1.5 pl-9 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
+                              >
+                                {formatSectorLabel(s)}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {!collapsed && group === 'Sector classes' && (
+                        <ul>
+                          {matchedClasses.map((c) => {
+                            const isFullySelected = classFilter.includes(c)
+                            const subclasses = subclassStats
+                              .filter((r) => r.class_group === c)
+                              .sort((a, b) => b.features - a.features)
+                            const partialSubs = subclassFilter[c]
+                            const isIndeterminate =
+                              !isFullySelected &&
+                              !!partialSubs &&
+                              partialSubs.length > 0 &&
+                              partialSubs.length < subclasses.length
+                            const isChecked =
+                              isFullySelected || (!!partialSubs && partialSubs.length > 0)
+                            const hasChildren = subclasses.length > 1
+                            const subclassNameMatches =
+                              q !== '' &&
+                              subclasses.some((s) => s.subclass.toLowerCase().includes(q))
+                            const isExpanded = expandedFilterClasses.has(c) || subclassNameMatches
+                            // While actively searching, only show the subclasses that
+                            // themselves match the query -- a class can match via one
+                            // subclass (e.g. "hospital" -> Health Camping, because "4
+                            // Bedded Hospital" matches) without dumping its whole
+                            // unrelated subclass list ("Firstaid Center", etc.) into
+                            // view. Once the query is cleared/manually expanded, the
+                            // full list comes back.
+                            const visibleSubclasses = subclassNameMatches
+                              ? subclasses.filter((s) => s.subclass.toLowerCase().includes(q))
+                              : subclasses
+                            return (
+                              <li key={c} role="option" aria-selected={isChecked}>
+                                <div
+                                  style={{
+                                    color: 'var(--map-fg)',
+                                    background: isChecked ? 'var(--map-surface-active)' : undefined,
+                                  }}
+                                  className="flex w-full items-center gap-1 py-1.5 pl-6 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
+                                >
+                                  {hasChildren ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleExpandedFilterClass(c)}
+                                      aria-expanded={isExpanded}
+                                      aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${c} sub-classes`}
+                                      style={{ color: 'var(--map-fg-faint)' }}
+                                      className="flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center"
+                                    >
+                                      <ChevronDownIcon
+                                        className={`h-3 w-3 transition-transform ${isExpanded ? '' : '-rotate-90'}`}
+                                      />
+                                    </button>
+                                  ) : (
+                                    <span className="h-3.5 w-3.5 shrink-0" />
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      toggleClassFilter(c)
+                                      setQuery('')
+                                    }}
+                                    className="flex flex-1 cursor-pointer items-center gap-2 overflow-hidden"
+                                  >
+                                    <span
+                                      className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                                      style={{
+                                        borderColor: isChecked
+                                          ? CLASS_GROUP_COLORS[c]
+                                          : 'var(--map-border)',
+                                        background: isChecked
+                                          ? CLASS_GROUP_COLORS[c]
+                                          : 'transparent',
+                                      }}
+                                    >
+                                      {isIndeterminate ? (
+                                        <span className="h-[2px] w-2 rounded-full bg-white" />
+                                      ) : (
+                                        isChecked && (
+                                          <svg
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            className="h-2.5 w-2.5"
+                                            aria-hidden="true"
+                                          >
+                                            <path
+                                              d="M5 13l4 4L19 7"
+                                              stroke="white"
+                                              strokeWidth={3}
+                                              strokeLinecap="round"
+                                              strokeLinejoin="round"
+                                            />
+                                          </svg>
+                                        )
+                                      )}
+                                    </span>
+                                    <span
+                                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                      style={{ background: CLASS_GROUP_COLORS[c] }}
+                                    />
+                                    <span className="truncate">{c}</span>
+                                  </button>
+                                </div>
+                                {hasChildren && isExpanded && (
+                                  <ul>
+                                    {visibleSubclasses.map((row) => {
+                                      const subChecked = isFullySelected
+                                        ? true
+                                        : (partialSubs?.includes(row.subclass) ?? false)
+                                      return (
+                                        <li
+                                          key={row.subclass}
+                                          role="option"
+                                          aria-selected={subChecked}
+                                        >
+                                          <button
+                                            type="button"
+                                            onClick={() => toggleSubclassFilter(c, row.subclass)}
+                                            style={{ color: 'var(--map-fg-muted)' }}
+                                            className="flex w-full cursor-pointer items-center gap-2 py-1 pl-14 pr-2.5 text-left text-[12px] hover:bg-[var(--map-surface-hover)]"
+                                          >
+                                            <span
+                                              className="flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border"
+                                              style={{
+                                                borderColor: subChecked
+                                                  ? CLASS_GROUP_COLORS[c]
+                                                  : 'var(--map-border)',
+                                                background: subChecked
+                                                  ? CLASS_GROUP_COLORS[c]
+                                                  : 'transparent',
+                                              }}
+                                            >
+                                              {subChecked && (
+                                                <svg
+                                                  viewBox="0 0 24 24"
+                                                  fill="none"
+                                                  className="h-2 w-2"
+                                                  aria-hidden="true"
+                                                >
+                                                  <path
+                                                    d="M5 13l4 4L19 7"
+                                                    stroke="white"
+                                                    strokeWidth={4}
+                                                    strokeLinecap="round"
+                                                    strokeLinejoin="round"
+                                                  />
+                                                </svg>
+                                              )}
+                                            </span>
+                                            <span className="truncate">{row.subclass}</span>
+                                            <span
+                                              className="ml-auto shrink-0 tabular-nums"
+                                              style={{ color: 'var(--map-fg-faint)' }}
+                                            >
+                                              {row.features}
+                                            </span>
+                                          </button>
+                                        </li>
+                                      )
+                                    })}
+                                  </ul>
+                                )}
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      )}
+                      {!collapsed && group === 'Roads' && (
+                        <ul>
+                          {matchedRoads.map((d) => (
+                            <li key={d.key} role="option" aria-selected={visibility[d.key]}>
+                              <button
+                                type="button"
+                                onClick={() => setVisibility((v) => ({ ...v, [d.key]: !v[d.key] }))}
+                                style={{
+                                  color: 'var(--map-fg)',
+                                  background: visibility[d.key]
+                                    ? 'var(--map-surface-active)'
+                                    : undefined,
+                                }}
+                                className="flex w-full cursor-pointer items-center gap-2 py-1.5 pl-9 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
+                              >
+                                <span
+                                  className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                                  style={{
+                                    borderColor: visibility[d.key] ? d.color : 'var(--map-border)',
+                                    background: visibility[d.key] ? d.color : 'transparent',
+                                  }}
+                                >
+                                  {visibility[d.key] && (
+                                    <svg
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      className="h-2.5 w-2.5"
+                                      aria-hidden="true"
+                                    >
+                                      <path
+                                        d="M5 13l4 4L19 7"
+                                        stroke="white"
+                                        strokeWidth={3}
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
+                                  )}
+                                </span>
+                                <span
+                                  className="h-0 w-3 shrink-0"
+                                  style={{
+                                    borderTopWidth: 2,
+                                    borderTopColor: d.color,
+                                    borderTopStyle: d.dash ? 'dashed' : 'solid',
+                                  }}
+                                />
+                                <span className="truncate">{d.label}</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {!collapsed && group === 'POI layers' && (
+                        <ul>
+                          {matchedPois.map((d) => {
+                            const signageCode = POI_SIGNAGE_CODES[d.key]
+                            return (
+                              <li key={d.key} role="option" aria-selected={visibility[d.key]}>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setVisibility((v) => ({ ...v, [d.key]: !v[d.key] }))
+                                  }
+                                  style={{
+                                    color: 'var(--map-fg)',
+                                    background: visibility[d.key]
+                                      ? 'var(--map-surface-active)'
+                                      : undefined,
+                                  }}
+                                  className="flex w-full cursor-pointer items-center gap-2 py-1.5 pl-9 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
+                                >
+                                  <span
+                                    className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                                    style={{
+                                      borderColor: visibility[d.key]
+                                        ? d.color
+                                        : 'var(--map-border)',
+                                      background: visibility[d.key] ? d.color : 'transparent',
+                                    }}
+                                  >
+                                    {visibility[d.key] && (
+                                      <svg
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        className="h-2.5 w-2.5"
+                                        aria-hidden="true"
+                                      >
+                                        <path
+                                          d="M5 13l4 4L19 7"
+                                          stroke="white"
+                                          strokeWidth={3}
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                        />
+                                      </svg>
+                                    )}
+                                  </span>
+                                  {signageCode ? (
+                                    <span
+                                      className="flex h-3.5 shrink-0 items-center justify-center rounded-[3px] px-1 text-[8.5px] font-bold leading-none text-white"
+                                      style={{ background: d.color }}
+                                    >
+                                      {signageCode}
+                                    </span>
+                                  ) : (
+                                    <span
+                                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                      style={{ background: d.color }}
+                                    />
+                                  )}
+                                  <span className="truncate">{d.label}</span>
+                                </button>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      )}
+                      {!collapsed && group === 'Base layers' && (
+                        <ul>
+                          {matchedBaseLayers.map(({ key, label, icon: Icon }) => (
+                            <li key={key} role="option" aria-selected={visibility[key]}>
+                              <button
+                                type="button"
+                                onClick={() => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
+                                style={{
+                                  color: 'var(--map-fg)',
+                                  background: visibility[key]
+                                    ? 'var(--map-surface-active)'
+                                    : undefined,
+                                }}
+                                className="flex w-full cursor-pointer items-center gap-2 py-1.5 pl-9 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
+                              >
+                                <span
+                                  className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                                  style={{
+                                    borderColor: visibility[key]
+                                      ? 'var(--map-accent)'
+                                      : 'var(--map-border)',
+                                    background: visibility[key]
+                                      ? 'var(--map-accent)'
+                                      : 'transparent',
+                                  }}
+                                >
+                                  {visibility[key] && (
+                                    <svg
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      className="h-2.5 w-2.5"
+                                      aria-hidden="true"
+                                    >
+                                      <path
+                                        d="M5 13l4 4L19 7"
+                                        stroke="white"
+                                        strokeWidth={3}
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
+                                  )}
+                                </span>
+                                <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--map-fg-faint)]" />
+                                <span className="truncate">{label}</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </li>
                   )
                 })}
@@ -1917,167 +2589,45 @@ export default function MapView({
             )}
           </div>
 
-          {/* Layers */}
-          <div className="border-t pt-3" style={{ borderColor: 'var(--map-border)' }}>
-            <div className="mb-2 flex items-center gap-1.5">
-              <span
-                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
-                style={{
-                  background: 'var(--map-section-violet-bg)',
-                  color: 'var(--map-section-violet-fg)',
-                }}
+          {/* Base layers -- pinned below search, always visible without
+              opening the dropdown since toggling the whole sector plan or
+              boundary layer off is a frequent, fundamental action. */}
+          <div className="flex flex-col gap-2">
+            {baseLayerRows.map(({ key, label, icon: Icon, theme }) => (
+              <div
+                key={key}
+                style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface)' }}
+                className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 shadow-sm"
               >
-                <GridIcon className="h-3 w-3" />
-              </span>
-              <span
-                className="text-[11px] font-semibold uppercase tracking-wide"
-                style={{ color: 'var(--map-fg-muted)' }}
-              >
-                Layers
-              </span>
-            </div>
-
-            {/* Basics -- always visible, one per row like before */}
-            <div className="flex flex-col gap-2">
-              {baseLayerRows.map(({ key, label, icon: Icon, theme }) => (
-                <div
-                  key={key}
-                  style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface)' }}
-                  className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 shadow-sm"
-                >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span
-                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
-                      style={{
-                        background: `var(--map-section-${theme}-bg)`,
-                        color: `var(--map-section-${theme}-fg)`,
-                      }}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                    </span>
-                    <span
-                      className="truncate text-[13px] font-medium"
-                      style={{ color: 'var(--map-fg)' }}
-                    >
-                      {label}
-                    </span>
-                  </span>
-                  <label className="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center">
-                    <input
-                      type="checkbox"
-                      className="peer sr-only"
-                      checked={visibility[key]}
-                      onChange={(e) => setVisibility((v) => ({ ...v, [key]: e.target.checked }))}
-                    />
-                    <span className="absolute inset-0 rounded-full bg-[var(--map-switch-track)] transition-colors peer-checked:bg-[var(--map-accent)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--map-accent)]/40" />
-                    <span className="absolute left-0.5 h-4 w-4 rounded-full bg-[var(--map-switch-thumb)] shadow transition-transform peer-checked:translate-x-4" />
-                  </label>
-                </div>
-              ))}
-            </div>
-
-            {/* POI layers -- collapsed behind a disclosure so the 16-item
-                list doesn't force long scrolling by default. Expanded view
-                keeps the same single-column, full-width-row, switch-control
-                pattern as the basics above (rather than a cramped 2-col grid
-                of native checkboxes) so labels never truncate and every row
-                stays a comfortable touch target. */}
-            <button
-              type="button"
-              onClick={() => setPoiLayersExpanded((v) => !v)}
-              aria-expanded={poiLayersExpanded}
-              style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface-alt)' }}
-              className="mt-2.5 flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-left hover:bg-[var(--map-surface-hover)]"
-            >
-              <span className="text-[13px] font-medium" style={{ color: 'var(--map-fg-muted)' }}>
-                More layers
-                <span
-                  className="ml-1.5 text-[11.5px] font-normal"
-                  style={{ color: 'var(--map-fg-faint)' }}
-                >
-                  {moreLayerDefs.filter((d) => visibility[d.key]).length}/{moreLayerDefs.length} on
-                </span>
-              </span>
-              <ChevronDownIcon
-                className={`h-3.5 w-3.5 shrink-0 text-[var(--map-fg-faint)] transition-transform ${poiLayersExpanded ? 'rotate-180' : ''}`}
-              />
-            </button>
-            {poiLayersExpanded && (
-              <div className="mt-2">
-                <div className="mb-1.5 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const nextValue = !moreLayerDefs.every((d) => visibility[d.key])
-                      setVisibility((v) => {
-                        const next = { ...v }
-                        for (const { key } of moreLayerDefs) next[key] = nextValue
-                        return next
-                      })
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
+                    style={{
+                      background: `var(--map-section-${theme}-bg)`,
+                      color: `var(--map-section-${theme}-fg)`,
                     }}
-                    className="cursor-pointer text-[11px] font-semibold hover:brightness-90"
-                    style={{ color: 'var(--map-accent)' }}
                   >
-                    {moreLayerDefs.every((d) => visibility[d.key]) ? 'Deselect all' : 'Select all'}
-                  </button>
-                </div>
-                <div className="kumbh-scroll flex max-h-72 flex-col gap-1 overflow-y-auto pr-0.5">
-                  {moreLayerDefs.map((def) => {
-                    const { key, label, color, isRoad } = def
-                    const signageCode = POI_SIGNAGE_CODES[key]
-                    return (
-                      <div
-                        key={key}
-                        className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-[var(--map-surface-hover)]"
-                      >
-                        <span className="flex min-w-0 items-center gap-2">
-                          {isRoad ? (
-                            <span
-                              className="h-0 w-3 shrink-0"
-                              style={{
-                                borderTopWidth: 2,
-                                borderTopColor: color,
-                                borderTopStyle: def.dash ? 'dashed' : 'solid',
-                              }}
-                            />
-                          ) : signageCode ? (
-                            <span
-                              className="flex h-3.5 shrink-0 items-center justify-center rounded-[3px] px-1 text-[8.5px] font-bold leading-none text-white"
-                              style={{ background: color }}
-                            >
-                              {signageCode}
-                            </span>
-                          ) : (
-                            <span
-                              className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
-                              style={{ background: color }}
-                            />
-                          )}
-                          <span
-                            className="text-[12.5px] leading-snug"
-                            style={{ color: 'var(--map-fg-muted)' }}
-                          >
-                            {label}
-                          </span>
-                        </span>
-                        <label className="relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer items-center">
-                          <input
-                            type="checkbox"
-                            className="peer sr-only"
-                            checked={visibility[key]}
-                            onChange={(e) =>
-                              setVisibility((v) => ({ ...v, [key]: e.target.checked }))
-                            }
-                          />
-                          <span className="absolute inset-0 rounded-full bg-[var(--map-switch-track)] transition-colors peer-checked:bg-[var(--map-accent)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--map-accent)]/40" />
-                          <span className="absolute left-0.5 h-3.5 w-3.5 rounded-full bg-[var(--map-switch-thumb)] shadow transition-transform peer-checked:translate-x-3.5" />
-                        </label>
-                      </div>
-                    )
-                  })}
-                </div>
+                    <Icon className="h-3.5 w-3.5" />
+                  </span>
+                  <span
+                    className="truncate text-[13px] font-medium"
+                    style={{ color: 'var(--map-fg)' }}
+                  >
+                    {label}
+                  </span>
+                </span>
+                <label className="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center">
+                  <input
+                    type="checkbox"
+                    className="peer sr-only"
+                    checked={visibility[key]}
+                    onChange={(e) => setVisibility((v) => ({ ...v, [key]: e.target.checked }))}
+                  />
+                  <span className="absolute inset-0 rounded-full bg-[var(--map-switch-track)] transition-colors peer-checked:bg-[var(--map-accent)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--map-accent)]/40" />
+                  <span className="absolute left-0.5 h-4 w-4 rounded-full bg-[var(--map-switch-thumb)] shadow transition-transform peer-checked:translate-x-4" />
+                </label>
               </div>
-            )}
+            ))}
           </div>
         </div>
       </Panel>
@@ -2094,12 +2644,31 @@ export default function MapView({
             : undefined
         }
         onClearSector={() => setSelectedSector('all')}
+        onSelectSector={(n) => setSelectedSector(n)}
         classFilter={classFilter}
         onClassFilterChange={toggleClassFilter}
+        subclassFilter={subclassFilter}
+        onSubclassFilterChange={toggleSubclassFilter}
+        locateResult={locateResult}
+        onLocateFeatureClick={flyToLocateFeature}
         poiVisibility={visibility}
-        onTogglePoiLayer={(key) => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
+        onTogglePoiLayer={handlePoiRowClick}
+        poiLocateResult={poiLocateResult}
+        onPoiLocateFeatureClick={flyToLocateFeature}
         roadTypeVisibility={visibility}
         onToggleRoadType={(key) => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
+        onWidthChange={(w) => {
+          statsPanelWidthRef.current = w
+        }}
+      />
+
+      <SectorReportDrawer
+        sectorNo={selectedSector === 'all' ? null : selectedSector}
+        sectorLabel={(() => {
+          const s = sectors.find((x) => x.sector_no === selectedSector)
+          return s ? formatSectorLabel(s) : `Sector ${selectedSector}`
+        })()}
+        onClose={() => setSelectedSector('all')}
       />
     </div>
   )
