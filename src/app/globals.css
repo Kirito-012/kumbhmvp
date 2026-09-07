@@ -535,6 +535,15 @@ input[type='checkbox'].kumbh-checkbox {
    strip that chrome so the card built in showPopup's markup (rounded-2xl,
    soft elevation, matching Panel.tsx's look) is the only visible surface. */
 .kumbh-map .maplibregl-popup-content {
+  /* Matches the Stats/Search glass panels (Panel.tsx): translucent
+     --map-panel-bg + blur + a hairline border, instead of MapLibre's
+     hardcoded opaque #fff. Painting the background here (not on the inner
+     card showPopup builds) keeps this the single rounded/clipped surface,
+     so there's no seam between two independently-rounded elements. */
+  background: var(--map-panel-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--map-panel-border);
   padding: 0;
   border-radius: 16px;
   box-shadow: 0 12px 32px var(--map-panel-shadow);
@@ -560,6 +569,6 @@ input[type='checkbox'].kumbh-checkbox {
   color: var(--map-fg);
 }
 .kumbh-map .maplibregl-popup-tip {
-  border-top-color: var(--map-popup-bg) !important;
-  border-bottom-color: var(--map-popup-bg) !important;
+  border-top-color: var(--map-surface) !important;
+  border-bottom-color: var(--map-surface) !important;
 }

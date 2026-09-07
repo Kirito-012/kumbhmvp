@@ -29,6 +29,50 @@ const LAYERS: Record<string, { table: string; nameColumn: string | null }> = {
   sanitation: { table: 'kumbh.sanitation', nameColumn: 'name' },
   transformer: { table: 'kumbh.transformer', nameColumn: 'name' },
   trench_line: { table: 'kumbh.trench_line', nameColumn: 'name' },
+  // 2027 gdb refresh additions -- table/column names mirror the tiles route's
+  // LAYERS whitelist (src/app/api/tiles/[layer]/[z]/[x]/[y]/route.ts). These
+  // were previously missing here entirely, so clicking one of these rows in
+  // the Stats panel toggled its visibility but the locate fetch 400'd
+  // ("Unknown or missing layer") and silently swallowed the error -- no
+  // fly-to, no locator list, with nothing in the UI showing why.
+  hotel: { table: 'kumbh.hotel', nameColumn: 'name' },
+  railway_line: { table: 'kumbh.railway_line', nameColumn: 'name' },
+  railway_station: { table: 'kumbh.railway_station', nameColumn: 'descriptio' },
+  railway_station_area: { table: 'kumbh.railway_station_area', nameColumn: 'name' },
+  traffic_route: { table: 'kumbh.traffic_route', nameColumn: 'name' },
+  tentcity: { table: 'kumbh.tentcity', nameColumn: 'label' },
+  ht_line: { table: 'kumbh.ht_line', nameColumn: 'name' },
+  ht_line_buffer: { table: 'kumbh.ht_line_buffer', nameColumn: 'name' },
+  water_line: { table: 'kumbh.water_line', nameColumn: null },
+  water_point: { table: 'kumbh.water_point', nameColumn: null },
+  landuse: { table: 'kumbh.landuse', nameColumn: 'name' },
+  dam: { table: 'kumbh.dam', nameColumn: 'name' },
+  uk_district_boundary: { table: 'kumbh.uk_district_boundary', nameColumn: 'dtname' },
+  religious_place: { table: 'kumbh.religious_place', nameColumn: 'descriptio' },
+  landmark: { table: 'kumbh.landmark', nameColumn: 'name' },
+  thematic_gate: { table: 'kumbh.thematic_gate', nameColumn: null },
+  entry_exit_line: { table: 'kumbh.entry_exit_line', nameColumn: null },
+  junction: { table: 'kumbh.junction', nameColumn: 'name' },
+  direction_line: { table: 'kumbh.direction_line', nameColumn: null },
+  footpath: { table: 'kumbh.footpath', nameColumn: 'name' },
+  ropeway: { table: 'kumbh.ropeway', nameColumn: 'name' },
+  parking: { table: 'kumbh.parking', nameColumn: 'name_of_parking' },
+  parking_line: { table: 'kumbh.parking_line', nameColumn: 'sector_name' },
+  peripheral_parking: { table: 'kumbh.peripheral_parking', nameColumn: 'name' },
+  sector_point: { table: 'kumbh.sector_point', nameColumn: 'label' },
+  ropeway_area: { table: 'kumbh.ropeway_area', nameColumn: 'name' },
+  other_transport: { table: 'kumbh.other_transport', nameColumn: 'name' },
+  // These 5 exist as DB tables (see POI_TABLES in /api/stats) but aren't in
+  // the tiles route's whitelist, so they never actually draw on the map --
+  // toggling their Stats panel row just flips inert visibility state. Out of
+  // scope to fix that gap here, but the locate endpoint should still work
+  // for them (no name column assumed, same as other nameless point tables
+  // above) so fly-to/zoom-to-fit isn't silently broken for these rows too.
+  entry_exit: { table: 'kumbh.entry_exit', nameColumn: null },
+  bridge_point: { table: 'kumbh.bridge_point', nameColumn: null },
+  bus_terminal_point: { table: 'kumbh.bus_terminal_point', nameColumn: null },
+  location_entry: { table: 'kumbh.location_entry', nameColumn: null },
+  other_transport_point: { table: 'kumbh.other_transport_point', nameColumn: null },
 }
 
 // Bounding box + per-feature centroids for one POI layer -- same purpose as

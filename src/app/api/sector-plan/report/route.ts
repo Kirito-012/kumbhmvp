@@ -104,12 +104,15 @@ export async function GET(req: NextRequest) {
 
   // Sums every digit run in a sanitation row's free-text name (e.g.
   // "Toilet - M-30, F-30, Urinal - 20" -> 30+30+20 = 80 seats), skipping
-  // blank/null names (no seat breakdown recorded for that row).
-  const toiletSeats = toilets.rows.reduce((sum: number, row: { name: string | null }) => {
+  // blank/null names (no seat breakdown recorded for that row). Each row's
+  // own name/seat-count is kept too so the drawer can show its math instead
+  // of just the final total.
+  const toiletBlocks = toilets.rows.map((row: { name: string | null }) => {
     const matches = (row.name ?? '').match(/\d+/g)
-    if (!matches) return sum
-    return sum + matches.reduce((s, n) => s + Number(n), 0)
-  }, 0)
+    const seats = matches ? matches.reduce((s, n) => s + Number(n), 0) : 0
+    return { name: row.name, seats }
+  })
+  const toiletSeats = toiletBlocks.reduce((sum, b) => sum + b.seats, 0)
 
   const activityGroups = new Map<string, { subclass: string; label: string }[]>()
   for (const row of activities.rows as {
@@ -146,6 +149,8 @@ export async function GET(req: NextRequest) {
       dustBins: Number(dustbins.rows[0].count),
       transformers: Number(transformers.rows[0].count),
       toilets: toiletSeats,
+      toiletBlockCount: toiletBlocks.length,
+      toiletBlocks,
       ghats: Number(ghats.rows[0].count),
     },
   })

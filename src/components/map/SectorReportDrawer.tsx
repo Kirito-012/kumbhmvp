@@ -30,6 +30,8 @@ type Report = {
     dustBins: number
     transformers: number
     toilets: number
+    toiletBlockCount: number
+    toiletBlocks: { name: string | null; seats: number }[]
     ghats: number
   }
 }
@@ -282,32 +284,80 @@ function UtilRow({
   icon: Icon,
   value,
   label,
+  breakdown,
 }: {
   theme: Theme
   icon: (p: { className?: string }) => JSX.Element
   value: string
   label: string
+  /** Optional expandable detail rows (e.g. per-block toilet seat math) shown below on click. */
+  breakdown?: { key: string; text: string; seats: number }[]
 }) {
   const t = SECTION_THEMES[theme]
+  const [open, setOpen] = useState(false)
+  const hasBreakdown = !!breakdown && breakdown.length > 0
   return (
     <div
-      className="flex items-center gap-2.5 rounded-[9px] border px-2 py-[7px]"
+      className="rounded-[9px] border"
       style={{ background: 'var(--map-surface-alt)', borderColor: 'var(--map-border)' }}
     >
-      <span
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-        style={{ background: t.bg, color: t.fg }}
+      <div
+        className={`flex items-center gap-2.5 px-2 py-[7px] ${hasBreakdown ? 'cursor-pointer' : ''}`}
+        onClick={hasBreakdown ? () => setOpen((v) => !v) : undefined}
       >
-        <Icon className="h-[15px] w-[15px]" />
-      </span>
-      <div className="min-w-0">
-        <div className="text-[13px] font-bold leading-tight" style={{ color: 'var(--map-fg)' }}>
-          {value}
+        <span
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+          style={{ background: t.bg, color: t.fg }}
+        >
+          <Icon className="h-[15px] w-[15px]" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-bold leading-tight" style={{ color: 'var(--map-fg)' }}>
+            {value}
+          </div>
+          <div
+            className="mt-0.5 text-[10px] leading-tight"
+            style={{ color: 'var(--map-fg-muted)' }}
+          >
+            {label}
+          </div>
         </div>
-        <div className="mt-0.5 text-[10px] leading-tight" style={{ color: 'var(--map-fg-muted)' }}>
-          {label}
-        </div>
+        {hasBreakdown && (
+          <span
+            className="shrink-0 text-[9px] font-semibold"
+            style={{ color: 'var(--map-fg-faint)' }}
+          >
+            {open ? 'Hide math ▲' : 'Show math ▼'}
+          </span>
+        )}
       </div>
+      {hasBreakdown && open && (
+        <div
+          className="kumbh-scroll flex max-h-[160px] flex-col gap-0.5 overflow-y-auto border-t px-2 py-1.5"
+          style={{ borderColor: 'var(--map-border)' }}
+        >
+          {breakdown.map((b) => (
+            <div
+              key={b.key}
+              className="flex items-baseline justify-between gap-2 rounded-md px-1 py-0.5 text-[10.5px]"
+            >
+              <span
+                className="min-w-0 truncate"
+                style={{ color: 'var(--map-fg-muted)' }}
+                title={b.text}
+              >
+                {b.text}
+              </span>
+              <span
+                className="shrink-0 font-semibold tabular-nums"
+                style={{ color: 'var(--map-fg)' }}
+              >
+                {b.seats}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -735,7 +785,12 @@ export default function SectorReportDrawer({
                     theme="violet"
                     icon={IconToilet}
                     value={`${report.utilityInfrastructure.toilets} nos`}
-                    label="Toilets"
+                    label={`Toilet seats · ${report.utilityInfrastructure.toiletBlockCount} block${report.utilityInfrastructure.toiletBlockCount === 1 ? '' : 's'}`}
+                    breakdown={report.utilityInfrastructure.toiletBlocks.map((b, i) => ({
+                      key: `${i}-${b.name ?? ''}`,
+                      text: b.name?.trim() || '(no seat breakdown recorded)',
+                      seats: b.seats,
+                    }))}
                   />
                   <UtilRow
                     theme="blue"

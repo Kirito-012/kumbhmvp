@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import type { Feature } from 'geojson'
+import type { Feature, Point } from 'geojson'
+import { clusterPoints } from '@/lib/poiClustering'
 import {
   Map as MLMap,
   Marker,
@@ -75,6 +76,41 @@ type Sector = {
 const CENTER: [number, number] = [78.0995, 29.9396]
 const INITIAL_ZOOM = 10
 
+// CARTO's Positron/Dark Matter vector styles, vendored into /public (rather
+// than fetched from basemaps.cartocdn.com at runtime) -- their raster PNG
+// tiles started requiring an API key, but the underlying vector tiles/style
+// JSON these reference (tiles.basemaps.cartocdn.com, a different subdomain)
+// are still open, and vendoring avoids depending on that staying true for an
+// extra network hop on every map load. Fetched once and merged into the
+// map's own style (see loadBasemapStyle below) rather than used as a
+// standalone map.setStyle(), since every sector/POI source and layer this
+// component creates lives in the SAME style object -- swapping the whole
+// style out from under them would delete them too.
+const BASEMAP_STYLE_URL: Record<'light' | 'dark', string> = {
+  light: '/carto-positron-style.json',
+  dark: '/carto-dark-matter-style.json',
+}
+// IDs of the vector source + all its layers, as defined in the vendored
+// style JSON above -- both style variants share these same names (only the
+// paint colors differ), so one constant list works for both. Recomputed as
+// "everything currently under these names" when swapping themes, rather than
+// diffed layer-by-layer, since a full style swap is simpler than reconciling
+// two ~90-layer stylesheets against each other.
+const BASEMAP_SOURCE_ID = 'carto'
+
+async function loadBasemapStyle(theme: 'light' | 'dark') {
+  const res = await fetch(BASEMAP_STYLE_URL[theme])
+  return (await res.json()) as {
+    sprite?: string
+    sources: Record<string, unknown>
+    layers: unknown[]
+  }
+}
+
+function readMapTheme(): 'light' | 'dark' {
+  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
+}
+
 // Fixed emphasis color for the active class/sub-class filter's glow+outline
 // (sector-plan-filter-glow/-outline below) -- deliberately NOT any class's
 // own color, since several classes are themselves greys/neutrals that
@@ -83,6 +119,202 @@ const INITIAL_ZOOM = 10
 // doesn't collide with the map's other fixed accent colors (blue = general
 // UI accent, violet = selected-sector outline, red = measure tool).
 const FILTER_EMPHASIS_COLOR = '#f59e0b'
+
+// Zoom level above which POI cluster circles show their point-count number
+// (see poi-{key}-cluster-count below) -- at wide zooms, many small clusters
+// packed close together turned overlapping 2-3 digit labels into unreadable
+// text soup, so the bare circle alone carries "there's a cluster here" until
+// there's enough screen room for the number to actually help. Matches
+// clusterPoints' own zoom-driven grid (src/lib/poiClustering.ts): higher
+// zoom naturally means fewer, more spread-out clusters.
+const CLUSTER_LABEL_MIN_ZOOM = 13
+
+// Sector hover/selection colors, theme-aware -- the light-mode values are
+// the original muted slate/violet/near-black tones, which read fine against
+// a pale basemap but nearly vanished against the near-black CARTO Dark
+// Matter basemap the dark theme now uses. Dark mode instead gets a glowing
+// electric cyan (hover) and warm orange-gold (selected) -- distinct from
+// FILTER_EMPHASIS_COLOR's amber above so an active class filter and a
+// selected sector stay visually distinguishable when both are true at once,
+// and close to the reference "glowing points on black" look this was tuned
+// against. Applied at layer creation (initMap) and re-applied by the
+// basemap theme-swap effect below, since these are plain static paint
+// values, not CSS var()s the map's popups/controls already follow for free.
+const SECTOR_COLORS = {
+  light: { hover: '#475569', selected: '#7c3aed', boundary: '#111827' },
+  // boundary went through two dark-mode attempts before this one: #3f4759
+  // (close to the basemap's own dark grays) blended into the CARTO Dark
+  // Matter basemap's road lines almost completely, and the next try,
+  // #94a3b8, was a real improvement in brightness but still landed in the
+  // same grey-blue family as those roads -- close enough in hue that the
+  // sector boundary (the primary navigation shape) and the ordinary street
+  // grid still read as "the same kind of line" at a glance, just one lighter
+  // than the other. A near-white blue with no grey in it at all reads as
+  // categorically different at any zoom, rather than merely brighter.
+  dark: { hover: '#22d3ee', selected: '#fb923c', boundary: '#c7d6f5' },
+} as const
+
+// Sector boundary line width, theme-aware -- light mode's basemap has dark,
+// fairly heavy road strokes already, so a thin 1px boundary still stands out
+// by contrast alone. Dark mode's near-black basemap has much thinner, fainter
+// road lines, so the boundary gets a bit more width on top of its distinct
+// color (SECTOR_COLORS.dark.boundary) for extra presence as the primary
+// navigation shape.
+const SECTOR_BOUNDARY_WIDTH = { light: 1, dark: 1.5 } as const
+
+// Dark-mode-only fill palette for sector-plan-fill, keyed the same as
+// CLASS_GROUP_COLORS (src/lib/classColors.ts) -- CLASS_GROUP_COLORS itself
+// stays untouched since it's shared by every UI swatch (legend dots, chips,
+// the Stats panel) where the light-mode hues already read fine against dark
+// UI chrome. A first attempt at this palette desaturated/darkened every hue
+// (aiming to tame the "clashing sticker sheet" the raw light colors made as
+// large fills), but that overcorrected into a muddy, everything-looks-brown
+// mess that lost the whole point of per-class color-coding -- the fix isn't
+// less saturation, it's a *different* kind of vividness: the same "glowing
+// color on black" quality already tuned for SECTOR_COLORS.dark (electric
+// cyan/orange) rather than pastel light-mode hues. Each entry keeps its
+// CLASS_GROUP_COLORS hue family but pushed to a brighter, more saturated,
+// slightly luminous version -- distinct and energetic against black instead
+// of flat and washed out.
+//
+// Same three-tier importance structure as CLASS_GROUP_COLORS (see that
+// file's comment for the full rationale) -- Tier 1 gets the most "glow",
+// Tier 2 a visibly quieter version of its own hue, Tier 3 stays a cool
+// slate that's readable but recedes, with Green Area/Waterbody keeping a
+// faint hue for orientation and Parking split out from plain terrain grey
+// since it's the single largest class on the map by area.
+const CLASS_GROUP_COLORS_DARK: Record<string, string> = {
+  // Tier 1 -- operationally critical
+  'Health Camping': '#ff6b6b',
+  'Religious Camping': '#ff9d4d',
+  'Police Camping': '#4f8dff',
+  'Administrative Camping': '#2dd4a8',
+  Commercial: '#ff5fa8',
+  Amenities: '#ffc247',
+  'Reserved Area': '#b794ff',
+
+  // Tier 2 -- secondary, muted but distinct
+  Sanitation: '#3dd9c4',
+  Transport: '#a79bf0',
+  Utilities: '#ffd166',
+  'Media Camping': '#f472e0',
+  'Other Camping': '#ffb37a',
+  Recreation: '#9ae05a',
+  Education: '#3fd0e8',
+  Warehouses: '#d4a24c',
+  'Existing Development': '#38c6ff',
+
+  // Tier 3 -- terrain/context, near-neutral
+  Parking: '#8794b3',
+  Road: '#9aa2b1',
+  Pathway: '#9aa2b1',
+  'Open Area': '#9aa2b1',
+  'Low Lying Area': '#9aa2b1',
+  'Hold-up Area': '#9aa2b1',
+  'Unavailable Land': '#9aa2b1',
+  Ghat: '#9aa2b1',
+  'Green Area': '#6fa889',
+  Waterbody: '#5f93b8',
+
+  Other: '#8a93a6',
+}
+
+// Fill/outline treatment for sector-plan-fill, theme-aware.
+//
+// Earlier versions painted parcels as near-solid colour (0.65-0.75 opacity)
+// plus a same-hue `fill-outline-color`. At city-wide zooms that turned whole
+// sectors into flat blobs of one hue -- hundreds of adjacent parcels each
+// contributing a saturated fill *and* a saturated 1px edge, so the basemap's
+// road network vanished underneath and the 11-colour palette read as noise
+// rather than as categories.
+//
+// The fix separates the two jobs colour was doing. The *fill* becomes a faint
+// wash that only says "something is here", and all the class identity moves
+// into a dedicated `line` layer (sector-plan-class-outline) which -- unlike
+// `fill-outline-color`, whose whole limitation is that it can't be given a
+// width, an opacity or a zoom curve -- can be a crisp, controllable hairline.
+// That's what makes each parcel read as a distinct shape instead of merging
+// into its neighbours.
+//
+// Both are zoom-interpolated: at city-wide zooms you're reading *where* the
+// classes are (so the wash stays very light and the hairline very thin), and
+// by parcel-reading zooms both strengthen to where an individual polygon's
+// class is unambiguous. Light mode carries slightly more of everything since
+// a pale basemap gives a light wash much less to contrast against.
+//
+// No hover boost here: MapLibre only allows a `zoom` expression as the
+// entire top-level paint value, not nested inside a `case` -- and no code
+// actually calls setFeatureState('hover', ...) on sector_plan features
+// anyway (that only happens for whole sectors, via sector-hover-fill/-glow),
+// so there was never a real hover state for these two to react to.
+// Cast the same way matchExpr does below: these are plain runtime arrays
+// (MapLibre expressions), but its ExpressionSpecification union is built
+// from exact-length mutable tuples that TS can't infer a literal array into.
+const SECTOR_FILL_OPACITY: { light: ExpressionSpecification; dark: ExpressionSpecification } = {
+  light: [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    11,
+    0.16,
+    15,
+    0.4,
+  ] as unknown as ExpressionSpecification,
+  dark: [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    11,
+    0.1,
+    15,
+    0.3,
+  ] as unknown as ExpressionSpecification,
+}
+
+// Per-parcel class hairline. Widths stay sub-pixel at the low end on purpose:
+// MapLibre antialiases them into a faint thread rather than dropping them, so
+// dense sectors keep their internal structure legible instead of silting up
+// into one solid mass of edges.
+const SECTOR_OUTLINE_WIDTH = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  11,
+  0.4,
+  14,
+  0.8,
+  17,
+  1.4,
+] as unknown as ExpressionSpecification
+const SECTOR_OUTLINE_OPACITY = { light: 0.7, dark: 0.85 } as const
+
+// Same wash + hairline split as sector-plan-fill/-class-outline above,
+// applied to the area-shaped POI layers (ashram, tentcity, ropeway_area,
+// etc. -- see byGeomType('polygon') below). Unlike sector-plan-fill these
+// don't have a separate dark-mode palette (POI colours are already the same
+// in both themes), so opacity stays a single value rather than a light/dark
+// pair.
+const POI_POLYGON_FILL_OPACITY = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  11,
+  0.14,
+  15,
+  0.32,
+] as unknown as ExpressionSpecification
+const POI_POLYGON_OUTLINE_WIDTH = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  11,
+  0.5,
+  14,
+  0.9,
+  17,
+  1.5,
+] as unknown as ExpressionSpecification
+const POI_POLYGON_OUTLINE_OPACITY = 0.8
 
 // `name` comes from PostGIS as "BAHADRABAD-01" (title-then-number) -- strip
 // that trailing "-NN" and lead with the zero-padded sector_no instead, since
@@ -283,6 +515,22 @@ const POI_LAYER_DEFS: PoiLayerDef[] = [
   })),
 ]
 
+// Client-side mirror of POI_SUBCLASS_TABLES in src/app/api/stats/route.ts --
+// which vector-tile property name each subclass-bearing POI layer's
+// subclass lives under (ashram spells it sub_class). Every other POI layer
+// has no such column and stays a flat single-row layer with no chevron, same
+// "no shared whitelist across route files" convention the tiles/locate
+// routes already use for their own LAYERS maps.
+const POI_SUBCLASS_COLUMNS: Record<string, string> = {
+  amenities: 'subclass',
+  ashram: 'sub_class',
+  public_service_facilities: 'subclass',
+  sanitation: 'subclass',
+  tentcity: 'subclass',
+  parking: 'subclass',
+  sector_point: 'subclass',
+}
+
 type RoadTypeDef = {
   key: string
   /** The `type` value as stored in the road table/StatsPanel rows. */
@@ -305,6 +553,59 @@ const ROAD_TYPE_DEFS: RoadTypeDef[] = Object.keys(ROAD_TYPE_COLORS).map((type) =
   dash: ROAD_TYPE_DASH[type],
 }))
 
+// Tracks the most recently issued /api/poi/points/[layer] request per
+// clustered POI layer, keyed by layer key -- see refetchClusteredPoiSource
+// below. A plain module-level object (not component state/ref) is fine
+// here: it's pure "which fetch is latest" bookkeeping with no rendering
+// implications, shared across every MapView instance the same way the map
+// itself is a singleton per mount.
+const poiSourceFetchTokens: Record<string, number> = {}
+
+// Re-queries a clustered POI point layer's full GeoJSON, scoped to the given
+// sub-classes (or unscoped, when subs is empty/undefined), re-clusters it
+// (see clusterPoints in src/lib/poiClustering.ts) and swaps the result into
+// the already-created 'geojson' source via setData() -- see the
+// poiSubclassFilter effect above for why the raw fetch is filtered
+// server-side instead of with a style `filter`: a style filter can't affect
+// which points get clustered together in the first place, only which
+// already-computed features get hidden afterward. Also updates
+// rawFeaturesRef so the next zoom-driven re-cluster (syncPoiClusters, in
+// initMap) keeps using the filtered dataset rather than snapping back to
+// the unfiltered one on the next zoom change. A monotonic per-layer token
+// discards a stale response that resolves after a newer request for the
+// same layer has already been issued (e.g. rapidly toggling sub-class
+// checkboxes), so an in-flight request never clobbers a later selection's
+// result.
+async function refetchClusteredPoiSource(
+  map: MLMap,
+  layerKey: string,
+  subs: string[] | undefined,
+  rawFeaturesRef: React.RefObject<Record<string, Feature<Point>[]>>,
+) {
+  const source = map.getSource(layerKey) as GeoJSONSource | undefined
+  if (!source) return
+
+  const token = (poiSourceFetchTokens[layerKey] ?? 0) + 1
+  poiSourceFetchTokens[layerKey] = token
+
+  const params = new URLSearchParams()
+  for (const sub of subs ?? []) params.append('subclass', sub)
+  const url = params.toString()
+    ? `${location.origin}/api/poi/points/${layerKey}?${params}`
+    : `${location.origin}/api/poi/points/${layerKey}`
+
+  try {
+    const res = await fetch(url)
+    const data: { features: Feature<Point>[] } = await res.json()
+    if (poiSourceFetchTokens[layerKey] !== token) return // superseded by a newer request
+    rawFeaturesRef.current[layerKey] = data.features
+    source.setData(clusterPoints(data.features, map.getZoom()))
+  } catch {
+    // Network hiccup -- leave the source showing its last-known data rather
+    // than clearing it out from under the user.
+  }
+}
+
 // Shared by both the initial layer-creation sync (so POI layers default to
 // hidden with no flash of visible-then-hidden) and the visibility-toggle
 // effect below, so the id/visibility-key mapping only lives in one place.
@@ -312,8 +613,8 @@ function applyLayerVisibility(map: MLMap, visibility: Record<string, boolean>) {
   ;(
     [
       ['sector-plan-fill', visibility.sector_plan],
+      ['sector-plan-class-outline', visibility.sector_plan],
       ['sector-plan-peripheral-outline', visibility.sector_plan],
-      ['sector-plan-parking-label', visibility.sector_plan],
       // Visible if at least one road type is toggled on -- road-line is one
       // shared layer for all 3 types, so which specific types actually draw
       // is handled by its `filter` (see the sector/class filter effect),
@@ -324,12 +625,21 @@ function applyLayerVisibility(map: MLMap, visibility: Record<string, boolean>) {
       ['sector-hover-glow', visibility.sector_boundary],
       ['sector-hover-outline', visibility.sector_boundary],
       ['sector-selected-outline', visibility.sector_boundary],
+      // Dark-mode-only halo (see where it's created, in initMap) -- gated on
+      // theme too so this doesn't fight the theme-swap effect's own
+      // visibility toggle by turning the glow back on in light mode whenever
+      // sector_boundary's checkbox changes.
+      ['sector-selected-glow', visibility.sector_boundary && readMapTheme() === 'dark'],
       ...POI_LAYER_DEFS.flatMap(
         (d) =>
           [
             [`poi-${d.key}`, visibility[d.key]],
+            [`poi-${d.key}-outline`, visibility[d.key]],
+            [`poi-${d.key}-glow`, visibility[d.key]],
             [`poi-${d.key}-hit`, visibility[d.key]],
             [`poi-${d.key}-label`, visibility[d.key]],
+            [`poi-${d.key}-cluster`, visibility[d.key]],
+            [`poi-${d.key}-cluster-count`, visibility[d.key]],
           ] as [string, boolean][],
       ),
     ] as const
@@ -403,6 +713,20 @@ export default function MapView({
    *  (not state) since this only feeds imperative map calls and shouldn't
    *  itself trigger a re-render on every resize-drag frame. */
   const statsPanelWidthRef = useRef(0)
+  /** Set by initMap once the map is actually created (which now happens asynchronously, after
+   *  the vendored basemap style JSON fetch resolves -- see the mount effect below) -- the effect's
+   *  own cleanup can't just close over `map`/`marker` directly the way it used to when map
+   *  creation was synchronous within the same effect body. */
+  const mapCleanupRef = useRef<(() => void) | null>(null)
+  /** Guards the one-time initial fitBounds-to-all-sectors effect below so it
+   *  never re-fires (e.g. if `sectors` happens to refetch) and yanks the
+   *  camera away from wherever the user has since panned/selected. */
+  const initialFitDoneRef = useRef(false)
+  /** Raw (unclustered) point features per clustered POI layer key, fetched once from
+   *  /api/poi/points/[layer] -- re-clustered client-side (see syncPoiClusters in initMap)
+   *  whenever the map's zoom changes, since MapView does its own capped clustering instead of
+   *  relying on MapLibre's built-in cluster:true (see the point-source comment in initMap for why). */
+  const poiRawFeaturesRef = useRef<Record<string, Feature<Point>[]>>({})
 
   // Right-panel-aware padding for fitBounds/flyTo -- same left-side
   // constant as before (accounts for the fixed-width "Kumbh Mela" panel,
@@ -428,7 +752,14 @@ export default function MapView({
   // Stats panel's own sector-scoped numbers instead of always showing every
   // sector's total.
   const [subclassStats, setSubclassStats] = useState<
-    { class_group: string; subclass: string; features: number }[]
+    // subclass can be null -- see the comment where it's read in the search panel below for why.
+    { class_group: string; subclass: string | null; features: number }[]
+  >([])
+  // Same idea as subclassStats but for POI layers that have a subclass-like
+  // column (see POI_SUBCLASS_COLUMNS) -- populated from the same /api/stats
+  // response's poiBySubclass field, not a separate fetch.
+  const [poiSubclassStats, setPoiSubclassStats] = useState<
+    { layer: string; subclass: string; features: number }[]
   >([])
   // Bounding box + per-feature centroids for the *single* class or
   // sub-class the filter currently narrows to -- powers both the map's
@@ -474,6 +805,16 @@ export default function MapView({
   // (fallback), causing a hydration mismatch. The actual stored value is
   // applied post-mount below instead.
   const [visibility, setVisibility] = useState<Record<string, boolean>>(defaultVisibility)
+  /** Mirrors `visibility` for the map's 'load' handler below, which now runs asynchronously
+   *  (after the basemap style JSON fetch in the mount effect resolves) -- by the time it fires,
+   *  the localStorage-restore mount effect has often already updated `visibility` state, but the
+   *  'load' callback was created back when the mount effect first ran and would otherwise apply
+   *  the stale initial (SSR-safe default) value instead, permanently showing e.g. "Sector plan"
+   *  as off in the sidebar while the layer itself stays visible on the map. */
+  const visibilityRef = useRef(visibility)
+  useEffect(() => {
+    visibilityRef.current = visibility
+  }, [visibility])
   // Empty array means "all classes" -- multiple classes can be selected at
   // once, all rendering together on the map (same on/off model as
   // poiVisibility/roadTypeVisibility rather than a single active choice).
@@ -487,6 +828,17 @@ export default function MapView({
   // tree (UI-only, not persisted -- same per-item disclosure pattern as
   // collapsedGroups below, just per-class rather than per-group).
   const [expandedFilterClasses, setExpandedFilterClasses] = useState<Set<string>>(new Set())
+  // Sub-class selections for POI layers that are only *partially* checked --
+  // same partial-selection model as subclassFilter, but keyed by POI layer
+  // key instead of class_group. A layer fully on via visibility[key] with no
+  // entry here means "show every subclass"; an entry here means only those
+  // subclasses render on the map. Only ever populated for the 4 layers in
+  // POI_SUBCLASS_COLUMNS -- the other 12 layers have no subclass column, so
+  // this stays empty for them and their on/off stays purely visibility[key].
+  const [poiSubclassFilter, setPoiSubclassFilter] = useState<Record<string, string[]>>({})
+  // Which POI layers have their sub-class list expanded in the left panel's
+  // tree -- mirrors expandedFilterClasses, same UI-only/not-persisted model.
+  const [expandedFilterPois, setExpandedFilterPois] = useState<Set<string>>(new Set())
   // Single search query driving the unified sector/class/road/POI combobox
   // below (merges what used to be two separate `search`/`classSearch` text
   // states now that there's one input for all four taxonomies).
@@ -527,11 +879,176 @@ export default function MapView({
       .catch(() => {})
   }, [])
 
+  // One-time initial fit to the real extent of every sector, once sector
+  // data (with each one's xmin/ymin/xmax/ymax) has loaded. The map
+  // constructor's own CENTER/INITIAL_ZOOM (see the jumpTo call in the mount
+  // effect above) were a rough guess at the Haridwar-Rishikesh corridor's
+  // midpoint that turned out to sit well southwest of the plan's actual
+  // centroid -- Haridwar/Rishikesh/the sector chain along the Ganges rendered
+  // bunched into the upper-right of the viewport no matter how mapFlyPadding
+  // was tuned, because padding only repositions a *correct* center within
+  // the free viewport, it can't fix a center that's wrong to begin with.
+  // Computing the real union bbox from the sectors the map already fetches
+  // (same xmin/ymin/xmax/ymax shape /api/sector-plan/locate uses for its own
+  // fitBounds) and fitting to it is exact regardless of how the plan's
+  // geographic footprint shifts as sectors are added/moved, unlike a
+  // hand-picked constant that silently goes stale.
+  //
+  // Skipped when opening a specific ticket's parcel (initialParcel) -- that
+  // case already has its own precise center from the mount effect's jumpTo,
+  // and fitting to the whole plan would fight it. Runs at most once
+  // (initialFitDoneRef) so it never re-fires and yanks the camera out from
+  // under a user who has already panned/selected a sector by the time
+  // sectors happens to reload.
+  useEffect(() => {
+    if (initialParcel || initialFitDoneRef.current || sectors.length === 0) return
+    const map = mapRef.current
+    if (!map) return
+    initialFitDoneRef.current = true
+    const xmin = Math.min(...sectors.map((s) => s.xmin))
+    const ymin = Math.min(...sectors.map((s) => s.ymin))
+    const xmax = Math.max(...sectors.map((s) => s.xmax))
+    const ymax = Math.max(...sectors.map((s) => s.ymax))
+    map.fitBounds(
+      [
+        [xmin, ymin],
+        [xmax, ymax],
+      ],
+      { padding: mapFlyPadding(), duration: 0 },
+    )
+  }, [sectors, initialParcel])
+
+  // Swaps the vendored CARTO basemap style when the app theme toggles --
+  // watches <html data-theme> directly (rather than re-rendering on some
+  // React theme state) since ThemeToggle.tsx writes the attribute
+  // imperatively with no corresponding context/store this component could
+  // subscribe to instead. Removes every layer/source belonging to the
+  // previous basemap style and re-adds the other theme's, inserted below
+  // every sector/POI layer -- cheaper and safer than a full map.setStyle(),
+  // which would tear down (and require fully re-adding) every source/layer
+  // this component creates in the 'load' handler below, since they live in
+  // the SAME style object as the basemap.
+  useEffect(() => {
+    let cancelled = false
+    let appliedTheme: 'light' | 'dark' | null = null
+
+    async function syncBasemap() {
+      const map = mapRef.current
+      const theme = readMapTheme()
+      if (!map || !map.isStyleLoaded()) return
+      // initMap loads the map's initial style from this same theme already
+      // (see loadBasemapStyle(readMapTheme()) at map creation) -- seed the
+      // tracker from it the first time this runs so a stray mutation before
+      // the user's first real toggle doesn't re-fetch/reapply it needlessly.
+      if (appliedTheme === null) appliedTheme = theme
+      if (theme === appliedTheme) return
+      // Claim this theme before the await so a second MutationObserver
+      // firing (e.g. React StrictMode's double-invoke, or two rapid toggles)
+      // doesn't race in and load the same style twice.
+      appliedTheme = theme
+
+      const basemap = await loadBasemapStyle(theme)
+      if (cancelled || mapRef.current !== map) return
+
+      // Every layer currently in the style that belongs to the OLD basemap --
+      // i.e. shares the vendored style's source, or is its lone 'background'
+      // layer (which has no source at all) -- rather than a fixed id list,
+      // since that's exactly the set map.setStyle() would otherwise replace.
+      const oldBasemapLayerIds = map
+        .getStyle()
+        .layers.filter(
+          (l) => l.id === 'background' || ('source' in l && l.source === BASEMAP_SOURCE_ID),
+        )
+        .map((l) => l.id)
+      const firstNonBasemapLayerId = map
+        .getStyle()
+        .layers.find((l) => !oldBasemapLayerIds.includes(l.id))?.id
+
+      for (const id of oldBasemapLayerIds) map.removeLayer(id)
+      if (map.getSource(BASEMAP_SOURCE_ID)) map.removeSource(BASEMAP_SOURCE_ID)
+
+      for (const [id, def] of Object.entries(basemap.sources)) {
+        map.addSource(id, def as never)
+      }
+      for (const layer of basemap.layers as never[]) {
+        map.addLayer(layer, firstNonBasemapLayerId)
+      }
+
+      // Sector hover/selected/boundary colors are plain static paint values
+      // (not CSS var()s), so they don't follow the theme for free the way
+      // the map's popups/controls do -- re-applied here alongside the
+      // basemap itself. See SECTOR_COLORS for why these differ per theme.
+      const c = SECTOR_COLORS[theme]
+      if (map.getLayer('sector-boundary-line')) {
+        map.setPaintProperty('sector-boundary-line', 'line-color', c.boundary)
+        map.setPaintProperty('sector-boundary-line', 'line-width', SECTOR_BOUNDARY_WIDTH[theme])
+      }
+      // sector-plan-fill's own palette/opacity is theme-aware too (see
+      // CLASS_GROUP_COLORS_DARK) -- same "not a CSS var(), re-apply on
+      // toggle" reasoning as the sector colors above.
+      if (map.getLayer('sector-plan-fill')) {
+        const fillColors = theme === 'dark' ? CLASS_GROUP_COLORS_DARK : CLASS_GROUP_COLORS
+        map.setPaintProperty(
+          'sector-plan-fill',
+          'fill-color',
+          matchExpr('class_group', fillColors, fillColors.Other),
+        )
+        map.setPaintProperty('sector-plan-fill', 'fill-opacity', SECTOR_FILL_OPACITY[theme])
+      }
+      if (map.getLayer('sector-plan-class-outline')) {
+        const fillColors = theme === 'dark' ? CLASS_GROUP_COLORS_DARK : CLASS_GROUP_COLORS
+        map.setPaintProperty(
+          'sector-plan-class-outline',
+          'line-color',
+          matchExpr('class_group', fillColors, fillColors.Other),
+        )
+        map.setPaintProperty(
+          'sector-plan-class-outline',
+          'line-opacity',
+          SECTOR_OUTLINE_OPACITY[theme],
+        )
+      }
+      if (map.getLayer('sector-hover-fill')) {
+        map.setPaintProperty('sector-hover-fill', 'fill-color', c.hover)
+      }
+      if (map.getLayer('sector-hover-glow')) {
+        map.setPaintProperty('sector-hover-glow', 'line-color', c.hover)
+      }
+      if (map.getLayer('sector-hover-outline')) {
+        map.setPaintProperty('sector-hover-outline', 'line-color', c.hover)
+      }
+      if (map.getLayer('sector-selected-outline')) {
+        map.setPaintProperty('sector-selected-outline', 'line-color', c.selected)
+      }
+      if (map.getLayer('sector-selected-glow')) {
+        map.setPaintProperty('sector-selected-glow', 'line-color', c.selected)
+        map.setLayoutProperty(
+          'sector-selected-glow',
+          'visibility',
+          theme === 'dark' ? 'visible' : 'none',
+        )
+      }
+    }
+
+    const observer = new MutationObserver(() => void syncBasemap())
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    })
+    return () => {
+      cancelled = true
+      observer.disconnect()
+    }
+  }, [])
+
   useEffect(() => {
     const url = selectedSector !== 'all' ? `/api/stats?sector=${selectedSector}` : '/api/stats'
     fetch(url)
       .then((r) => r.json())
-      .then((data) => setSubclassStats(data.bySubclass ?? []))
+      .then((data) => {
+        setSubclassStats(data.bySubclass ?? [])
+        setPoiSubclassStats(data.poiBySubclass ?? [])
+      })
       .catch(() => {})
   }, [selectedSector])
 
@@ -625,15 +1142,38 @@ export default function MapView({
       </div>`
   }
 
+  // Sanitation "Toilet" rows carry their seat breakdown as free text in
+  // `name` (e.g. "Toilet - M-30, F-30, Urinal - 10") rather than structured
+  // M/F/Urinal columns -- same digit-sum this feature's title is drawn from,
+  // surfaced explicitly here so the seat count in the popup traces back to
+  // the same text a viewer can read for themselves, and matches how the
+  // Sector Report drawer's Utility Infrastructure -> Toilets total is built
+  // (see /api/sector-plan/report's toiletSeats reducer).
+  function toiletSeatBreakdown(name: unknown): [string, unknown][] {
+    if (typeof name !== 'string' || !name.trim()) return []
+    const matches = name.match(/\d+/g)
+    if (!matches) return [['Seat breakdown', name]]
+    const seats = matches.reduce((s, n) => s + Number(n), 0)
+    return [
+      ['Seat breakdown', name],
+      ['Total seats', seats],
+    ]
+  }
+
   function propertyRowsHtml(feature: MapGEOJSONFeatureCompat) {
     const p = feature.properties ?? {}
     const poiDef = poiLayerDef(feature.layer.id)
+    const isToilet = feature.layer.id === 'poi-sanitation' && p.subclass === 'Toilet'
     const rows: [string, unknown][] = poiDef
-      ? Object.entries(p)
-          // name/label already shown in the header -- id and raw geometry
-          // fields aren't meaningful to a viewer, so both are dropped here.
-          .filter(([k]) => !['id', 'name', 'geom'].includes(k))
-          .map(([k, v]) => [poiPropertyLabel(k), v])
+      ? [
+          ...(isToilet ? toiletSeatBreakdown(p.name) : []),
+          ...Object.entries(p)
+            // name/label already shown in the header -- id and raw geometry
+            // fields aren't meaningful to a viewer, so both are dropped here.
+            // For toilets, name is also re-shown above as the seat breakdown.
+            .filter(([k]) => !['id', 'name', 'geom'].includes(k))
+            .map(([k, v]): [string, unknown] => [poiPropertyLabel(k), v]),
+        ]
       : feature.layer.id === 'road-line'
         ? [
             ['ROW width (m)', p.row_width_m],
@@ -678,7 +1218,7 @@ export default function MapView({
           : ''
       }${escapeHtml(label)}</span>`
 
-    return `<div style="margin:12px 16px 14px;padding-top:12px;border-top:1px solid var(--map-popup-row-border)">
+    return `<div style="margin:12px 16px 0;padding-top:12px;padding-bottom:14px;border-top:1px solid var(--map-popup-row-border)">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;flex-wrap:wrap">
         ${ticket.status ? badge(ticket.status.name, ticket.status.color) : ''}
         ${ticket.priority ? badge(ticket.priority.name, ticket.priority.color) : ''}
@@ -693,13 +1233,23 @@ export default function MapView({
     popupParcelIdRef.current = null
 
     const baseHtml = (ticketHtml: string) =>
-      `<div style="font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;width:240px;background:var(--map-popup-bg);border-radius:16px">${popupHeaderHtml(feature)}${propertyRowsHtml(feature)}${ticketHtml}</div>`
+      `<div style="font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;width:240px;border-radius:16px">${popupHeaderHtml(feature)}${propertyRowsHtml(feature)}${ticketHtml}</div>`
 
     const popup = new Popup({ closeButton: true, maxWidth: '260px' })
       .setLngLat(lngLat)
       .setHTML(baseHtml(''))
       .addTo(map)
     popupRef.current = popup
+    // Its own close button bypasses every other path that clears
+    // popupRef/popupParcelIdRef (map click, right-click, sector change) --
+    // without this, popupRef.current keeps pointing at a removed-but-not-
+    // nulled Popup, which would make isOpen()-style "is a popup showing"
+    // checks elsewhere see a stale positive forever after the first popup.
+    popup.on('close', () => {
+      if (popupRef.current !== popup) return
+      popupRef.current = null
+      popupParcelIdRef.current = null
+    })
 
     // Only parcels (sector-plan-fill) are ticket-backed — roads/boundaries never have one.
     const rawId =
@@ -721,34 +1271,61 @@ export default function MapView({
 
   useEffect(() => {
     if (!mapContainer.current || mapRef.current) return
+    let cancelled = false
 
-    const map = new MLMap({
-      container: mapContainer.current,
-      style: {
-        version: 8,
-        // Needed for any 'symbol'/text-field layer (the P/BS/G signage
-        // labels below) -- MapLibre renders text from server-supplied SDF
-        // glyph PBFs, not local system fonts. Public, no-key demo endpoint,
-        // same tier of dependency as the OSM raster tiles below.
-        glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
-        sources: {
-          osm: {
-            type: 'raster',
-            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-            tileSize: 256,
-            attribution: '© OpenStreetMap contributors',
-          },
+    loadBasemapStyle(readMapTheme()).then((basemap) => {
+      if (cancelled || !mapContainer.current || mapRef.current) return
+
+      const map = new MLMap({
+        container: mapContainer.current,
+        style: {
+          version: 8,
+          // Needed for any 'symbol'/text-field layer (the P/BS/G signage
+          // labels below, plus the vendored CARTO style's own place-name/
+          // road labels) -- MapLibre renders text from server-supplied SDF
+          // glyph PBFs, not local system fonts. Public, no-key demo endpoint.
+          // NOT CARTO's own glyphs URL (referenced by the style JSON but
+          // discarded here): a style has exactly one glyphs endpoint, and
+          // CARTO's font server 404s on "Noto Sans Bold" (used by our own
+          // parking/measure labels below) while every CARTO label layer
+          // already falls back to plain "Noto Sans Regular", which this
+          // endpoint does serve.
+          glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+          sprite: basemap.sprite as string | undefined,
+          sources: basemap.sources as never,
+          layers: basemap.layers as never,
         },
-        layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
-      },
-      center: initialParcel ? [initialParcel.lng, initialParcel.lat] : CENTER,
-      zoom: initialParcel ? 16 : INITIAL_ZOOM,
-      // OSM's tile usage policy requires attribution to stay visible, but
-      // the default control collapses it behind an "i" toggle button --
-      // compact: false keeps it as plain always-visible text instead.
-      attributionControl: { compact: false },
+        center: initialParcel ? [initialParcel.lng, initialParcel.lat] : CENTER,
+        zoom: initialParcel ? 16 : INITIAL_ZOOM,
+        attributionControl: { compact: false },
+      })
+      // The constructor's own `center` places that lng/lat at the raw canvas
+      // midpoint, which is NOT the visually free area once the docked left
+      // "Kumbh Mela" panel and top-right Stats panel are drawn on top -- on
+      // first load (before any fitBounds/flyTo call ever runs) that made the
+      // initial view read as pushed up/left of where it should sit. Every
+      // other camera move in this file already accounts for this via
+      // mapFlyPadding(); jumpTo (unlike easeTo/flyTo) recenters instantly
+      // with no animation, so calling it here immediately after construction
+      // corrects the initial view before the user perceives any motion.
+      map.jumpTo({
+        center: initialParcel ? [initialParcel.lng, initialParcel.lat] : CENTER,
+        zoom: initialParcel ? 16 : INITIAL_ZOOM,
+        padding: mapFlyPadding(),
+      })
+      mapRef.current = map
+      initMap(map)
     })
-    mapRef.current = map
+
+    return () => {
+      cancelled = true
+      mapCleanupRef.current?.()
+      mapCleanupRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initial-view-only prop, map is created once
+  }, [])
+
+  function initMap(map: MLMap) {
     // Bottom-right, not top-right -- the Stats panel docks top-right and a
     // MapLibre control there sits on a fixed offset unaware of the panel's
     // collapsed/expanded height, so they'd visually collide.
@@ -782,6 +1359,19 @@ export default function MapView({
         promoteId: 'id',
       })
 
+      // Full-viewport dark scrim over the vendored vector basemap, used to
+      // dim it when a class/sub-class filter is active (see the sector/class
+      // filter effect below) -- replaces the old raster basemap's
+      // raster-brightness-max paint property, which only raster layers
+      // support and the vendored CARTO style's ~90 fill/line/symbol layers
+      // don't have an equivalent single knob for. Starts fully transparent;
+      // opacity is the only thing that effect ever touches.
+      map.addLayer({
+        id: 'basemap-dim-scrim',
+        type: 'background',
+        paint: { 'background-color': '#000000', 'background-opacity': 0 },
+      })
+
       // River sits beneath everything else on the map (it's the base
       // waterway the sector plan is drawn over), so it's added first, before
       // sector_plan -- POI layers all get their own vector source below, but
@@ -807,17 +1397,58 @@ export default function MapView({
         })
       }
 
-      // Render order: sector_plan fill (bottom) -> roads -> boundaries (top)
+      // Invisible parcel-shaped hit-target, always present regardless of the
+      // "Sector plan" visibility toggle -- queryRenderedFeatures skips
+      // layers with layout visibility 'none' entirely, so with the toggle
+      // off (a common way to view class-filter emphasis outlines without
+      // the plain fill underneath) sector-plan-fill itself stops being
+      // clickable, and a click inside a filter-highlighted parcel's outline
+      // (but not exactly on the thin outline stroke) would find nothing here
+      // and fall through to sector-hit-target below, wrongly opening the
+      // full Sector Report drawer instead of that parcel's own popup. This
+      // layer keeps the same filter as sector-plan-fill (see the sector/class
+      // filter effect below, which sets both together) so it's exactly as
+      // clickable as the fill would be, just without ever being painted.
       map.addLayer({
-        id: 'sector-plan-fill',
+        id: 'sector-plan-hit-target',
         type: 'fill',
         source: 'sector_plan',
         'source-layer': 'sector_plan',
-        paint: {
-          'fill-color': matchExpr('class_group', CLASS_GROUP_COLORS, '#cbd5e1'),
-          'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.95, 0.75],
-        },
+        paint: { 'fill-color': '#000000', 'fill-opacity': 0.01 },
       })
+
+      // Render order: sector_plan fill (bottom) -> roads -> boundaries (top)
+      {
+        const fillTheme = readMapTheme()
+        const fillColors = fillTheme === 'dark' ? CLASS_GROUP_COLORS_DARK : CLASS_GROUP_COLORS
+        map.addLayer({
+          id: 'sector-plan-fill',
+          type: 'fill',
+          source: 'sector_plan',
+          'source-layer': 'sector_plan',
+          paint: {
+            'fill-color': matchExpr('class_group', fillColors, fillColors.Other),
+            'fill-opacity': SECTOR_FILL_OPACITY[fillTheme],
+          },
+        })
+        // The class hairline (see SECTOR_FILL_OPACITY's note). Carries the
+        // per-class colour that the wash above deliberately no longer does,
+        // and is kept in lockstep with sector-plan-fill everywhere the fill
+        // is filtered or toggled -- an outline surviving a filter its own
+        // fill didn't would draw ghost parcels.
+        map.addLayer({
+          id: 'sector-plan-class-outline',
+          type: 'line',
+          source: 'sector_plan',
+          'source-layer': 'sector_plan',
+          layout: { 'line-join': 'round' },
+          paint: {
+            'line-color': matchExpr('class_group', fillColors, fillColors.Other),
+            'line-width': SECTOR_OUTLINE_WIDTH,
+            'line-opacity': SECTOR_OUTLINE_OPACITY[fillTheme],
+          },
+        })
+      }
       // Visual emphasis for an active class/sub-class filter -- everything
       // already NOT matching the filter is excluded by sector-plan-fill's
       // own setFilter (below), so this is purely about making the surviving
@@ -874,25 +1505,6 @@ export default function MapView({
           'line-dasharray': [2, 1.5],
         },
       })
-      // Signage: a centered "P" on every Parking parcel in the sector plan.
-      map.addLayer({
-        id: 'sector-plan-parking-label',
-        type: 'symbol',
-        source: 'sector_plan',
-        'source-layer': 'sector_plan',
-        filter: ['==', ['get', 'class_group'], 'Parking'],
-        layout: {
-          'text-field': 'P',
-          'text-font': ['Noto Sans Bold'],
-          'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10, 18, 20],
-          'text-allow-overlap': false,
-        },
-        paint: {
-          'text-color': '#1f2937',
-          'text-halo-color': '#ffffff',
-          'text-halo-width': 1.2,
-        },
-      })
       map.addLayer({
         id: 'road-line',
         type: 'line',
@@ -912,24 +1524,49 @@ export default function MapView({
         source: 'sector_boundary',
         'source-layer': 'sector_boundary',
         paint: {
-          'line-color': '#111827',
-          'line-width': 1,
+          'line-color': SECTOR_COLORS[readMapTheme()].boundary,
+          'line-width': SECTOR_BOUNDARY_WIDTH[readMapTheme()],
         },
       })
 
-      // Remaining POI layers (Aug 2026 JSON drop) -- one vector source + one
-      // visual layer per entry in POI_LAYER_DEFS (river excluded -- it was
-      // already added above, beneath sector_plan), rendered on top of the
-      // sector plan/roads/boundaries above. Sources are created up front so
+      // Remaining POI layers (Aug 2026 JSON drop) -- one source + one visual
+      // layer per entry in POI_LAYER_DEFS (river excluded -- it was already
+      // added above, beneath sector_plan), rendered on top of the sector
+      // plan/roads/boundaries above. Sources are created up front so
       // add-layer order below (which controls paint/z-order) doesn't have to
       // match POI_LAYER_DEFS's array order.
+      //
+      // Point-geometry layers get a plain (non-clustering) 'geojson' source
+      // that MapView re-clusters itself on every zoom change -- see the
+      // poiClusterDataRef/syncPoiClusters effect below. MapLibre's built-in
+      // geojson clustering (cluster: true) was tried first, but its
+      // supercluster engine has no "max points per cluster" option: it only
+      // groups points within a fixed screen-pixel radius per zoom level, so
+      // a genuinely dense pocket of points (e.g. 150+ dustbins along one
+      // riverside stretch) still produced one giant cluster no matter how
+      // tight the radius was tuned. clusterPoints() (src/lib/poiClustering.ts)
+      // recursively subdivides any group over MAX_CLUSTER_SIZE instead,
+      // guaranteeing a hard cap. A single full-dataset fetch is safe here
+      // specifically because all 7 point tables are small (under ~1,400 rows
+      // each as of Sept 2026 -- re-check row counts before adding an 8th).
+      // /api/poi/points/[layer] serves the same columns the tiles route
+      // does, so popups read identically either way. Line/polygon POI
+      // layers (river, ashram, kumbh_land, etc.) are unaffected and stay on
+      // vector tiles.
       const remainingPoiDefs = POI_LAYER_DEFS.filter((d) => d.key !== 'river')
       for (const def of remainingPoiDefs) {
-        map.addSource(def.key, {
-          type: 'vector',
-          tiles: [`${location.origin}/api/tiles/${def.key}/{z}/{x}/{y}`],
-          promoteId: 'id',
-        })
+        if (def.geomType === 'point') {
+          map.addSource(def.key, {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] },
+          })
+        } else {
+          map.addSource(def.key, {
+            type: 'vector',
+            tiles: [`${location.origin}/api/tiles/${def.key}/{z}/{x}/{y}`],
+            promoteId: 'id',
+          })
+        }
       }
 
       // Paint polygons first (bottom), then lines, then points (top) --
@@ -938,6 +1575,12 @@ export default function MapView({
       const byGeomType = (t: PoiGeomType) => remainingPoiDefs.filter((d) => d.geomType === t)
 
       for (const def of byGeomType('polygon')) {
+        // Same wash + dedicated hairline treatment as sector-plan-fill/
+        // sector-plan-class-outline (see SECTOR_FILL_OPACITY's note) --
+        // these area POIs (ashrams, tent city, ropeway areas, etc.) are
+        // parcel-shaped just like sector_plan features, so a flat 0.25
+        // fill-color + fill-outline-color read the same "solid blob" way
+        // once several were on screen together.
         map.addLayer({
           id: `poi-${def.key}`,
           type: 'fill',
@@ -945,12 +1588,56 @@ export default function MapView({
           'source-layer': def.key,
           paint: {
             'fill-color': def.color,
-            'fill-opacity': 0.25,
-            'fill-outline-color': def.color,
+            'fill-opacity': POI_POLYGON_FILL_OPACITY,
+          },
+        })
+        map.addLayer({
+          id: `poi-${def.key}-outline`,
+          type: 'line',
+          source: def.key,
+          'source-layer': def.key,
+          layout: { 'line-join': 'round' },
+          paint: {
+            'line-color': def.color,
+            'line-width': POI_POLYGON_OUTLINE_WIDTH,
+            'line-opacity': POI_POLYGON_OUTLINE_OPACITY,
           },
         })
       }
       for (const def of byGeomType('line')) {
+        // Entry/exit routes are a functionally important filter (crowd flow
+        // planning), not just another reference line -- a flat 2px width
+        // that stays visually thin at any zoom made them nearly impossible
+        // to spot zoomed out, and easy to miss even zoomed in against the
+        // basemap's own similarly thin road strokes. Thicker overall, AND
+        // scaling UP as you zoom OUT (the reverse of the usual "thinner
+        // when zoomed out" pattern), so the route stays a clear, deliberate
+        // marker at every zoom instead of shrinking into the background
+        // exactly when the wide view would make it most useful to see.
+        const isEntryExit = def.key === 'entry_exit_line'
+        if (isEntryExit) {
+          // Entry/exit routes are short real-world segments (tens to a few
+          // hundred metres) -- at whole-region zoom levels (4-9) even a wide
+          // stroke is only a handful of screen-pixels long, so it reads as
+          // an easy-to-miss speck no matter how thick the line itself is.
+          // A wide, soft, semi-transparent casing drawn underneath turns
+          // each short segment into an unmissable glowing blob at low zoom,
+          // while fading out (both narrower and more transparent) as you
+          // zoom in and the crisp line underneath becomes legible on its
+          // own -- same idea as the sector-selected-glow halo layer.
+          map.addLayer({
+            id: `poi-${def.key}-glow`,
+            type: 'line',
+            source: def.key,
+            'source-layer': def.key,
+            paint: {
+              'line-color': def.color,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 4, 28, 9, 18, 13, 8, 16, 0],
+              'line-opacity': ['interpolate', ['linear'], ['zoom'], 4, 0.55, 9, 0.4, 16, 0],
+              'line-blur': 1.5,
+            },
+          })
+        }
         map.addLayer({
           id: `poi-${def.key}`,
           type: 'line',
@@ -958,7 +1645,16 @@ export default function MapView({
           'source-layer': def.key,
           paint: {
             'line-color': def.color,
-            'line-width': 2,
+            // Extends all the way down to zoom 4 (whole-state view) at 14px
+            // -- the previous 10-18 range left it clamped to a flat 5px
+            // below zoom 10, but these are short real-world segments (a
+            // route crossing, not a highway), so even 9px barely registered
+            // as more than a colored speck once the whole Haridwar-Rishikesh
+            // region is on screen. Wider at low zoom, plus the glow casing
+            // above, makes the route legible as a shape from far out.
+            'line-width': isEntryExit
+              ? ['interpolate', ['linear'], ['zoom'], 4, 14, 9, 10, 14, 4, 18, 2.5]
+              : 2,
           },
         })
       }
@@ -969,33 +1665,108 @@ export default function MapView({
         // for hover/click and the Layers-panel visibility toggle) but
         // render it fully transparent.
         const hideCircle = Boolean(POI_SIGNAGE_CODES[def.key])
+
+        // Cluster circle -- one per group of nearby points (see clusterRadius
+        // on the geojson source above). 3 size/color-opacity tiers by point
+        // count, matching the mockup: small (2-9), medium (10-49), large
+        // (50+). Uses the layer's own category color throughout, just deeper
+        // opacity at higher counts so a dense cluster reads as "more"
+        // without needing a different hue.
+        map.addLayer({
+          id: `poi-${def.key}-cluster`,
+          type: 'circle',
+          source: def.key,
+          filter: ['has', 'point_count'],
+          paint: {
+            'circle-color': def.color,
+            'circle-opacity': ['step', ['get', 'point_count'], 0.75, 10, 0.85, 50, 0.92],
+            'circle-radius': ['step', ['get', 'point_count'], 9, 10, 14, 50, 19],
+            // Smooths the merge/split "pop" every zoom step causes -- a
+            // cluster's own point_count (and so its radius/opacity tier)
+            // jumps discretely as supercluster recomputes membership on
+            // each zoom change, so without a transition the circle would
+            // instantly snap to its new size instead of visibly growing or
+            // shrinking. Short duration so it still feels responsive to
+            // scroll-wheel zooming rather than lagging behind it.
+            'circle-radius-transition': { duration: 200 },
+            'circle-opacity-transition': { duration: 200 },
+          },
+        })
+        // Count label -- only rendered from CLUSTER_LABEL_MIN_ZOOM up. Below
+        // that, many small nearby clusters (each capped at MAX_CLUSTER_SIZE,
+        // see clusterPoints in src/lib/poiClustering.ts) sit close enough
+        // together that overlapping 2-3 digit numbers turned into unreadable
+        // text soup -- the bare colored circles (poi-{key}-cluster above)
+        // still convey "there's a cluster here", just without a number
+        // fighting its neighbors for space, until there's screen room for
+        // the label to actually mean something.
+        map.addLayer({
+          id: `poi-${def.key}-cluster-count`,
+          type: 'symbol',
+          source: def.key,
+          filter: ['has', 'point_count'],
+          minzoom: CLUSTER_LABEL_MIN_ZOOM,
+          layout: {
+            'text-field': ['get', 'point_count_abbreviated'],
+            'text-font': ['Noto Sans Bold'],
+            'text-size': ['step', ['get', 'point_count'], 10.5, 10, 12, 50, 13],
+            'text-allow-overlap': true,
+          },
+          paint: {
+            // Same core-vs-basemap contrast approach as sector-selected-glow
+            // text elsewhere on this map: dark text reads cleanly against
+            // this layer's own (fairly light/saturated) category colors,
+            // unlike white which washed out against amenities' amber.
+            'text-color': '#0b0d11',
+          },
+        })
+
         // The visible dot's own radius (2.5-6px) is too small a target to
         // reliably click/tap -- queryRenderedFeatures hit-tests against the
         // actual rendered geometry, so a miss just falls through to the
         // sector-selection click handler underneath instead of opening this
         // point's popup. A wider fully-transparent circle underneath widens
         // the real click area without changing how the dot/badge looks.
+        // Filtered to unclustered points only -- clustered points already
+        // have their own (much bigger) clickable circle above.
         map.addLayer({
           id: `poi-${def.key}-hit`,
           type: 'circle',
           source: def.key,
-          'source-layer': def.key,
+          filter: ['!', ['has', 'point_count']],
           paint: {
             'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 10, 16, 14],
             'circle-opacity': 0,
           },
         })
+        // Dot-density style: solid flat-filled circle, no white stroke ring
+        // -- against the near-black/navy dark basemap a stroke read as a
+        // washed-out halo around every point, muddying the actual category
+        // color. Slightly larger than the old 2.5-6px radius so the flat
+        // fill still has visual presence without the stroke's extra few
+        // pixels of apparent size.
         map.addLayer({
           id: `poi-${def.key}`,
           type: 'circle',
           source: def.key,
-          'source-layer': def.key,
+          filter: ['!', ['has', 'point_count']],
           paint: {
             'circle-color': def.color,
-            'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 2.5, 16, 6],
-            'circle-stroke-color': '#ffffff',
-            'circle-stroke-width': 1,
-            ...(hideCircle ? { 'circle-opacity': 0, 'circle-stroke-opacity': 0 } : {}),
+            // Extends down to zoom 4 at radius 6 -- below zoom 10 this used
+            // to clamp flat to 3px, which (like entry_exit_line's own
+            // line-width) barely registered once zoomed out to a
+            // whole-region view. Every point layer gets this same wider
+            // low-zoom range, not just entry/exit, so dots stay visibly
+            // present at any zoom instead of shrinking into specks.
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 6, 10, 4, 16, 7],
+            'circle-opacity': hideCircle ? 0 : 0.88,
+            // Matches poi-{key}-cluster's own transition -- a point popping
+            // out of a cluster as it crosses clusterMaxZoom (or into one)
+            // otherwise snaps straight to full size/opacity the instant the
+            // filter flips, which read as an abrupt flicker rather than a
+            // point "arriving".
+            'circle-radius-transition': { duration: 200 },
+            'circle-opacity-transition': { duration: 200 },
           },
         })
 
@@ -1013,7 +1784,7 @@ export default function MapView({
             id: `poi-${def.key}-label`,
             type: 'symbol',
             source: def.key,
-            'source-layer': def.key,
+            filter: ['!', ['has', 'point_count']],
             layout: {
               'icon-image': iconId,
               'icon-anchor': 'bottom',
@@ -1023,6 +1794,37 @@ export default function MapView({
           })
         }
       }
+
+      // Loads each clustered point layer's full raw dataset once, then
+      // clusters+renders it immediately and again on every zoom change (see
+      // clusterPoints in src/lib/poiClustering.ts for why this is custom
+      // grid clustering rather than MapLibre's built-in cluster:true).
+      // Recomputes on zoom only, not pan -- clustering happens in a
+      // zoom-fixed world-pixel grid (not viewport-relative), so panning
+      // alone never changes which points belong to which cluster.
+      const pointDefs = byGeomType('point')
+      function syncPoiClusters() {
+        const zoom = map.getZoom()
+        for (const def of pointDefs) {
+          const raw = poiRawFeaturesRef.current[def.key]
+          if (!raw) continue
+          const source = map.getSource(def.key) as GeoJSONSource | undefined
+          source?.setData(clusterPoints(raw, zoom))
+        }
+      }
+      Promise.all(
+        pointDefs.map((def) =>
+          fetch(`${location.origin}/api/poi/points/${def.key}`)
+            .then((r) => r.json())
+            .then((fc: { features: Feature<Point>[] }) => {
+              poiRawFeaturesRef.current[def.key] = fc.features
+            })
+            .catch(() => {
+              poiRawFeaturesRef.current[def.key] = []
+            }),
+        ),
+      ).then(syncPoiClusters)
+      map.on('zoomend', syncPoiClusters)
 
       // Invisible hit-target covering each sector's full boundary polygon
       // (near-zero, not exactly-zero, opacity so it still paints and stays
@@ -1047,13 +1849,14 @@ export default function MapView({
       // dark neutral reads as "highlighted" without fighting for attention,
       // and stays distinct from the blue selected-sector outline below. The
       // glow is now subtle (thin + low opacity) rather than a thick ring.
+      const sectorColors = SECTOR_COLORS[readMapTheme()]
       map.addLayer({
         id: 'sector-hover-fill',
         type: 'fill',
         source: 'sector_boundary',
         'source-layer': 'sector_boundary',
         filter: NO_MATCH,
-        paint: { 'fill-color': '#475569', 'fill-opacity': 0.08 },
+        paint: { 'fill-color': sectorColors.hover, 'fill-opacity': 0.08 },
       })
       map.addLayer({
         id: 'sector-hover-glow',
@@ -1062,7 +1865,7 @@ export default function MapView({
         'source-layer': 'sector_boundary',
         filter: NO_MATCH,
         paint: {
-          'line-color': '#475569',
+          'line-color': sectorColors.hover,
           'line-width': 6,
           'line-opacity': 0.2,
           'line-blur': 4,
@@ -1074,22 +1877,47 @@ export default function MapView({
         source: 'sector_boundary',
         'source-layer': 'sector_boundary',
         filter: NO_MATCH,
-        paint: { 'line-color': '#475569', 'line-width': 2.5, 'line-opacity': 0.9 },
+        paint: { 'line-color': sectorColors.hover, 'line-width': 2.5, 'line-opacity': 0.9 },
       })
-      // Selected-sector outline (violet) -- sector-plan-fill/road-line are
-      // already filtered down to just this sector elsewhere; this outline
-      // is the extra visual anchor for which one that is. Deliberately not
-      // blue: ROAD_TYPE_COLORS['Proposed Road'] is #2563eb, and a thick
-      // outline in that same hue was indistinguishable from proposed-road
-      // segments running along/near the boundary.
+      // Selected-sector outline -- sector-plan-fill/road-line are already
+      // filtered down to just this sector elsewhere; this outline is the
+      // extra visual anchor for which one that is. Deliberately not blue:
+      // ROAD_TYPE_COLORS['Proposed Road'] is #2563eb, and a thick outline in
+      // that same hue was indistinguishable from proposed-road segments
+      // running along/near the boundary.
       map.addLayer({
         id: 'sector-selected-outline',
         type: 'line',
         source: 'sector_boundary',
         'source-layer': 'sector_boundary',
         filter: NO_MATCH,
-        paint: { 'line-color': '#7c3aed', 'line-width': 5, 'line-opacity': 1 },
+        paint: { 'line-color': sectorColors.selected, 'line-width': 5, 'line-opacity': 1 },
       })
+      // Dark mode's selected outline is a glowing accent (unlike light mode's
+      // flat violet), so it gets the same soft blurred halo treatment as
+      // sector-hover-glow above -- otherwise a plain 5px line reads as a
+      // thick flat stroke rather than the "glowing point" look this was
+      // tuned toward. Hidden outright in light mode (paired 1:1 with
+      // sector-selected-outline's own filter by the sector-filter effect
+      // below) rather than just left at opacity 0, since MapLibre still
+      // costs a hit-test pass for every visible-but-invisible layer.
+      map.addLayer(
+        {
+          id: 'sector-selected-glow',
+          type: 'line',
+          source: 'sector_boundary',
+          'source-layer': 'sector_boundary',
+          filter: NO_MATCH,
+          layout: { visibility: readMapTheme() === 'dark' ? 'visible' : 'none' },
+          paint: {
+            'line-color': sectorColors.selected,
+            'line-width': 10,
+            'line-opacity': 0.35,
+            'line-blur': 6,
+          },
+        },
+        'sector-selected-outline',
+      )
 
       // Measure-distance path -- plain client-side GeoJSON (not a vector tile
       // source like everything else here), rewritten in place by the redraw
@@ -1193,17 +2021,19 @@ export default function MapView({
         },
       })
 
-      // Apply the initial layer visibility (POI layers default to off) right
+      // Apply the current layer visibility (POI layers default to off) right
       // away, synchronously with layer creation -- every layer above is
       // added with MapLibre's default 'visible' layout, so without this the
       // POI dots/lines/fills would render (or stay rendered indefinitely, if
       // the separate visibility-syncing effect below never re-runs) despite
-      // the sidebar's toggles showing off. `visibility` here is always the
-      // SSR-safe defaults (not yet the localStorage-restored value -- see the
-      // mount effect near the other localStorage effects), so a user with
-      // customized visibility may see one frame of defaults before the
-      // visibility-syncing effect below reconciles it once storage loads.
-      applyLayerVisibility(map, visibility)
+      // the sidebar's toggles showing off. Reads visibilityRef, NOT the
+      // `visibility` variable directly -- map creation now happens
+      // asynchronously (after the basemap style JSON fetch resolves), so by
+      // the time this 'load' handler fires, the localStorage-restore mount
+      // effect has often already updated `visibility` state to the user's
+      // real saved preferences; the plain variable here would still be
+      // whatever it was back when this closure was first created.
+      applyLayerVisibility(map, visibilityRef.current)
 
       function setHoverFilter(sectorNo: number | null) {
         const filter: FilterSpecification =
@@ -1245,8 +2075,12 @@ export default function MapView({
         if (POI_SIGNAGE_CODES[d.key]) ids.push(`poi-${d.key}-label`)
         return ids
       })
+      // Cluster circles -- kept separate from poiLayerIds since a cluster
+      // click zooms in (see the click handler below) rather than opening a
+      // popup, but they still get the same pointer-cursor hover treatment.
+      const poiClusterLayerIds = byGeomType('point').map((d) => `poi-${d.key}-cluster`)
 
-      for (const layerId of poiLayerIds) {
+      for (const layerId of [...poiLayerIds, ...poiClusterLayerIds]) {
         map.on('mouseenter', layerId, () => {
           if (measuringRef.current) return
           map.getCanvas().style.cursor = 'pointer'
@@ -1257,21 +2091,27 @@ export default function MapView({
         })
       }
 
-      // Single map-wide click handler drives selection: clicking any
-      // feature inside a sector (a parcel, a road, or just bare sector
-      // area via the hit-target) selects that sector everywhere -- the
-      // dropdown, the map filter/fly-to, and the Stats panel all key off
-      // the same selectedSector state. Clicking outside every sector
-      // deselects back to "All sectors". The popup, though, only makes
-      // sense for a real feature (a parcel or a road) -- sector-hit-target
-      // is an invisible catch-all just for selection, so a click that only
-      // lands on bare sector area (no parcel/road underneath) selects the
-      // sector but shows no popup instead of one full of the boundary's own
-      // properties, which isn't what was clicked.
+      // Single map-wide click handler: clicking bare sector area (only
+      // sector-hit-target matches, no parcel/road underneath) selects that
+      // sector everywhere -- the dropdown, the map filter/fly-to, the Stats
+      // panel, and the Sector Report drawer all key off the same
+      // selectedSector state. Clicking outside every sector deselects back
+      // to "All sectors".
+      //
+      // Clicking an actual parcel or road, though, only shows that
+      // feature's info popup -- it does NOT select the sector. This matters
+      // most while a class/sub-class filter is active (e.g. filtered to
+      // "Religious Camping" and clicking one of the highlighted matches to
+      // inspect it): selecting the sector on every such click used to yank
+      // the heavy Sector Report drawer open on top of what was meant to be
+      // a quick per-parcel look, fighting the filter-and-inspect workflow.
+      // Sector selection remains reachable via bare sector-area clicks, the
+      // search dropdown's "Jump to sector", and the Stats panel's
+      // per-sector row.
       //
       // POI markers/lines/areas are a separate concern -- clicking one shows
       // its own popup but never changes sector selection, so they're checked
-      // first and, when hit, short-circuit the sector-selecting logic below.
+      // first and, when hit, short-circuit the logic below.
       map.on('click', (e) => {
         // Measure mode takes over every click while active -- checked via a
         // ref (not the `measuring` state directly) since this whole 'load'
@@ -1282,6 +2122,25 @@ export default function MapView({
         if (measuringRef.current) {
           addMeasurePoint([e.lngLat.lng, e.lngLat.lat])
           clearPreview()
+          return
+        }
+
+        // Clusters zoom the map in rather than opening a popup -- a cluster
+        // circle represents many points at once, so there's no single
+        // feature to show a popup for. Our clustering (see clusterPoints in
+        // src/lib/poiClustering.ts) is a plain zoom-driven pixel grid with no
+        // supercluster-style index to ask "the exact zoom this cluster
+        // splits at", so this just zooms in a fixed +3 levels centered on
+        // the click -- clusters recompute automatically via the zoomend
+        // listener above (syncPoiClusters), and +3 reliably breaks apart a
+        // capped (<=20-point) cluster in practice for this dataset's density.
+        const clusterHits = map.queryRenderedFeatures(e.point, { layers: poiClusterLayerIds })
+        if (clusterHits.length > 0) {
+          map.easeTo({
+            center: [e.lngLat.lng, e.lngLat.lat],
+            zoom: Math.min(map.getZoom() + 3, 18),
+            duration: 500,
+          })
           return
         }
 
@@ -1301,8 +2160,26 @@ export default function MapView({
           return
         }
 
+        // sector-plan-hit-target (an always-clickable invisible twin of
+        // sector-plan-fill, see where it's created above) plus the class-
+        // filter emphasis ring are queried alongside sector-plan-fill itself
+        // -- when "Sector plan" is toggled off, sector-plan-fill's layout
+        // visibility is 'none', which queryRenderedFeatures treats as "not
+        // there" for hit-testing purposes even with a filter-highlighted
+        // parcel's outline still visibly drawn. Without the hit-target, a
+        // click anywhere inside such a parcel's outline (but not exactly on
+        // the thin stroke itself) would find no detail hit here and fall
+        // through to sector-hit-target below, wrongly opening the full
+        // Sector Report drawer instead of just that parcel's popup.
         const hits = map.queryRenderedFeatures(e.point, {
-          layers: ['sector-plan-fill', 'road-line', 'sector-hit-target'],
+          layers: [
+            'sector-plan-fill',
+            'sector-plan-hit-target',
+            'sector-plan-filter-glow',
+            'sector-plan-filter-outline',
+            'road-line',
+            'sector-hit-target',
+          ],
         })
         if (hits.length === 0) {
           setSelectedSector('all')
@@ -1310,24 +2187,46 @@ export default function MapView({
           popupParcelIdRef.current = null
           return
         }
+        const PARCEL_DETAIL_LAYERS = [
+          'sector-plan-fill',
+          'sector-plan-hit-target',
+          'sector-plan-filter-glow',
+          'sector-plan-filter-outline',
+        ]
         const detail = hits.find(
-          (f) => f.layer.id === 'sector-plan-fill' || f.layer.id === 'road-line',
+          (f) => PARCEL_DETAIL_LAYERS.includes(f.layer.id) || f.layer.id === 'road-line',
         )
-        const raw = (detail ?? hits[0]).properties?.sector_no
-        setSelectedSector(typeof raw === 'number' ? raw : 'all')
         if (detail) {
-          showPopup(map, detail as unknown as MapGEOJSONFeatureCompat, e.lngLat)
-        } else {
-          popupRef.current?.remove()
-          popupParcelIdRef.current = null
+          // A real parcel/road was hit -- show its popup only, don't touch
+          // selectedSector (see comment above the handler). Normalize every
+          // parcel-detail layer id back to 'sector-plan-fill' so
+          // showPopup/propertyRowsHtml's layer.id switch (which only knows
+          // about the fill layer, not its hit-target/emphasis-ring siblings)
+          // resolves the parcel property rows correctly instead of falling
+          // through to the generic/wrong branch.
+          const normalized = PARCEL_DETAIL_LAYERS.includes(detail.layer.id)
+            ? ({
+                ...detail,
+                layer: { id: 'sector-plan-fill' },
+              } as unknown as MapGEOJSONFeatureCompat)
+            : (detail as unknown as MapGEOJSONFeatureCompat)
+          showPopup(map, normalized, e.lngLat)
+          return
         }
+        // Only sector-hit-target matched (bare sector area, no parcel/road
+        // underneath) -- this is the one remaining map click path that
+        // selects a sector, with no popup since nothing concrete was clicked.
+        const raw = hits[0].properties?.sector_no
+        setSelectedSector(typeof raw === 'number' ? raw : 'all')
+        popupRef.current?.remove()
+        popupParcelIdRef.current = null
       })
 
       // Right-click: undoes the last committed point while measuring, or --
-      // otherwise -- deselects the current sector, mirroring the "click an
-      // empty area to deselect" gesture without having to find empty area.
-      // Suppresses both MapLibre's own default handling and the browser's
-      // native context menu either way.
+      // otherwise -- closes any open parcel popup and deselects the current
+      // sector, mirroring the "click an empty area to deselect" gesture
+      // without having to find empty area. Suppresses both MapLibre's own
+      // default handling and the browser's native context menu either way.
       map.on('contextmenu', (e) => {
         if (measuringRef.current) {
           e.preventDefault()
@@ -1336,11 +2235,16 @@ export default function MapView({
           clearPreview()
           return
         }
-        if (selectedSectorRef.current === 'all') return
+        // A popup can be open with no sector selected (e.g. clicking a
+        // parcel outside any selected sector), so this can't early-return
+        // on selectedSectorRef alone -- otherwise right-click would do
+        // nothing at all in that state instead of closing the popup.
+        if (selectedSectorRef.current === 'all' && !popupRef.current) return
         e.preventDefault()
         e.originalEvent?.preventDefault?.()
         setSelectedSector('all')
         popupRef.current?.remove()
+        popupRef.current = null
         popupParcelIdRef.current = null
       })
 
@@ -1361,13 +2265,12 @@ export default function MapView({
       })
     })
 
-    return () => {
+    mapCleanupRef.current = () => {
       marker?.remove()
       map.remove()
       mapRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- initial-view-only prop, map is created once
-  }, [])
+  }
 
   // Measurement mutators -- pure functional updates, so these are safe to
   // call from the map's once-registered click/contextmenu handlers (they
@@ -1577,6 +2480,21 @@ export default function MapView({
       combined.length === 0 ? null : combined.length === 1 ? combined[0] : ['all', ...combined]
 
     map.setFilter('sector-plan-fill', finalFilter as FilterSpecification | null)
+    // Always kept identical to sector-plan-fill's own filter -- see where
+    // sector-plan-hit-target is created (in initMap) for why this invisible
+    // twin exists; if its filter ever drifted from the fill's, a click on a
+    // now-filtered-out parcel could still register as a parcel-detail hit
+    // instead of correctly falling through to sector selection.
+    if (map.getLayer('sector-plan-hit-target')) {
+      map.setFilter('sector-plan-hit-target', finalFilter as FilterSpecification | null)
+    }
+    // The class hairline is the other half of sector-plan-fill's paint job
+    // (see SECTOR_FILL_OPACITY's note) -- it must track the exact same
+    // filter or a filtered-out parcel would keep its coloured edge with no
+    // fill behind it, reading as a ghost outline.
+    if (map.getLayer('sector-plan-class-outline')) {
+      map.setFilter('sector-plan-class-outline', finalFilter as FilterSpecification | null)
+    }
 
     // Visual emphasis (glow + outline) tracks the exact same combined
     // filter as the fill itself -- only shown at all once a class/sub-class
@@ -1591,12 +2509,44 @@ export default function MapView({
     if (map.getLayer('sector-plan-filter-outline')) {
       map.setFilter('sector-plan-filter-outline', emphasisFilter)
     }
+    // With "Sector plan" toggled off, sector-plan-fill's own layout
+    // visibility (driven by the applyLayerVisibility effect, keyed only on
+    // the sidebar toggles) is 'none' -- so a class/sub-class filter alone
+    // used to leave you with just the thin emphasis outline and no fill,
+    // even though the filter clearly means "show me these parcels". Once a
+    // class filter narrows things down, force the fill (and its matching
+    // hit-target) visible regardless of the toggle; with no filter active
+    // this falls back to the toggle exactly as before.
+    if (map.getLayer('sector-plan-fill')) {
+      map.setLayoutProperty(
+        'sector-plan-fill',
+        'visibility',
+        emphasisActive || visibility.sector_plan ? 'visible' : 'none',
+      )
+    }
+    if (map.getLayer('sector-plan-class-outline')) {
+      map.setLayoutProperty(
+        'sector-plan-class-outline',
+        'visibility',
+        emphasisActive || visibility.sector_plan ? 'visible' : 'none',
+      )
+    }
+    if (map.getLayer('sector-plan-hit-target')) {
+      map.setLayoutProperty(
+        'sector-plan-hit-target',
+        'visibility',
+        emphasisActive || visibility.sector_plan ? 'visible' : 'none',
+      )
+    }
     // Dim the basemap so the (now outlined/glowing) matched parcels read as
     // the obvious focus instead of competing with road/label clutter --
     // fill-opacity alone stops being a distinguishing signal once the map is
-    // already filtered down to a single class.
-    if (map.getLayer('osm')) {
-      map.setPaintProperty('osm', 'raster-opacity', emphasisActive ? 0.45 : 1)
+    // already filtered down to a single class. A black scrim above the
+    // vendored vector basemap (but below sector_plan/road/POI) darkens it
+    // consistently in both light and dark mode, unlike blending toward a
+    // fixed color which would read as lightening in dark mode.
+    if (map.getLayer('basemap-dim-scrim')) {
+      map.setPaintProperty('basemap-dim-scrim', 'background-opacity', emphasisActive ? 0.45 : 0)
     }
 
     // road-line is one shared layer for all 3 road types -- which ones
@@ -1618,38 +2568,18 @@ export default function MapView({
           : ['all', ...roadCombined]
     map.setFilter('road-line', roadFilter as FilterSpecification | null)
 
-    // The "P" parking signage shares sector_plan's source but has its own
-    // permanent class_group=Parking filter, so it needs the sector filter
-    // layered on top explicitly -- otherwise selecting a sector hides the
-    // grey Parking fill (sector-plan-fill) but leaves every "P" on the map
-    // still showing, since this layer was never included in finalFilter.
-    // It's also hidden outright when a different class is selected, same as
-    // any other class's parcels would be.
-    if (map.getLayer('sector-plan-parking-label')) {
-      const NEVER_MATCH: FilterSpecification = ['==', ['get', 'class_group'], '__none__']
-      const anyFilterActive = classFilter.length > 0 || subclassPairs.length > 0
-      const parkingReachable =
-        classFilter.includes('Parking') || subclassPairs.some(([cls]) => cls === 'Parking')
-      const parkingFilter =
-        anyFilterActive && !parkingReachable
-          ? NEVER_MATCH
-          : sectorFilter
-            ? ([
-                'all',
-                ['==', ['get', 'class_group'], 'Parking'],
-                sectorFilter,
-              ] as unknown as FilterSpecification)
-            : (['==', ['get', 'class_group'], 'Parking'] as FilterSpecification)
-      map.setFilter('sector-plan-parking-label', parkingFilter)
-    }
-
+    const selectedSectorFilter = (
+      selectedSector === 'all'
+        ? ['==', ['get', 'sector_no'], -1]
+        : ['==', ['get', 'sector_no'], selectedSector]
+    ) as FilterSpecification
     if (map.getLayer('sector-selected-outline')) {
-      map.setFilter(
-        'sector-selected-outline',
-        (selectedSector === 'all'
-          ? ['==', ['get', 'sector_no'], -1]
-          : ['==', ['get', 'sector_no'], selectedSector]) as FilterSpecification,
-      )
+      map.setFilter('sector-selected-outline', selectedSectorFilter)
+    }
+    // Same filter as sector-selected-outline -- see where sector-selected-glow
+    // is created (in initMap) for why this dark-mode-only halo exists.
+    if (map.getLayer('sector-selected-glow')) {
+      map.setFilter('sector-selected-glow', selectedSectorFilter)
     }
 
     if (selectedSector !== 'all') {
@@ -1669,6 +2599,48 @@ export default function MapView({
       }
     }
   }, [selectedSector, classFilter, subclassFilter, sectors, visibility])
+
+  // POI sub-class filter -- narrows individual POI layers to a subset of
+  // their subclass values, for the 4 layers that have one (see
+  // POI_SUBCLASS_COLUMNS). Independent of layout visibility
+  // (applyLayerVisibility's job) and independent of the sector/class filter
+  // effect above -- POI layers were never sector-scoped on the map layer
+  // itself, only in /api/stats's server-side aggregation, so this is the
+  // first filter expression ever applied to poi-* layers, not an extension
+  // of one.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) return
+
+    for (const [layerKey, column] of Object.entries(POI_SUBCLASS_COLUMNS)) {
+      const subs = poiSubclassFilter[layerKey]
+      const isClustered = POI_LAYER_DEFS.find((d) => d.key === layerKey)?.geomType === 'point'
+
+      if (isClustered) {
+        // amenities/sanitation are clustered point layers (see initMap) --
+        // clustering happens client-side over the layer's full raw dataset
+        // (clusterPoints in src/lib/poiClustering.ts), so a cluster's
+        // point_count can never be made to reflect an active sub-class
+        // filter via setFilter alone (a filtered-out point would still
+        // count toward its cluster). Instead, /api/poi/points/[layer]
+        // itself is re-queried scoped to just the selected sub-classes,
+        // re-clustered, and swapped in via setData() -- so clusters only
+        // ever contain matching points and their counts stay exactly
+        // correct. See refetchClusteredPoiSource above.
+        void refetchClusteredPoiSource(map, layerKey, subs, poiRawFeaturesRef)
+        continue
+      }
+
+      const filter: FilterSpecification | null =
+        subs && subs.length > 0
+          ? (['in', ['get', column], ['literal', subs]] as unknown as FilterSpecification)
+          : null
+      for (const suffix of ['', '-hit', '-label'] as const) {
+        const id = `poi-${layerKey}${suffix}`
+        if (map.getLayer(id)) map.setFilter(id, filter)
+      }
+    }
+  }, [poiSubclassFilter])
 
   // Resolves the current filter down to a single (class, subclass|null)
   // "locate target", when there is exactly one -- i.e. exactly one class
@@ -1789,15 +2761,74 @@ export default function MapView({
     }
   }, [poiLocateTarget])
 
-  /** Stats panel POI row click -- toggles the layer's visibility (existing
+  /** Whole-layer POI row/checkbox click (Stats panel row or left search
+   *  panel's main checkbox) -- toggles the layer's visibility (existing
    *  behavior) and, when that turns it on, also sets it as the locate
    *  target so the map flies to fit it and the panel shows its locator
    *  list. Clicking an already-visible row just turns it off, same as
-   *  before, and clears any locate result for it. */
-  function handlePoiRowClick(layerKey: string) {
+   *  before, and clears any locate result for it. Now also always resolves
+   *  to a clean fully-on-or-off state, clearing any partial
+   *  poiSubclassFilter entry either way -- same as toggleClassFilter
+   *  dropping subclassFilter[c] on a whole-class click, so the two
+   *  selection modes never fight. */
+  function togglePoiLayerFilter(layerKey: string) {
     const turningOn = !visibility[layerKey]
     setVisibility((v) => ({ ...v, [layerKey]: !v[layerKey] }))
+    setPoiSubclassFilter((prev) => {
+      if (!(layerKey in prev)) return prev
+      const next = { ...prev }
+      delete next[layerKey]
+      return next
+    })
     setPoiLocateTarget(turningOn ? layerKey : null)
+  }
+
+  /** Toggling a POI sub-class checkbox -- same interaction model as
+   *  toggleSubclassFilter, adapted for POI's flat on/off visibility[key]
+   *  boolean instead of classFilter's array membership:
+   *  - Layer currently off: picking any one subclass turns it on, scoped to
+   *    just that subclass (fresh partial selection).
+   *  - Layer fully on (no subclass filter yet): picking one subclass "splits"
+   *    it into a partial selection containing every OTHER subclass, so
+   *    nothing visually changes except the one just unchecked.
+   *  - Unchecking the last remaining subclass in a partial selection turns
+   *    the whole layer off rather than leaving an empty-but-on phantom
+   *    state -- there's no tri-state "on but showing nothing" concept here,
+   *    same as there's none for a fully-deselected class. */
+  function togglePoiSubclassFilter(layerKey: string, sub: string) {
+    const wasFullyOn = visibility[layerKey] && !poiSubclassFilter[layerKey]
+    const current = poiSubclassFilter[layerKey] ?? (wasFullyOn ? poiSubclassNames(layerKey) : [])
+    const next = current.includes(sub) ? current.filter((x) => x !== sub) : [...current, sub]
+
+    if (next.length === 0) {
+      setVisibility((v) => ({ ...v, [layerKey]: false }))
+      setPoiSubclassFilter((prev) => {
+        const copy = { ...prev }
+        delete copy[layerKey]
+        return copy
+      })
+      return
+    }
+
+    setVisibility((v) => (v[layerKey] ? v : { ...v, [layerKey]: true }))
+    setPoiSubclassFilter((prev) => ({ ...prev, [layerKey]: next }))
+  }
+
+  function toggleExpandedFilterPoi(layerKey: string) {
+    setExpandedFilterPois((prev) => {
+      const next = new Set(prev)
+      if (next.has(layerKey)) next.delete(layerKey)
+      else next.add(layerKey)
+      return next
+    })
+  }
+
+  /** All known sub-class names for a POI layer, from the fetched stats --
+   *  mirrors classSubclassNames. Empty for the 12 layers with no subclass
+   *  column (POI_SUBCLASS_COLUMNS doesn't include them, so poiSubclassStats
+   *  never has rows for them either). */
+  function poiSubclassNames(layerKey: string): string[] {
+    return poiSubclassStats.filter((r) => r.layer === layerKey).map((r) => r.subclass)
   }
 
   const classGroups = Object.keys(CLASS_GROUP_COLORS).sort((a, b) => a.localeCompare(b))
@@ -1833,6 +2864,39 @@ export default function MapView({
     })
   }
 
+  function clearAllFilters() {
+    setClassFilter([])
+    setSubclassFilter({})
+    setVisibility((v) => {
+      const next = { ...v }
+      for (const d of ROAD_TYPE_DEFS) next[d.key] = false
+      for (const d of POI_LAYER_DEFS) next[d.key] = false
+      return next
+    })
+  }
+
+  function selectAllClasses() {
+    setClassFilter(classGroups)
+    setSubclassFilter({})
+  }
+
+  function selectAllRoads() {
+    setVisibility((v) => {
+      const next = { ...v }
+      for (const d of ROAD_TYPE_DEFS) next[d.key] = true
+      return next
+    })
+  }
+
+  function selectAllPois() {
+    setVisibility((v) => {
+      const next = { ...v }
+      for (const d of POI_LAYER_DEFS) next[d.key] = true
+      return next
+    })
+    setPoiSubclassFilter({})
+  }
+
   function toggleExpandedFilterClass(cls: string) {
     setExpandedFilterClasses((prev) => {
       const next = new Set(prev)
@@ -1846,7 +2910,12 @@ export default function MapView({
    *  as the starting point when a class goes from "fully selected" to
    *  "partially selected" via a single sub-class checkbox click. */
   function classSubclassNames(cls: string): string[] {
-    return subclassStats.filter((r) => r.class_group === cls).map((r) => r.subclass)
+    // Null subclasses (see subclassStats' own comment for why they exist)
+    // aren't a real selectable sub-class in the UI, so they're dropped here
+    // rather than propagated into subclassFilter's string[] selections.
+    return subclassStats
+      .filter((r) => r.class_group === cls && r.subclass !== null)
+      .map((r) => r.subclass as string)
   }
 
   const baseLayerRows: Array<{
@@ -1877,7 +2946,9 @@ export default function MapView({
   const matchedSectors = sectors.filter((s) => matchesQuery(s.name))
   const matchedClasses = classGroups.filter((c) => matchesQuery(c, ...classSubclassNames(c)))
   const matchedRoads = ROAD_TYPE_DEFS.filter((d) => matchesQuery(d.label))
-  const matchedPois = POI_LAYER_DEFS.filter((d) => matchesQuery(d.label))
+  const matchedPois = POI_LAYER_DEFS.filter((d) =>
+    matchesQuery(d.label, ...poiSubclassNames(d.key)),
+  )
   const matchedBaseLayers = baseLayerRows.filter((b) => matchesQuery(b.label))
   if (matchedSectors.length > 0)
     searchGroups.push({ group: 'Jump to sector', rows: matchedSectors.length })
@@ -2135,6 +3206,14 @@ export default function MapView({
                     <XIcon className="h-2.5 w-2.5 shrink-0" />
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={clearAllFilters}
+                  style={{ color: 'var(--map-fg-faint)' }}
+                  className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 px-2 text-[11.5px] font-medium underline-offset-2 hover:underline"
+                >
+                  Clear all
+                </button>
               </div>
             )}
             <div className="relative">
@@ -2211,6 +3290,33 @@ export default function MapView({
                         >
                           {group}
                         </span>
+                        {(group === 'Sector classes' ||
+                          group === 'Roads' ||
+                          group === 'POI layers') && (
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (group === 'Sector classes') selectAllClasses()
+                              else if (group === 'Roads') selectAllRoads()
+                              else selectAllPois()
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                if (group === 'Sector classes') selectAllClasses()
+                                else if (group === 'Roads') selectAllRoads()
+                                else selectAllPois()
+                              }
+                            }}
+                            style={{ color: 'var(--map-accent)' }}
+                            className="shrink-0 cursor-pointer px-1 text-[10.5px] font-semibold hover:underline"
+                          >
+                            All
+                          </span>
+                        )}
                         <span
                           className="shrink-0 text-[10.5px] tabular-nums"
                           style={{ color: 'var(--map-fg-faint)' }}
@@ -2252,8 +3358,14 @@ export default function MapView({
                         <ul>
                           {matchedClasses.map((c) => {
                             const isFullySelected = classFilter.includes(c)
+                            // Null-subclass rows (see subclassStats' own comment) aren't a real
+                            // selectable sub-class -- their features are still counted in the
+                            // class's own total via byClass, just not offered as a checkbox here.
                             const subclasses = subclassStats
-                              .filter((r) => r.class_group === c)
+                              .filter(
+                                (r): r is typeof r & { subclass: string } =>
+                                  r.class_group === c && r.subclass !== null,
+                              )
                               .sort((a, b) => b.features - a.features)
                             const partialSubs = subclassFilter[c]
                             const isIndeterminate =
@@ -2264,9 +3376,13 @@ export default function MapView({
                             const isChecked =
                               isFullySelected || (!!partialSubs && partialSubs.length > 0)
                             const hasChildren = subclasses.length > 1
+                            // subclass can be null -- sector_plan rows with no subclass value
+                            // still come back as one (class_group, null) row from /api/stats
+                            // (unlike the POI subclass query, this one has no "IS NOT NULL"
+                            // filter), so every .toLowerCase() below has to tolerate that.
                             const subclassNameMatches =
                               q !== '' &&
-                              subclasses.some((s) => s.subclass.toLowerCase().includes(q))
+                              subclasses.some((s) => s.subclass?.toLowerCase().includes(q))
                             const isExpanded = expandedFilterClasses.has(c) || subclassNameMatches
                             // While actively searching, only show the subclasses that
                             // themselves match the query -- a class can match via one
@@ -2276,7 +3392,7 @@ export default function MapView({
                             // view. Once the query is cleared/manually expanded, the
                             // full list comes back.
                             const visibleSubclasses = subclassNameMatches
-                              ? subclasses.filter((s) => s.subclass.toLowerCase().includes(q))
+                              ? subclasses.filter((s) => s.subclass?.toLowerCase().includes(q))
                               : subclasses
                             return (
                               <li key={c} role="option" aria-selected={isChecked}>
@@ -2471,62 +3587,158 @@ export default function MapView({
                         <ul>
                           {matchedPois.map((d) => {
                             const signageCode = POI_SIGNAGE_CODES[d.key]
+                            const subclasses = poiSubclassStats
+                              .filter((r) => r.layer === d.key)
+                              .sort((a, b) => b.features - a.features)
+                            const partialSubs = poiSubclassFilter[d.key]
+                            const isFullyOn = visibility[d.key] && !partialSubs
+                            const isChecked = isFullyOn || (!!partialSubs && partialSubs.length > 0)
+                            const isIndeterminate =
+                              !isFullyOn &&
+                              !!partialSubs &&
+                              partialSubs.length > 0 &&
+                              partialSubs.length < subclasses.length
+                            const hasChildren = subclasses.length > 1
+                            const subclassNameMatches =
+                              q !== '' &&
+                              subclasses.some((s) => s.subclass.toLowerCase().includes(q))
+                            const isExpanded = expandedFilterPois.has(d.key) || subclassNameMatches
+                            const visibleSubclasses = subclassNameMatches
+                              ? subclasses.filter((s) => s.subclass.toLowerCase().includes(q))
+                              : subclasses
                             return (
-                              <li key={d.key} role="option" aria-selected={visibility[d.key]}>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setVisibility((v) => ({ ...v, [d.key]: !v[d.key] }))
-                                  }
+                              <li key={d.key} role="option" aria-selected={isChecked}>
+                                <div
                                   style={{
                                     color: 'var(--map-fg)',
-                                    background: visibility[d.key]
-                                      ? 'var(--map-surface-active)'
-                                      : undefined,
+                                    background: isChecked ? 'var(--map-surface-active)' : undefined,
                                   }}
-                                  className="flex w-full cursor-pointer items-center gap-2 py-1.5 pl-9 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
+                                  className="flex w-full items-center gap-1 py-1.5 pl-6 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
                                 >
-                                  <span
-                                    className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
-                                    style={{
-                                      borderColor: visibility[d.key]
-                                        ? d.color
-                                        : 'var(--map-border)',
-                                      background: visibility[d.key] ? d.color : 'transparent',
-                                    }}
-                                  >
-                                    {visibility[d.key] && (
-                                      <svg
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        className="h-2.5 w-2.5"
-                                        aria-hidden="true"
-                                      >
-                                        <path
-                                          d="M5 13l4 4L19 7"
-                                          stroke="white"
-                                          strokeWidth={3}
-                                          strokeLinecap="round"
-                                          strokeLinejoin="round"
-                                        />
-                                      </svg>
-                                    )}
-                                  </span>
-                                  {signageCode ? (
-                                    <span
-                                      className="flex h-3.5 shrink-0 items-center justify-center rounded-[3px] px-1 text-[8.5px] font-bold leading-none text-white"
-                                      style={{ background: d.color }}
+                                  {hasChildren ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleExpandedFilterPoi(d.key)}
+                                      aria-expanded={isExpanded}
+                                      aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${d.label} sub-classes`}
+                                      style={{ color: 'var(--map-fg-faint)' }}
+                                      className="flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center"
                                     >
-                                      {signageCode}
-                                    </span>
+                                      <ChevronDownIcon
+                                        className={`h-3 w-3 transition-transform ${isExpanded ? '' : '-rotate-90'}`}
+                                      />
+                                    </button>
                                   ) : (
-                                    <span
-                                      className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                      style={{ background: d.color }}
-                                    />
+                                    <span className="h-3.5 w-3.5 shrink-0" />
                                   )}
-                                  <span className="truncate">{d.label}</span>
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => togglePoiLayerFilter(d.key)}
+                                    className="flex flex-1 cursor-pointer items-center gap-2 overflow-hidden"
+                                  >
+                                    <span
+                                      className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                                      style={{
+                                        borderColor: isChecked ? d.color : 'var(--map-border)',
+                                        background: isChecked ? d.color : 'transparent',
+                                      }}
+                                    >
+                                      {isIndeterminate ? (
+                                        <span className="h-[2px] w-2 rounded-full bg-white" />
+                                      ) : (
+                                        isChecked && (
+                                          <svg
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            className="h-2.5 w-2.5"
+                                            aria-hidden="true"
+                                          >
+                                            <path
+                                              d="M5 13l4 4L19 7"
+                                              stroke="white"
+                                              strokeWidth={3}
+                                              strokeLinecap="round"
+                                              strokeLinejoin="round"
+                                            />
+                                          </svg>
+                                        )
+                                      )}
+                                    </span>
+                                    {signageCode ? (
+                                      <span
+                                        className="flex h-3.5 shrink-0 items-center justify-center rounded-[3px] px-1 text-[8.5px] font-bold leading-none text-white"
+                                        style={{ background: d.color }}
+                                      >
+                                        {signageCode}
+                                      </span>
+                                    ) : (
+                                      <span
+                                        className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                        style={{ background: d.color }}
+                                      />
+                                    )}
+                                    <span className="truncate">{d.label}</span>
+                                  </button>
+                                </div>
+                                {hasChildren && isExpanded && (
+                                  <ul>
+                                    {visibleSubclasses.map((row) => {
+                                      const subChecked = isFullyOn
+                                        ? true
+                                        : (partialSubs?.includes(row.subclass) ?? false)
+                                      return (
+                                        <li
+                                          key={row.subclass}
+                                          role="option"
+                                          aria-selected={subChecked}
+                                        >
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              togglePoiSubclassFilter(d.key, row.subclass)
+                                            }
+                                            style={{ color: 'var(--map-fg-muted)' }}
+                                            className="flex w-full cursor-pointer items-center gap-2 py-1 pl-14 pr-2.5 text-left text-[12px] hover:bg-[var(--map-surface-hover)]"
+                                          >
+                                            <span
+                                              className="flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border"
+                                              style={{
+                                                borderColor: subChecked
+                                                  ? d.color
+                                                  : 'var(--map-border)',
+                                                background: subChecked ? d.color : 'transparent',
+                                              }}
+                                            >
+                                              {subChecked && (
+                                                <svg
+                                                  viewBox="0 0 24 24"
+                                                  fill="none"
+                                                  className="h-2 w-2"
+                                                  aria-hidden="true"
+                                                >
+                                                  <path
+                                                    d="M5 13l4 4L19 7"
+                                                    stroke="white"
+                                                    strokeWidth={4}
+                                                    strokeLinecap="round"
+                                                    strokeLinejoin="round"
+                                                  />
+                                                </svg>
+                                              )}
+                                            </span>
+                                            <span className="truncate">{row.subclass}</span>
+                                            <span
+                                              className="ml-auto shrink-0 tabular-nums"
+                                              style={{ color: 'var(--map-fg-faint)' }}
+                                            >
+                                              {row.features}
+                                            </span>
+                                          </button>
+                                        </li>
+                                      )
+                                    })}
+                                  </ul>
+                                )}
                               </li>
                             )
                           })}
@@ -2652,7 +3864,9 @@ export default function MapView({
         locateResult={locateResult}
         onLocateFeatureClick={flyToLocateFeature}
         poiVisibility={visibility}
-        onTogglePoiLayer={handlePoiRowClick}
+        onTogglePoiLayer={togglePoiLayerFilter}
+        poiSubclassFilter={poiSubclassFilter}
+        onPoiSubclassFilterChange={togglePoiSubclassFilter}
         poiLocateResult={poiLocateResult}
         onPoiLocateFeatureClick={flyToLocateFeature}
         roadTypeVisibility={visibility}

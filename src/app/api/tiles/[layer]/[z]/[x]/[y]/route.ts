@@ -8,7 +8,7 @@ export const runtime = 'nodejs'
 const LAYERS: Record<string, { table: string; columns: string }> = {
   road: {
     table: 'kumbh.road',
-    columns: 'id, road_name, type, row_width_m, sector_no, kumbh_land',
+    columns: 'id, road_name, type, road_class, row_width_m, sector_no, kumbh_land',
   },
   sector_boundary: {
     table: 'kumbh.sector_boundary',
@@ -28,7 +28,7 @@ const LAYERS: Record<string, { table: string; columns: string }> = {
   },
   bridge: {
     table: 'kumbh.bridge',
-    columns: 'id, remark, type, mode',
+    columns: 'id, remark, type, mode, is_temporary',
   },
   bus_stop: {
     table: 'kumbh.bus_stop',
@@ -81,6 +81,115 @@ const LAYERS: Record<string, { table: string; columns: string }> = {
   trench_line: {
     table: 'kumbh.trench_line',
     columns: 'id, name, remark',
+  },
+  hotel: {
+    table: 'kumbh.hotel',
+    columns: 'id, name, category',
+  },
+  railway_line: {
+    table: 'kumbh.railway_line',
+    columns: 'id, name, type',
+  },
+  railway_station: {
+    table: 'kumbh.railway_station',
+    columns: 'id, descriptio, sector_name, remark, type',
+  },
+  railway_station_area: {
+    table: 'kumbh.railway_station_area',
+    columns: 'id, name',
+  },
+  traffic_route: {
+    table: 'kumbh.traffic_route',
+    columns:
+      'id, name, entry_exit, plan, direction, weekend, normal, peak_day, deh_dir, naj_dir, sah_dir, meer_dir',
+  },
+  tentcity: {
+    table: 'kumbh.tentcity',
+    columns: 'id, class, subclass, plot_no, block, sector, remark, label',
+  },
+  ht_line: {
+    table: 'kumbh.ht_line',
+    columns: 'id, name, buffer_m',
+  },
+  ht_line_buffer: {
+    table: 'kumbh.ht_line_buffer',
+    columns: 'id, name, buffer_m',
+  },
+  water_line: {
+    table: 'kumbh.water_line',
+    columns: 'id, sector, water_line_type, remark',
+  },
+  water_point: {
+    table: 'kumbh.water_point',
+    columns: 'id, type, dia, remarks, sector',
+  },
+  landuse: {
+    table: 'kumbh.landuse',
+    columns: 'id, name, type, class',
+  },
+  dam: {
+    table: 'kumbh.dam',
+    columns: 'id, name',
+  },
+  uk_district_boundary: {
+    table: 'kumbh.uk_district_boundary',
+    columns: 'id, dtname, stname',
+  },
+  religious_place: {
+    table: 'kumbh.religious_place',
+    columns: 'id, descriptio, sector_name, remark, type',
+  },
+  landmark: {
+    table: 'kumbh.landmark',
+    columns: 'id, name, type',
+  },
+  thematic_gate: {
+    table: 'kumbh.thematic_gate',
+    columns: 'id, remark',
+  },
+  entry_exit_line: {
+    table: 'kumbh.entry_exit_line',
+    columns: 'id, remark, sector',
+  },
+  junction: {
+    table: 'kumbh.junction',
+    columns: 'id, name, remark',
+  },
+  direction_line: {
+    table: 'kumbh.direction_line',
+    columns: 'id, remark, sector',
+  },
+  footpath: {
+    table: 'kumbh.footpath',
+    columns: 'id, name, remark',
+  },
+  ropeway: {
+    table: 'kumbh.ropeway',
+    columns: 'id, name',
+  },
+  parking: {
+    table: 'kumbh.parking',
+    columns: 'id, name_of_parking, sector, ecs, subclass',
+  },
+  parking_line: {
+    table: 'kumbh.parking_line',
+    columns: 'id, sector_name',
+  },
+  peripheral_parking: {
+    table: 'kumbh.peripheral_parking',
+    columns: 'id, name, land_name',
+  },
+  sector_point: {
+    table: 'kumbh.sector_point',
+    columns: 'id, class, plot_no, block, sector, subclass, remark, label, remark_1, area',
+  },
+  ropeway_area: {
+    table: 'kumbh.ropeway_area',
+    columns: 'id, name',
+  },
+  other_transport: {
+    table: 'kumbh.other_transport',
+    columns: 'id, name',
   },
 }
 

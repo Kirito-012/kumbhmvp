@@ -52,6 +52,7 @@ type Stats = {
     plan_hectares: string
   }[]
   poiByLayer: { layer: string; features: number; hectares: string | null }[]
+  poiBySubclass: { layer: string; subclass: string; features: number }[]
 }
 
 /** Bounding box + per-feature centroids for whatever single class or
@@ -378,14 +379,24 @@ function LocatorList<F extends { id: number; lng: number; lat: number }>({
  *  `rows: ReactNode[][]` shape can't express. */
 function PoiTable({
   rows,
+  poiSubclassRows,
   poiVisibility,
+  poiSubclassFilter,
   onRowClick,
+  onSubclassFilterChange,
+  expandedLayers,
+  onToggleExpanded,
   poiLocateResult,
   onPoiLocateFeatureClick,
 }: {
   rows: { layer: string; features: number; hectares: string | null }[]
+  poiSubclassRows: { layer: string; subclass: string; features: number }[]
   poiVisibility: Record<string, boolean>
+  poiSubclassFilter: Record<string, string[]>
   onRowClick: (layerKey: string) => void
+  onSubclassFilterChange: (layerKey: string, subclass: string) => void
+  expandedLayers: Set<string>
+  onToggleExpanded: (layerKey: string) => void
   poiLocateResult: PoiLocateResult | null
   onPoiLocateFeatureClick: (lng: number, lat: number) => void
 }) {
@@ -418,19 +429,19 @@ function PoiTable({
           {rows.map((row) => {
             const signageCode = POI_SIGNAGE_CODES[row.layer]
             const color = POI_COLORS[row.layer] ?? '#cbd5e1'
-            const isActive = poiVisibility[row.layer]
+            const subs = poiSubclassRows.filter((r) => r.layer === row.layer)
+            const hasChildren = subs.length > 1
+            const isExpanded = expandedLayers.has(row.layer)
+            const partialSubs = poiSubclassFilter[row.layer]
+            const isFullyOn = poiVisibility[row.layer] && !partialSubs
+            const isActive = isFullyOn || (!!partialSubs && partialSubs.length > 0)
             const rowTint = `color-mix(in srgb, ${color} var(--map-row-tint-pct), transparent)`
             const showLocator = poiLocateResult && poiLocateResult.layer === row.layer
 
             return (
               <Fragment key={row.layer}>
                 <tr
-                  onClick={() => onRowClick(row.layer)}
-                  className={
-                    isActive
-                      ? 'cursor-pointer'
-                      : 'cursor-pointer hover:bg-[var(--map-surface-hover)]'
-                  }
+                  className={isActive ? '' : 'cursor-pointer hover:bg-[var(--map-surface-hover)]'}
                   style={isActive ? { background: rowTint } : undefined}
                 >
                   <td
@@ -444,36 +455,106 @@ function PoiTable({
                         style={{ background: color }}
                       />
                     )}
-                    <span className="flex items-center gap-1.5">
-                      {signageCode ? (
-                        <span
-                          className="flex h-3.5 shrink-0 items-center justify-center rounded-[3px] px-1 text-[8.5px] font-bold leading-none text-white"
-                          style={{ background: color }}
+                    <span className="flex items-center gap-1">
+                      {hasChildren ? (
+                        <button
+                          type="button"
+                          onClick={() => onToggleExpanded(row.layer)}
+                          aria-expanded={isExpanded}
+                          aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${POI_LABELS[row.layer] ?? row.layer} sub-classes`}
+                          style={{ color: 'var(--map-fg-faint)' }}
+                          className="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-[var(--map-surface-hover)]"
                         >
-                          {signageCode}
-                        </span>
+                          <ChevronDownIcon
+                            className={`h-3 w-3 transition-transform ${isExpanded ? '' : '-rotate-90'}`}
+                          />
+                        </button>
                       ) : (
-                        <span
-                          className="h-2 w-2 shrink-0 rounded-full"
-                          style={{ background: color }}
-                        />
+                        <span className="h-4 w-4 shrink-0" />
                       )}
-                      <span className="truncate">{POI_LABELS[row.layer] ?? row.layer}</span>
+                      <button
+                        type="button"
+                        onClick={() => onRowClick(row.layer)}
+                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left"
+                      >
+                        {signageCode ? (
+                          <span
+                            className="flex h-3.5 shrink-0 items-center justify-center rounded-[3px] px-1 text-[8.5px] font-bold leading-none text-white"
+                            style={{ background: color }}
+                          >
+                            {signageCode}
+                          </span>
+                        ) : (
+                          <span
+                            className="h-2 w-2 shrink-0 rounded-full"
+                            style={{ background: color }}
+                          />
+                        )}
+                        <span className="truncate">{POI_LABELS[row.layer] ?? row.layer}</span>
+                      </button>
                     </span>
                   </td>
                   <td
                     style={{ color: isActive ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
-                    className={`py-1.5 pr-2 text-right tabular-nums ${isActive ? 'font-semibold' : ''}`}
+                    className={`cursor-pointer py-1.5 pr-2 text-right tabular-nums ${isActive ? 'font-semibold' : ''}`}
+                    onClick={() => onRowClick(row.layer)}
                   >
                     {row.features}
                   </td>
                   <td
                     style={{ color: isActive ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
-                    className={`py-1.5 pr-3.5 text-right tabular-nums ${isActive ? 'font-semibold' : ''}`}
+                    className={`cursor-pointer py-1.5 pr-3.5 text-right tabular-nums ${isActive ? 'font-semibold' : ''}`}
+                    onClick={() => onRowClick(row.layer)}
                   >
                     {row.hectares ?? '—'}
                   </td>
                 </tr>
+                {hasChildren &&
+                  isExpanded &&
+                  subs.map((sub) => {
+                    const subChecked = isFullyOn
+                      ? true
+                      : (partialSubs?.includes(sub.subclass) ?? false)
+                    return (
+                      <tr
+                        key={`${row.layer}::${sub.subclass}`}
+                        className="cursor-pointer hover:bg-[var(--map-surface-hover)]"
+                        style={
+                          subChecked
+                            ? {
+                                background: `color-mix(in srgb, ${color} calc(var(--map-row-tint-pct) * 0.6), transparent)`,
+                              }
+                            : undefined
+                        }
+                        onClick={() => onSubclassFilterChange(row.layer, sub.subclass)}
+                      >
+                        <td
+                          style={{ color: subChecked ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
+                          className={`py-1 pl-3.5 pr-2 text-left text-[11.5px] ${subChecked ? 'font-medium' : ''}`}
+                        >
+                          <span className="flex items-center gap-1.5 pl-5">
+                            <span
+                              className="h-1.5 w-1.5 shrink-0 rounded-full"
+                              style={{ background: color, opacity: subChecked ? 1 : 0.45 }}
+                            />
+                            <span className="truncate">{sub.subclass}</span>
+                          </span>
+                        </td>
+                        <td
+                          style={{ color: subChecked ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
+                          className="py-1 pr-2 text-right text-[11.5px] tabular-nums"
+                        >
+                          {sub.features}
+                        </td>
+                        <td
+                          style={{ color: subChecked ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
+                          className="py-1 pr-3.5 text-right text-[11.5px] tabular-nums"
+                        >
+                          —
+                        </td>
+                      </tr>
+                    )
+                  })}
                 {showLocator && poiLocateResult && (
                   <LocatorList
                     features={poiLocateResult.features}
@@ -764,6 +845,8 @@ export default function StatsPanel({
   onLocateFeatureClick,
   poiVisibility,
   onTogglePoiLayer,
+  poiSubclassFilter,
+  onPoiSubclassFilterChange,
   poiLocateResult,
   onPoiLocateFeatureClick,
   roadTypeVisibility,
@@ -803,6 +886,11 @@ export default function StatsPanel({
    * agree, same as classFilter driving the Class dropdown. */
   poiVisibility: Record<string, boolean>
   onTogglePoiLayer: (layerKey: string) => void
+  /** Sub-class selections for POI layers that are only partially checked --
+   *  same partial-selection model as subclassFilter, keyed by POI layer key
+   *  instead of class_group. */
+  poiSubclassFilter: Record<string, string[]>
+  onPoiSubclassFilterChange: (layerKey: string, subclass: string) => void
   /** Bbox + per-feature centroids for whichever POI layer was last clicked
    *  on here, or null once nothing's been clicked -- drives the locator
    *  list nested under that layer's row, mirroring locateResult above. */
@@ -835,6 +923,23 @@ export default function StatsPanel({
       const next = new Set(prev)
       if (next.has(cls)) next.delete(cls)
       else next.add(cls)
+      return next
+    })
+  }
+
+  // Mirrors expandedClasses/toggleExpanded above, for PoiTable's own
+  // chevrons -- separate Set since a layer being expanded in Stats has no
+  // bearing on whether it's expanded in the left search panel's own tree
+  // (expandedFilterPois in MapView), same "two independent UIs, two
+  // independent expansion states" split classFilter/expandedClasses already
+  // has.
+  const [expandedPoiLayers, setExpandedPoiLayers] = useState<Set<string>>(new Set())
+
+  function togglePoiExpanded(layerKey: string) {
+    setExpandedPoiLayers((prev) => {
+      const next = new Set(prev)
+      if (next.has(layerKey)) next.delete(layerKey)
+      else next.add(layerKey)
       return next
     })
   }
@@ -1012,8 +1117,13 @@ export default function StatsPanel({
                 return (
                   <PoiTable
                     rows={poiRows}
+                    poiSubclassRows={stats.poiBySubclass}
                     poiVisibility={poiVisibility}
+                    poiSubclassFilter={poiSubclassFilter}
                     onRowClick={onTogglePoiLayer}
+                    onSubclassFilterChange={onPoiSubclassFilterChange}
+                    expandedLayers={expandedPoiLayers}
+                    onToggleExpanded={togglePoiExpanded}
                     poiLocateResult={poiLocateResult}
                     onPoiLocateFeatureClick={onPoiLocateFeatureClick}
                   />
