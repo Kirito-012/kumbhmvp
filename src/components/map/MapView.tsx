@@ -76,31 +76,41 @@ type Sector = {
 const CENTER: [number, number] = [78.0995, 29.9396]
 const INITIAL_ZOOM = 10
 
-// CARTO's Positron/Dark Matter vector styles, vendored into /public (rather
+// Dark mode vendors CARTO's Dark Matter vector style into /public (rather
 // than fetched from basemaps.cartocdn.com at runtime) -- their raster PNG
 // tiles started requiring an API key, but the underlying vector tiles/style
 // JSON these reference (tiles.basemaps.cartocdn.com, a different subdomain)
 // are still open, and vendoring avoids depending on that staying true for an
-// extra network hop on every map load. Fetched once and merged into the
-// map's own style (see loadBasemapStyle below) rather than used as a
-// standalone map.setStyle(), since every sector/POI source and layer this
-// component creates lives in the SAME style object -- swapping the whole
-// style out from under them would delete them too.
+// extra network hop on every map load.
+//
+// Light mode vendors MapTiler's "Bright" style instead of CARTO's own light
+// styles (Positron, then Voyager) -- both CARTO options turned out too
+// muted/pastel next to a reference "classic OSM Bright" look (solid green
+// forests, blue water, orange/pink road hierarchy) that this app's light
+// mode is meant to match. MapTiler's vector tiles/style/glyphs all require
+// an API key unlike CARTO's, so the vendored copy below has its key
+// templated out as the literal string "{key}" (see loadBasemapStyle, which
+// substitutes NEXT_PUBLIC_MAPTILER_KEY back in at fetch time) rather than
+// committing the real key to the repo.
+//
+// Both fetched once and merged into the map's own style (see
+// loadBasemapStyle below) rather than used as a standalone map.setStyle(),
+// since every sector/POI source and layer this component creates lives in
+// the SAME style object -- swapping the whole style out from under them
+// would delete them too.
 const BASEMAP_STYLE_URL: Record<'light' | 'dark', string> = {
-  light: '/carto-positron-style.json',
+  light: '/maptiler-bright-style.json',
   dark: '/carto-dark-matter-style.json',
 }
-// IDs of the vector source + all its layers, as defined in the vendored
-// style JSON above -- both style variants share these same names (only the
-// paint colors differ), so one constant list works for both. Recomputed as
-// "everything currently under these names" when swapping themes, rather than
-// diffed layer-by-layer, since a full style swap is simpler than reconciling
-// two ~90-layer stylesheets against each other.
-const BASEMAP_SOURCE_ID = 'carto'
 
 async function loadBasemapStyle(theme: 'light' | 'dark') {
   const res = await fetch(BASEMAP_STYLE_URL[theme])
-  return (await res.json()) as {
+  const text = await res.text()
+  // Only the light (MapTiler) style has any "{key}" placeholders -- the dark
+  // (CARTO) style's replaceAll is a harmless no-op since it never contains
+  // the token.
+  const withKey = text.replaceAll('{key}', process.env.NEXT_PUBLIC_MAPTILER_KEY ?? '')
+  return JSON.parse(withKey) as {
     sprite?: string
     sources: Record<string, unknown>
     layers: unknown[]
@@ -514,6 +524,24 @@ const POI_LAYER_DEFS: PoiLayerDef[] = [
     geomType: 'polygon' as const,
   })),
 ]
+
+// Every vector/geojson source id this component itself creates in the 'load'
+// handler (initMap) and never swaps out -- used by the basemap theme-swap
+// effect below to tell "one of our own sources" apart from "a source
+// belonging to whichever vendored basemap style is currently loaded" without
+// hardcoding that basemap's source id (light and dark now vendor different
+// providers with different source ids -- MapTiler's 'maptiler_planet' vs
+// CARTO's 'carto' -- so there's no single fixed BASEMAP_SOURCE_ID any more).
+const APP_SOURCE_IDS = new Set([
+  'sector_plan',
+  'road',
+  'sector_boundary',
+  'measure-line',
+  'measure-label',
+  'measure-preview',
+  'measure-preview-label',
+  ...POI_LAYER_DEFS.map((d) => d.key),
+])
 
 // Client-side mirror of POI_SUBCLASS_TABLES in src/app/api/stats/route.ts --
 // which vector-tile property name each subclass-bearing POI layer's
@@ -951,13 +979,23 @@ export default function MapView({
       if (cancelled || mapRef.current !== map) return
 
       // Every layer currently in the style that belongs to the OLD basemap --
-      // i.e. shares the vendored style's source, or is its lone 'background'
-      // layer (which has no source at all) -- rather than a fixed id list,
-      // since that's exactly the set map.setStyle() would otherwise replace.
+      // i.e. shares one of the OLD vendored style's own source ids, or is its
+      // lone 'background' layer (which has no source at all) -- rather than a
+      // fixed id list, since that's exactly the set map.setStyle() would
+      // otherwise replace. Source ids aren't assumed to match between themes
+      // any more (light now vendors MapTiler's 'maptiler_planet' source while
+      // dark still vendors CARTO's 'carto' source), so this reads the actual
+      // set of non-app sources currently on the map instead of one hardcoded
+      // BASEMAP_SOURCE_ID -- "non-app" meaning every source id NOT in the
+      // fixed list this component itself creates once in the 'load' handler
+      // and never swaps out.
+      const oldBasemapSourceIds = Object.keys(map.getStyle().sources).filter(
+        (id) => !APP_SOURCE_IDS.has(id),
+      )
       const oldBasemapLayerIds = map
         .getStyle()
         .layers.filter(
-          (l) => l.id === 'background' || ('source' in l && l.source === BASEMAP_SOURCE_ID),
+          (l) => l.id === 'background' || ('source' in l && oldBasemapSourceIds.includes(l.source)),
         )
         .map((l) => l.id)
       const firstNonBasemapLayerId = map
@@ -965,7 +1003,9 @@ export default function MapView({
         .layers.find((l) => !oldBasemapLayerIds.includes(l.id))?.id
 
       for (const id of oldBasemapLayerIds) map.removeLayer(id)
-      if (map.getSource(BASEMAP_SOURCE_ID)) map.removeSource(BASEMAP_SOURCE_ID)
+      for (const id of oldBasemapSourceIds) {
+        if (map.getSource(id)) map.removeSource(id)
+      }
 
       for (const [id, def] of Object.entries(basemap.sources)) {
         map.addSource(id, def as never)
@@ -973,6 +1013,13 @@ export default function MapView({
       for (const layer of basemap.layers as never[]) {
         map.addLayer(layer, firstNonBasemapLayerId)
       }
+      // Each theme's vendored style ships its own sprite sheet (icon glyphs
+      // tuned for that basemap's background) -- without this, toggling theme
+      // swapped every fill/line/label color but left the OLD theme's icon
+      // sprite loaded, so e.g. switching to light mode kept rendering
+      // dark-matter's icons (styled to pop against near-black) on top of the
+      // new pale basemap.
+      if (basemap.sprite) map.setSprite(basemap.sprite)
 
       // Sector hover/selected/boundary colors are plain static paint values
       // (not CSS var()s), so they don't follow the theme for free the way
@@ -1027,6 +1074,19 @@ export default function MapView({
           'visibility',
           theme === 'dark' ? 'visible' : 'none',
         )
+      }
+      // Cluster count labels sit on top of each cluster's own (theme-static)
+      // category color, so unlike everything else re-applied above this
+      // isn't reacting to a color that itself changed -- it's a deliberate
+      // per-theme preference: near-black text stays legible against every
+      // POI category color in dark mode's brighter/more saturated basemap
+      // context, but reads muddy in light mode, where white cuts through
+      // more cleanly against the same circle colors sitting on a pale map.
+      for (const def of POI_LAYER_DEFS) {
+        const id = `poi-${def.key}-cluster-count`
+        if (map.getLayer(id)) {
+          map.setPaintProperty(id, 'text-color', theme === 'dark' ? '#0b0d11' : '#ffffff')
+        }
       }
     }
 
@@ -1713,11 +1773,12 @@ export default function MapView({
             'text-allow-overlap': true,
           },
           paint: {
-            // Same core-vs-basemap contrast approach as sector-selected-glow
-            // text elsewhere on this map: dark text reads cleanly against
-            // this layer's own (fairly light/saturated) category colors,
-            // unlike white which washed out against amenities' amber.
-            'text-color': '#0b0d11',
+            // Theme-aware -- see the theme-swap effect's matching
+            // poi-{key}-cluster-count repaint for why dark mode keeps
+            // near-black text (reads cleanly against this layer's own
+            // fairly light/saturated category colors) while light mode uses
+            // white instead.
+            'text-color': readMapTheme() === 'dark' ? '#0b0d11' : '#ffffff',
           },
         })
 
@@ -2873,6 +2934,17 @@ export default function MapView({
       for (const d of POI_LAYER_DEFS) next[d.key] = false
       return next
     })
+    // Without this, a POI layer's partial sub-class selection survives being
+    // turned off here -- re-enabling that layer later (e.g. from the Layers
+    // list) would silently come back already scoped to whatever subset was
+    // last checked instead of fully on, which doesn't match what "Clear all"
+    // implies for every other filter it resets.
+    setPoiSubclassFilter({})
+    // poiLocateTarget only drives the Stats panel's fly-to/locator list, not
+    // anything painted on the map, but every POI layer is being turned off
+    // above -- leaving a stale target set means the locator list can keep
+    // showing results for a layer that's no longer visible.
+    setPoiLocateTarget(null)
   }
 
   function selectAllClasses() {
@@ -2993,7 +3065,7 @@ export default function MapView({
     .reduce((sum, b, i) => sum + haversineDistanceM(measure.points[i], b), 0)
 
   return (
-    <div className="kumbh-map relative h-screen w-full">
+    <div className="kumbh-map relative h-screen w-full overflow-hidden">
       <div ref={mapContainer} className="h-full w-full" />
 
       {/* Measure distance -- floating button cluster beside the hamburger
@@ -3118,102 +3190,109 @@ export default function MapView({
               Object.values(subclassFilter).some((subs) => subs.length > 0) ||
               ROAD_TYPE_DEFS.some((d) => visibility[d.key]) ||
               POI_LAYER_DEFS.some((d) => visibility[d.key])) && (
-              <div className="mb-1.5 flex flex-wrap gap-1">
-                {classFilter.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => toggleClassFilter(c)}
-                    style={{
-                      background: 'var(--map-accent-bg)',
-                      color: 'var(--map-accent-fg)',
-                    }}
-                    className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
-                  >
-                    <span
-                      className="h-2 w-2 shrink-0 rounded-full"
-                      style={{ background: CLASS_GROUP_COLORS[c] }}
-                    />
-                    <span className="truncate max-w-[9rem]">{c}</span>
-                    <XIcon className="h-2.5 w-2.5 shrink-0" />
-                  </button>
-                ))}
-                {Object.entries(subclassFilter)
-                  .filter(([, subs]) => subs.length > 0)
-                  .map(([c, subs]) => {
-                    const total = subclassStats.filter((r) => r.class_group === c).length
-                    return (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() =>
-                          setSubclassFilter((prev) => {
-                            const next = { ...prev }
-                            delete next[c]
-                            return next
-                          })
-                        }
-                        style={{
-                          background: 'var(--map-accent-bg)',
-                          color: 'var(--map-accent-fg)',
-                        }}
-                        className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
-                      >
-                        <span
-                          className="h-2 w-2 shrink-0 rounded-full"
-                          style={{ background: CLASS_GROUP_COLORS[c] }}
-                        />
-                        <span className="truncate max-w-[9rem]">
-                          {c} ({subs.length}/{total})
-                        </span>
-                        <XIcon className="h-2.5 w-2.5 shrink-0" />
-                      </button>
-                    )
-                  })}
-                {ROAD_TYPE_DEFS.filter((d) => visibility[d.key]).map((d) => (
-                  <button
-                    key={d.key}
-                    type="button"
-                    onClick={() => setVisibility((v) => ({ ...v, [d.key]: false }))}
-                    style={{ background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
-                    className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
-                  >
-                    <span
-                      className="h-0 w-2.5 shrink-0"
-                      style={{
-                        borderTopWidth: 2,
-                        borderTopColor: d.color,
-                        borderTopStyle: d.dash ? 'dashed' : 'solid',
-                      }}
-                    />
-                    <span className="truncate max-w-[9rem]">{d.label}</span>
-                    <XIcon className="h-2.5 w-2.5 shrink-0" />
-                  </button>
-                ))}
-                {POI_LAYER_DEFS.filter((d) => visibility[d.key]).map((d) => (
-                  <button
-                    key={d.key}
-                    type="button"
-                    onClick={() => setVisibility((v) => ({ ...v, [d.key]: false }))}
-                    style={{ background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
-                    className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
-                  >
-                    <span
-                      className="h-2 w-2 shrink-0 rounded-full"
-                      style={{ background: d.color }}
-                    />
-                    <span className="truncate max-w-[9rem]">{d.label}</span>
-                    <XIcon className="h-2.5 w-2.5 shrink-0" />
-                  </button>
-                ))}
+              <div className="mb-1.5 flex flex-col gap-1">
+                {/* Clear all lives outside the scrollable chip list below (not
+                    as its own last chip) so it stays reachable without
+                    scrolling down through every active filter first --
+                    "clear everything" should never require finding the thing
+                    you're trying to get rid of. */}
                 <button
                   type="button"
                   onClick={clearAllFilters}
                   style={{ color: 'var(--map-fg-faint)' }}
-                  className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 px-2 text-[11.5px] font-medium underline-offset-2 hover:underline"
+                  className="inline-flex w-fit cursor-pointer items-center gap-1 py-0.5 text-[11.5px] font-medium underline-offset-2 hover:underline"
                 >
                   Clear all
                 </button>
+                <div className="flex max-h-52 flex-wrap gap-1 overflow-y-auto kumbh-scroll">
+                  {classFilter.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => toggleClassFilter(c)}
+                      style={{
+                        background: 'var(--map-accent-bg)',
+                        color: 'var(--map-accent-fg)',
+                      }}
+                      className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
+                    >
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ background: CLASS_GROUP_COLORS[c] }}
+                      />
+                      <span className="truncate max-w-[9rem]">{c}</span>
+                      <XIcon className="h-2.5 w-2.5 shrink-0" />
+                    </button>
+                  ))}
+                  {Object.entries(subclassFilter)
+                    .filter(([, subs]) => subs.length > 0)
+                    .map(([c, subs]) => {
+                      const total = subclassStats.filter((r) => r.class_group === c).length
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() =>
+                            setSubclassFilter((prev) => {
+                              const next = { ...prev }
+                              delete next[c]
+                              return next
+                            })
+                          }
+                          style={{
+                            background: 'var(--map-accent-bg)',
+                            color: 'var(--map-accent-fg)',
+                          }}
+                          className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
+                        >
+                          <span
+                            className="h-2 w-2 shrink-0 rounded-full"
+                            style={{ background: CLASS_GROUP_COLORS[c] }}
+                          />
+                          <span className="truncate max-w-[9rem]">
+                            {c} ({subs.length}/{total})
+                          </span>
+                          <XIcon className="h-2.5 w-2.5 shrink-0" />
+                        </button>
+                      )
+                    })}
+                  {ROAD_TYPE_DEFS.filter((d) => visibility[d.key]).map((d) => (
+                    <button
+                      key={d.key}
+                      type="button"
+                      onClick={() => setVisibility((v) => ({ ...v, [d.key]: false }))}
+                      style={{ background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
+                      className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
+                    >
+                      <span
+                        className="h-0 w-2.5 shrink-0"
+                        style={{
+                          borderTopWidth: 2,
+                          borderTopColor: d.color,
+                          borderTopStyle: d.dash ? 'dashed' : 'solid',
+                        }}
+                      />
+                      <span className="truncate max-w-[9rem]">{d.label}</span>
+                      <XIcon className="h-2.5 w-2.5 shrink-0" />
+                    </button>
+                  ))}
+                  {POI_LAYER_DEFS.filter((d) => visibility[d.key]).map((d) => (
+                    <button
+                      key={d.key}
+                      type="button"
+                      onClick={() => setVisibility((v) => ({ ...v, [d.key]: false }))}
+                      style={{ background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
+                      className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
+                    >
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ background: d.color }}
+                      />
+                      <span className="truncate max-w-[9rem]">{d.label}</span>
+                      <XIcon className="h-2.5 w-2.5 shrink-0" />
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
             <div className="relative">

@@ -644,7 +644,7 @@ export default function SectorReportDrawer({
                     theme="amber"
                     icon={IconTent}
                     value={`${report.landSummary.totalMelaLandHectares} ha`}
-                    label="Total Mela land"
+                    label="Utilized Mela Land"
                   />
                   {landClasses.map((cls) => (
                     <StatTile

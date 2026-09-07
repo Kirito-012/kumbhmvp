@@ -23,11 +23,17 @@ jobs:
         with:
           node-version: '22.x'
 
-      - name: npm install, build, and test
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: pnpm install and build
         run: |
-          npm install
-          npm run build --if-present
-          npm run test --if-present
+          pnpm install --frozen-lockfile
+          pnpm run build
+        env:
+          NEXT_PUBLIC_MAPTILER_KEY: ${{ secrets.NEXT_PUBLIC_MAPTILER_KEY }}
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
