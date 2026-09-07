@@ -35,6 +35,9 @@ jobs:
         env:
           NEXT_PUBLIC_MAPTILER_KEY: ${{ secrets.NEXT_PUBLIC_MAPTILER_KEY }}
 
+      - name: Remove node_modules before packaging
+        run: rm -rf node_modules
+
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
