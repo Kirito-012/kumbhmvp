@@ -28,22 +28,31 @@ jobs:
         with:
           version: 11
 
-      - name: pnpm install and build
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm run build
+      - name: Install dependencies
+        # --node-linker=hoisted gives a flat node_modules with no .pnpm symlink farm.
+        # The build MUST run against the same layout that ships: Next bakes resolved
+        # dependency paths into .next/**/*.nft.json, so building against pnpm's default
+        # symlinked tree and then swapping in a flat one leaves the server chasing
+        # node_modules/.pnpm/... paths that no longer exist.
+        run: pnpm install --frozen-lockfile --node-linker=hoisted
+
+      - name: Build
+        run: pnpm run build
         env:
           NEXT_PUBLIC_MAPTILER_KEY: ${{ secrets.NEXT_PUBLIC_MAPTILER_KEY }}
 
-      - name: Reinstall production deps with a flat, portable node_modules
-        run: |
-          rm -rf node_modules
-          pnpm install --prod --frozen-lockfile --node-linker=hoisted --ignore-scripts
+      - name: Prune dev dependencies
+        # Same linker, so the pruned tree keeps the layout the build was traced against.
+        run: pnpm prune --prod
 
       - name: Package app as a tarball
         # Tar (not the zip upload-artifact does natively) is what preserves the
         # node_modules/.bin symlinks and executable bits that Next needs at runtime.
-        run: tar -czf /tmp/node-app.tar.gz --exclude=.git .
+        # .next/dev is Turbopack's dev-server cache - gigabytes of it, never used by
+        # `next start`, and it is where the stale hashed module ids come from.
+        run: |
+          rm -rf .next/dev .next/_events_*.json
+          tar -czf /tmp/node-app.tar.gz             --exclude=.git             --exclude=.next/dev             --exclude=e2e             --exclude=Kumbh_Mela_JSON             --exclude=Kumbh_Mela_Shape             --exclude=Kumbh_Mela_2027_V1_07_07             .
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
