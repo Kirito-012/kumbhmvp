@@ -41,22 +41,20 @@ jobs:
         env:
           NEXT_PUBLIC_MAPTILER_KEY: ${{ secrets.NEXT_PUBLIC_MAPTILER_KEY }}
 
-      - name: Prune dev dependencies
-        # Same linker, so the pruned tree keeps the layout the build was traced against.
-        # --ignore-scripts because prune re-runs lifecycle scripts, and `prepare` calls
-        # husky, which prune has just removed as a dev dependency. Nothing here needs to
-        # run anyway: postinstall already copied the maplibre workers into public/ during
-        # the install step above, and husky only sets up local git hooks.
-        run: pnpm prune --prod --ignore-scripts
-
-      - name: Package app as a tarball
-        # Tar (not the zip upload-artifact does natively) is what preserves the
-        # node_modules/.bin symlinks and executable bits that Next needs at runtime.
-        # .next/dev is Turbopack's dev-server cache - gigabytes of it, never used by
-        # `next start`, and it is where the stale hashed module ids come from.
+      - name: Assemble the standalone server
+        # next.config.ts sets output:'standalone', so the build emits .next/standalone
+        # containing server.js plus only the node_modules the trace says the server needs
+        # (~31MB rather than a full install). Next does not copy public/ or .next/static
+        # into it, so do that here; server.js serves them from those paths.
         run: |
-          rm -rf .next/dev .next/_events_*.json
-          tar -czf /tmp/node-app.tar.gz             --exclude=.git             --exclude=.next/dev             --exclude=e2e             --exclude=Kumbh_Mela_JSON             --exclude=Kumbh_Mela_Shape             --exclude=Kumbh_Mela_2027_V1_07_07             .
+          cp -r public .next/standalone/public
+          cp -r .next/static .next/standalone/.next/static
+          cp startup.sh .next/standalone/startup.sh
+
+      - name: Package the standalone output as a tarball
+        # Tar rather than upload-artifact's native zip: zip preserves neither symlinks
+        # nor executable bits, which is what broke the original deploy.
+        run: tar -czf /tmp/node-app.tar.gz -C .next/standalone .
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
