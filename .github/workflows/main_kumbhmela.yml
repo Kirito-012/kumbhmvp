@@ -43,13 +43,20 @@ jobs:
 
       - name: Assemble the standalone server
         # next.config.ts sets output:'standalone', so the build emits .next/standalone
-        # containing server.js plus only the node_modules the trace says the server needs
-        # (~31MB rather than a full install). Next does not copy public/ or .next/static
-        # into it, so do that here; server.js serves them from those paths.
+        # containing server.js plus only the node_modules the trace says the server needs.
+        # Next does not copy public/ or .next/static into it, so do that here.
+        #
+        # node_modules is stashed as a tarball we control rather than shipped as a live
+        # directory. Azure's Oryx startup script rewrites any ./node_modules it finds --
+        # it moves the directory to _del_node_modules and symlinks ./node_modules at its
+        # own /node_modules -- which destroys the bundled tree before server.js can load
+        # it. A tarball is invisible to that logic, and startup.sh unpacks it at boot.
         run: |
           cp -r public .next/standalone/public
           cp -r .next/static .next/standalone/.next/static
           cp startup.sh .next/standalone/startup.sh
+          tar -czf .next/standalone/app-node-modules.tar.gz -C .next/standalone node_modules
+          rm -rf .next/standalone/node_modules
 
       - name: Package the standalone output as a tarball
         # Tar rather than upload-artifact's native zip: zip preserves neither symlinks

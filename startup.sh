@@ -1,31 +1,40 @@
 #!/bin/sh
-# Azure App Service startup command.
+# Azure App Service startup command for Next's standalone output.
 #
-# The deployed tree is Next's standalone output: server.js at the root of wwwroot
-# with its own pruned node_modules beside it.
+# Azure's Oryx startup script runs before this one and rewrites the module layout:
 #
-# Oryx rewrites that layout before this script runs:
-#
+#   rm -fr /node_modules; mkdir -p /node_modules
+#   tar -xzf node_modules.tar.gz -C /node_modules
 #   mv -f node_modules _del_node_modules || true
 #   ln -sfn /node_modules ./node_modules
 #
-# It parks the standalone node_modules at _del_node_modules and points
-# ./node_modules at its own /node_modules, so require('next') from server.js
-# resolves into Oryx's tree instead of the one the build produced. Undo that here.
-# The real fix is the app setting SCM_DO_BUILD_DURING_DEPLOYMENT=false, which stops
-# Oryx running at all; this keeps the app booting whether or not it is set.
+# Any ./node_modules directory we ship is therefore moved aside and replaced by a
+# symlink to Oryx's own tree, which is not ours -- it is whatever Azure last
+# repacked, and it does not contain the modules this build traced against.
+# ENABLE_ORYX_BUILD=false does not reliably stop this; the script is regenerated
+# whenever the platform decides the app needs it.
+#
+# So the build ships node_modules as app-node-modules.tar.gz instead. Oryx has no
+# rule for that name, so it survives untouched, and we unpack it here -- after Oryx
+# has finished -- replacing whatever symlink it left behind.
 set -e
 cd /home/site/wwwroot
 
-if [ -d _del_node_modules ] && [ -d _del_node_modules/next ]; then
-  echo "Oryx displaced the bundled node_modules; restoring it."
-  rm -rf node_modules
-  mv _del_node_modules node_modules
+if [ ! -f app-node-modules.tar.gz ]; then
+  echo "FATAL: app-node-modules.tar.gz missing; the deploy did not ship one." >&2
+  ls -la . >&2
+  exit 1
 fi
 
+# rm -rf clears both a stale directory and an Oryx symlink; -r does not follow the
+# symlink's target, so this cannot touch /node_modules itself.
+echo "Unpacking bundled node_modules"
+rm -rf node_modules _del_node_modules
+tar -xzf app-node-modules.tar.gz
+
 if [ ! -d node_modules/next ]; then
-  echo "FATAL: bundled node_modules/next is missing from the standalone output." >&2
-  ls -la . >&2
+  echo "FATAL: node_modules/next missing after unpacking." >&2
+  ls -la node_modules >&2 || true
   exit 1
 fi
 
