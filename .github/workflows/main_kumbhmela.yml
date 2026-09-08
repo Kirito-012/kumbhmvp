@@ -43,7 +43,11 @@ jobs:
 
       - name: Prune dev dependencies
         # Same linker, so the pruned tree keeps the layout the build was traced against.
-        run: pnpm prune --prod
+        # --ignore-scripts because prune re-runs lifecycle scripts, and `prepare` calls
+        # husky, which prune has just removed as a dev dependency. Nothing here needs to
+        # run anyway: postinstall already copied the maplibre workers into public/ during
+        # the install step above, and husky only sets up local git hooks.
+        run: pnpm prune --prod --ignore-scripts
 
       - name: Package app as a tarball
         # Tar (not the zip upload-artifact does natively) is what preserves the
