@@ -97,3 +97,5 @@ jobs:
           slot-name: 'Production'
           package: app
           startup-command: 'sh /home/site/wwwroot/startup.sh'
+          clean: true
+          restart: true
