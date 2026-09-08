@@ -38,7 +38,7 @@ jobs:
       - name: Reinstall production deps with a flat, portable node_modules
         run: |
           rm -rf node_modules
-          pnpm install --prod --frozen-lockfile --node-linker=hoisted
+          pnpm install --prod --frozen-lockfile --node-linker=hoisted --ignore-scripts
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
