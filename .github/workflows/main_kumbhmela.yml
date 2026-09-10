@@ -55,7 +55,29 @@ jobs:
           cp -r public .next/standalone/public
           cp -r .next/static .next/standalone/.next/static
           cp startup.sh .next/standalone/startup.sh
-          tar -czf .next/standalone/app-node-modules.tar.gz -C .next/standalone node_modules
+
+          # Next's tracer emits node_modules entries that point into pnpm's store as
+          # symlinks to ABSOLUTE build-machine paths (.../node_modules/.pnpm/...) — it
+          # does this even under a hoisted install, where the top-level node_modules is
+          # already flat. Those links resolve on the builder and nowhere else, so a
+          # plain tar ships dangling links and Azure dies at boot with
+          # "Cannot find module 'next/dist/compiled/cookie'".
+          #
+          # -h dereferences them, writing the real files into the archive instead.
+          tar -czhf .next/standalone/app-node-modules.tar.gz -C .next/standalone node_modules
+
+          # Prove the archive is self-contained before shipping it: no symlinks left,
+          # and the module whose absence broke the last deploy is really in there.
+          if tar -tvzf .next/standalone/app-node-modules.tar.gz | grep -q '^l'; then
+            echo "FATAL: app-node-modules.tar.gz still contains symlinks." >&2
+            tar -tvzf .next/standalone/app-node-modules.tar.gz | grep '^l' | head >&2
+            exit 1
+          fi
+          if ! tar -tzf .next/standalone/app-node-modules.tar.gz \
+               | grep -q '^node_modules/next/dist/compiled/cookie/index.js$'; then
+            echo "FATAL: next/dist/compiled/cookie missing from the archive." >&2
+            exit 1
+          fi
           rm -rf .next/standalone/node_modules
 
       - name: Package the standalone output as a tarball
