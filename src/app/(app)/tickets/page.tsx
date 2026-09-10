@@ -88,7 +88,7 @@ export default async function TicketsPage({
         primaryAction={{ label: 'New ticket', href: '/tickets/new' }}
       />
 
-      <main className="flex-1 space-y-4 px-8 py-6 animate-fade-in">
+      <main className="flex-1 space-y-4 px-4 py-4 sm:px-8 sm:py-6 animate-fade-in">
         <TicketsToolbar
           statusCounts={statusCounts.byStatus}
           total={statusCounts.total}
@@ -122,7 +122,7 @@ export default async function TicketsPage({
             )}
           />
 
-          <div className="flex items-center justify-between border-t border-border px-5 py-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-3.5 sm:px-5">
             <p className="text-xs text-muted">
               Showing{' '}
               <span className="font-medium text-muted-strong">

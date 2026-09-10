@@ -4,10 +4,15 @@ import { getPool } from '@/server/db/postgres'
 export const runtime = 'nodejs'
 
 // Individual matched features are capped server-side -- the Stats panel's
-// locator list only ever shows a handful before "Show N more" anyway, and a
-// sparse-but-large sub-class (e.g. "Other") has no reason to ship hundreds
-// of rows down the wire just to display four of them.
-const MAX_FEATURES = 50
+// locator list shows only a handful until expanded, and a sparse-but-large
+// sub-class (e.g. "Other") has no reason to ship every row down the wire.
+//
+// 200 rather than the original 50, matching /api/poi/locate: because the
+// query below is ORDER BY sector_no, plot_no, a low cap truncated in sector
+// order, so a class spanning many sectors silently lost its high-numbered
+// ones and the list still looked complete. The panel now also states
+// "Showing N of M" whenever this cap actually bites.
+const MAX_FEATURES = 200
 
 // Bounding box + per-feature centroids for a class/sub-class selection --
 // backs both the Stats panel's fly-to-feature locator list and the map's

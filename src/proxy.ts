@@ -1,18 +1,29 @@
-import NextAuth from 'next-auth'
-import { authConfig } from '@/server/auth/auth.config'
+import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
 
-// Lightweight NextAuth instance (no providers, no mongoose/bcrypt) purely for decoding the
-// JWT session cookie on every request and running the `authorized` redirect logic.
-const { auth } = NextAuth(authConfig)
+// The App Service's default *.azurewebsites.net hostname can never be removed —
+// it's the platform's permanent identity for this app and stays reachable
+// alongside the custom domain. This redirects any request that doesn't arrive
+// on the canonical custom domain, so the old URL still works but always lands
+// users on kumbhdrishti.thecraftsync.com instead of serving content directly.
+const CANONICAL_HOST = 'kumbhdrishti.thecraftsync.com'
 
-export default auth
+export function proxy(request: NextRequest) {
+  const host = request.headers.get('host')
+
+  if (host && host !== CANONICAL_HOST) {
+    const url = new URL(
+      request.nextUrl.pathname + request.nextUrl.search,
+      `https://${CANONICAL_HOST}`,
+    )
+    return NextResponse.redirect(url, 308)
+  }
+
+  return NextResponse.next()
+}
 
 export const config = {
-  // Run on everything except static assets, NextAuth's own routes, and api/v1 — the latter is
-  // service-to-service (x-api-key auth in the route handler itself, see api/v1/tickets/route.ts),
-  // not a browser session, so the session-cookie gate here would just redirect it to /login.
-  // The trailing `|.*\..*` exclusion covers public/ static files (images, etc.) generically —
-  // without it, any file served straight from public/ (e.g. /dashboard/some-image.png) falls
-  // through to this matcher and gets redirected to /login like a protected page route.
-  matcher: ['/((?!api/auth|api/v1|_next/static|_next/image|favicon.ico|.*\\..*).*)'],
+  // Run on everything except static assets, image optimization, and common
+  // metadata files — those should never be blocked by a host check.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt).*)'],
 }

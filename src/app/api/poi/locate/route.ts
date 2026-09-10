@@ -5,13 +5,35 @@ export const runtime = 'nodejs'
 
 // Individual matched features are capped server-side, same rationale as
 // /api/sector-plan/locate -- the Stats panel's locator list only ever shows
-// a handful before "Show N more" anyway.
-const MAX_FEATURES = 50
+// a handful before it is expanded.
+//
+// 200 rather than 50: at 50 the cap silently swallowed whole sectors (the
+// 114 Toilets span sectors 5-16, but the first 50 in sector order stop at
+// sector 9, so half the sectors simply were not in the response and nothing
+// in the UI said so). 200 covers every layer/sub-class combination actually
+// present in the 2027 data, so the "showing N of M" hint the panel renders
+// is the only truncation the user ever meets.
+const MAX_FEATURES = 200
 
 // Whitelist of POI layer -> (table, a human-readable label column if one
 // exists). Mirrors the LAYERS whitelist in the tiles route (never
 // interpolate the layer param straight into SQL) but only needs a name-ish
 // column here, not the full column list tiles serves.
+// Subset of LAYERS with a categorical "subclass" column, and its exact name
+// per table (ashram spells it sub_class) -- mirrors POI_SUBCLASS_COLUMNS in
+// MapView.tsx / POI_SUBCLASS_TABLES in /api/stats. Lets ?subclass= scope the
+// bbox/feature query down to one sub-class instead of always covering the
+// whole layer.
+const SUBCLASS_COLUMNS: Record<string, string> = {
+  amenities: 'subclass',
+  ashram: 'sub_class',
+  public_service_facilities: 'subclass',
+  sanitation: 'subclass',
+  tentcity: 'subclass',
+  parking: 'subclass',
+  sector_point: 'subclass',
+}
+
 const LAYERS: Record<string, { table: string; nameColumn: string | null }> = {
   amenities: { table: 'kumbh.amenities', nameColumn: null },
   ashram: { table: 'kumbh.ashram', nameColumn: 'name' },
@@ -73,6 +95,11 @@ const LAYERS: Record<string, { table: string; nameColumn: string | null }> = {
   bus_terminal_point: { table: 'kumbh.bus_terminal_point', nameColumn: null },
   location_entry: { table: 'kumbh.location_entry', nameColumn: null },
   other_transport_point: { table: 'kumbh.other_transport_point', nameColumn: null },
+  // Only 121 of 21k rows have a name -- safe to expose here since locate is
+  // just a name-ish lookup, unlike /api/poi/points/[layer] which this table
+  // deliberately stays out of (see PLAN-deferred-roads.md: too large for the
+  // whole-layer-as-GeoJSON path, it stays on vector tiles only).
+  tertiary_road: { table: 'kumbh.tertiary_road', nameColumn: 'name' },
 }
 
 // Bounding box + per-feature centroids for one POI layer -- same purpose as
@@ -86,23 +113,86 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: 'Unknown or missing layer' }, { status: 400 })
   }
 
+  const subclass = req.nextUrl.searchParams.get('subclass')
+  const subclassColumn = layer ? SUBCLASS_COLUMNS[layer] : undefined
+  // A subclass param is only honoured for layers that actually have that
+  // column -- otherwise silently falls back to the whole-layer query rather
+  // than erroring, same tolerance /api/stats gives an unrecognised layer.
+  const sectorParam = req.nextUrl.searchParams.get('sector')
+  const sectorNo =
+    sectorParam !== null && Number.isInteger(Number(sectorParam)) ? Number(sectorParam) : null
+
+  // Built as a parameterised list so `sector` and `subclass` compose. Without
+  // sector support here the Stats panel could not honour its own "(this
+  // sector)" heading for POI rows: the counts were sector-scoped by
+  // /api/stats but the locator list underneath them covered the whole mela,
+  // so clicking a result flew the planner out of the sector they had
+  // filtered to. The sector test is spatial (ST_Intersects against
+  // sector_boundary) because POI tables have no sector_no column -- same
+  // approach /api/stats uses to scope these very counts.
+  const conditions: string[] = []
+  const queryParams: (string | number)[] = []
+  if (subclass && subclassColumn) {
+    conditions.push(`p.${subclassColumn} = $${queryParams.length + 1}`)
+    queryParams.push(subclass)
+  }
+  if (sectorNo !== null) {
+    conditions.push(
+      `EXISTS (SELECT 1 FROM kumbh.sector_boundary b
+               WHERE b.sector_no = $${queryParams.length + 1}
+                 AND ST_Intersects(b.geom, p.geom))`,
+    )
+    queryParams.push(sectorNo)
+  }
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+
   const pool = getPool()
-  const labelSelect = def.nameColumn ? `${def.nameColumn} AS label` : 'NULL AS label'
+  // Qualified with the `p` alias since the feature query below joins
+  // sector_boundary -- an unqualified column would be ambiguous if a POI
+  // table ever grows a column the boundary table also has.
+  const labelSelect = def.nameColumn ? `p.${def.nameColumn} AS label` : 'NULL AS label'
+
+  // POI tables carry no sector_no of their own (only kumbh.sector_plan and
+  // kumbh.road do -- verified against information_schema), so the sector a
+  // feature sits in has to come from a spatial join, the same ST_Intersects
+  // against sector_boundary that /api/stats already uses to scope POI counts.
+  // Worth the ~300ms: POI labels are frequently non-unique to the point of
+  // uselessness as identifiers (kumbh.sanitation has 114 Toilets sharing 7
+  // capacity-spec strings; all 1022 ashram rows share a single name), so
+  // without a sector the locator list is an undifferentiated wall of
+  // identical entries and the user cannot tell one result from another.
+  // LATERAL + LIMIT 1 rather than a plain LEFT JOIN so a feature straddling
+  // two sector boundaries yields one row, not a duplicate per sector.
 
   const [extent, features] = await Promise.all([
-    pool.query(`
+    pool.query(
+      `
       SELECT count(*) AS total,
-             ST_XMin(ST_Extent(geom)) AS xmin, ST_YMin(ST_Extent(geom)) AS ymin,
-             ST_XMax(ST_Extent(geom)) AS xmax, ST_YMax(ST_Extent(geom)) AS ymax
-      FROM ${def.table};
-    `),
-    pool.query(`
-      SELECT id, ${labelSelect},
-             ST_X(ST_Centroid(geom)) AS lng, ST_Y(ST_Centroid(geom)) AS lat
-      FROM ${def.table}
-      ORDER BY id
+             ST_XMin(ST_Extent(p.geom)) AS xmin, ST_YMin(ST_Extent(p.geom)) AS ymin,
+             ST_XMax(ST_Extent(p.geom)) AS xmax, ST_YMax(ST_Extent(p.geom)) AS ymax
+      FROM ${def.table} p
+      ${whereClause};
+    `,
+      queryParams,
+    ),
+    pool.query(
+      `
+      SELECT p.id, ${labelSelect},
+             s.sector_no,
+             ST_X(ST_Centroid(p.geom)) AS lng, ST_Y(ST_Centroid(p.geom)) AS lat
+      FROM ${def.table} p
+      LEFT JOIN LATERAL (
+        SELECT b.sector_no
+        FROM kumbh.sector_boundary b
+        WHERE ST_Intersects(b.geom, p.geom)
+        LIMIT 1
+      ) s ON TRUE
+      ${whereClause}
+      ORDER BY s.sector_no NULLS LAST, p.id
       LIMIT ${MAX_FEATURES};
-    `),
+    `,
+      queryParams,
+    ),
   ])
 
   const row = extent.rows[0]

@@ -210,6 +210,17 @@ export const LINE_LAYER_COLORS: Record<string, string> = {
   footpath: '#6b7280', // = CLASS_GROUP_COLORS.Pathway
   parking_line: '#5b6b8c', // = CLASS_GROUP_COLORS.Parking
   trench_line: '#6b7280',
+  // Base OSM street network (21k+ nameless centrelines, see
+  // PLAN-deferred-roads.md) -- Google Maps-style road blue, chosen so the
+  // street network is actually visible rather than blending into the
+  // basemap, while staying clearly distinct from the project road palette
+  // (ROAD_TYPE_COLORS). This entry is a fallback/legend swatch only: MapView
+  // special-cases tertiary_road's actual line paint with its own theme-aware
+  // color/opacity (TERTIARY_ROAD_STYLE) because, unlike every other POI line
+  // layer, one flat colour does not survive at this feature density in both
+  // themes -- see the note on POI colours above POLYGON_LAYER_COLORS. Keep
+  // this in sync with TERTIARY_ROAD_STYLE.light.color.
+  tertiary_road: '#4285f4',
 }
 
 export const LINE_LAYER_LABELS: Record<string, string> = {
@@ -223,6 +234,9 @@ export const LINE_LAYER_LABELS: Record<string, string> = {
   footpath: 'Footpaths',
   parking_line: 'Parking lines',
   entry_exit_line: 'Entry / exit routes',
+  // "(OSM)" flags this as third-party base-map street data, not curated
+  // project infrastructure -- the exact ambiguity Pending.md wanted avoided.
+  tertiary_road: 'Street network (OSM)',
 }
 
 // Same tiered, cross-referenced palette as POINT_LAYER_COLORS above -- see

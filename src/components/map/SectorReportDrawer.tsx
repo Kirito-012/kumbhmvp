@@ -520,7 +520,12 @@ export default function SectorReportDrawer({
         animationDuration: `${DRAWER_ANIM_MS}ms`,
         height: collapsed ? undefined : height,
       }}
-      className={`absolute bottom-0 left-[336px] right-[336px] z-20 flex max-h-[calc(100vh-96px)] max-w-[calc(100vw-360px)] flex-col rounded-t-2xl border border-b-0 backdrop-blur-md ${
+      // 336px on each side clears the two docked side panels at their default desktop widths
+      // (~w-72 left + offset, ~320px right default + offset). Below `sm` those panels are
+      // collapsed-by-default and, when open, cover the full width themselves rather than
+      // docking beside content -- so the drawer only needs a small fixed margin there, not an
+      // inset sized for panels that aren't sharing the screen with it on a phone.
+      className={`absolute bottom-0 left-3 right-3 z-20 flex max-h-[calc(100dvh-96px)] max-w-[calc(100vw-24px)] flex-col rounded-t-2xl border border-b-0 backdrop-blur-md sm:left-[336px] sm:right-[336px] sm:max-w-[calc(100vw-360px)] ${
         dragging ? '' : 'transition-[height] duration-150 ease-out'
       } ${closing ? 'animate-[drawer-swipe-out_ease-in_forwards]' : 'animate-[drawer-swipe-in_ease-out]'}`}
     >
@@ -624,13 +629,16 @@ export default function SectorReportDrawer({
           )}
           {report && (
             <div
-              className="grid min-h-0 flex-1 grid-cols-[1fr_1fr_260px]"
-              style={{ overflow: 'hidden' }}
+              // Three side-by-side scrollable columns on a desktop-width drawer; below `sm`
+              // there's nowhere near enough width for that (the third column alone was a fixed
+              // 260px), so it becomes one vertically-stacked, vertically-scrolling column instead
+              // -- each section keeps its own internal overflow-y-auto either way.
+              className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto sm:grid-cols-[1fr_1fr_260px] sm:overflow-hidden"
             >
               {/* Land Summary */}
               <div
-                className="kumbh-scroll min-h-0 overflow-y-auto p-4"
-                style={{ borderRight: '1px solid var(--map-panel-border)' }}
+                className="kumbh-scroll min-h-0 overflow-y-auto border-b p-4 sm:border-b-0 sm:border-r"
+                style={{ borderColor: 'var(--map-panel-border)' }}
               >
                 <ColHead theme="teal" icon={GridIcon} title="Land Summary" />
                 <div className="grid grid-cols-2 gap-2">
@@ -660,8 +668,8 @@ export default function SectorReportDrawer({
 
               {/* Key Activities */}
               <div
-                className="kumbh-scroll min-h-0 overflow-y-auto p-4"
-                style={{ borderRight: '1px solid var(--map-panel-border)' }}
+                className="kumbh-scroll min-h-0 overflow-y-auto border-b p-4 sm:border-b-0 sm:border-r"
+                style={{ borderColor: 'var(--map-panel-border)' }}
               >
                 <ColHead theme="violet" icon={GridIcon} title="Key Activities" />
                 {report.keyActivities.length === 0 && report.utilityInfrastructure.ghats === 0 ? (

@@ -50,6 +50,15 @@ def reproject(geom):
     return shapely_transform(lambda x, y, z=None: _transformer.transform(x, y), geom)
 
 
+def force_2d(geom):
+    """Drops Z. Sector_Tertiary_Road is the only 3D source layer in the gdb, but the
+    target geometry(..., 4326) columns are always declared 2D, so a 3D insert would
+    fail -- applied unconditionally in load_new_table since it's a no-op on 2D geometry."""
+    if not geom.has_z:
+        return geom
+    return shapely_transform(lambda x, y, z=None: (x, y), geom)
+
+
 def clean(v):
     """Blanks (' ', '', None) all collapse to None; everything else passes through."""
     if v is None:
@@ -648,6 +657,28 @@ def _sector_point_map(p, source_layer):
     }
 
 
+def _tertiary_road_map(p, source_layer):
+    # OSM-derived base street network (see PLAN-deferred-roads.md). Sector_Tertiary_Road
+    # is a strict subset of Tertiary_Road (7,064 of its 7,068 osm_ids also appear in the
+    # parent layer), so both load into one table and the subset is expressed as a flag
+    # rather than a second table -- see dedupe_tertiary_road, which folds the duplicate
+    # rows down after both layers have been read. Only 121 of 21k rows have a name --
+    # fclass is the only reliably-populated descriptive column, so it drives both
+    # styling and the low-zoom tile filter (see the tiles route).
+    return {
+        "osm_id": clean(p.get("osm_id")),
+        "name": clean(p.get("name")),
+        "fclass": clean(p.get("fclass")),
+        "ref": clean(p.get("ref")),
+        "oneway": clean(p.get("oneway")),
+        "maxspeed": p.get("maxspeed"),
+        "bridge": clean(p.get("bridge")),
+        "tunnel": clean(p.get("tunnel")),
+        "in_sector": source_layer == "Sector_Tertiary_Road",
+        "shape_length": p.get("SHAPE_Length"),
+    }
+
+
 # (table, ddl_columns, geom_type, layers, map_fn)
 NEW_TABLE_SPECS = [
     ("hotel", {"name": "text", "category": "text"}, "POINT", ["Hotel"], _hotel_map),
@@ -898,6 +929,27 @@ NEW_TABLE_SPECS = [
         ["SECTOR_POINT"],
         _sector_point_map,
     ),
+    (
+        "tertiary_road",
+        {
+            "osm_id": "text",
+            "name": "text",
+            "fclass": "text",
+            "ref": "text",
+            "oneway": "text",
+            "maxspeed": "integer",
+            "bridge": "text",
+            "tunnel": "text",
+            "in_sector": "boolean",
+            "shape_length": "double precision",
+        },
+        "MULTILINESTRING",
+        # Order matters: Tertiary_Road (the 2D parent, 21,280 rows) must load first so
+        # dedupe_tertiary_road below keeps its geometry for the 7,064 osm_ids the two
+        # layers share, and only carries in_sector=true across from the subset layer.
+        ["Tertiary_Road", "Sector_Tertiary_Road"],
+        _tertiary_road_map,
+    ),
 ]
 
 
@@ -920,6 +972,36 @@ def backfill_sector_no(conn, table):
         n = cur.rowcount
         conn.commit()
     print(f"  backfilled sector_no on {n} rows via spatial join against sector_boundary")
+
+
+def dedupe_tertiary_road(conn):
+    """Sector_Tertiary_Road repeats rows already present in Tertiary_Road (see the
+    NEW_TABLE_SPECS entry's comment) -- keep the parent-layer row's geometry and carry
+    the subset's in_sector flag across onto it, then drop the duplicate. Also adds the
+    two indexes load_new_table's generic CREATE INDEX block doesn't know to add for this
+    table: fclass (read on every low-zoom tile request, see the tiles route) and a
+    partial index on in_sector for the "sector streets only" filter."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE kumbh.tertiary_road t SET in_sector = true "
+            "WHERE t.in_sector = false AND EXISTS ("
+            "  SELECT 1 FROM kumbh.tertiary_road d "
+            "  WHERE d.osm_id = t.osm_id AND d.in_sector = true)"
+        )
+        cur.execute(
+            "DELETE FROM kumbh.tertiary_road a USING kumbh.tertiary_road b "
+            "WHERE a.osm_id = b.osm_id AND a.id > b.id"
+        )
+        n = cur.rowcount
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS tertiary_road_fclass_idx ON kumbh.tertiary_road (fclass)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS tertiary_road_in_sector_idx "
+            "ON kumbh.tertiary_road (in_sector) WHERE in_sector"
+        )
+        conn.commit()
+    print(f"  deduped {n} rows shared with Sector_Tertiary_Road (kept in_sector flag)")
 
 
 def get_conn():
@@ -1014,7 +1096,7 @@ def load_new_table(conn, table, columns, geom_type, layers, map_fn, dry_run):
             for f in src:
                 if f["geometry"] is None:
                     continue
-                geom = reproject(shape(f["geometry"]))
+                geom = force_2d(reproject(shape(f["geometry"])))
                 row = map_fn(dict(f["properties"]), layer)
                 features.append((row, geom))
     print(f"  read {len(features)} features from {layers}")
@@ -1092,6 +1174,8 @@ def main():
             if only and table not in only:
                 continue
             results[table] = load_new_table(conn, table, columns, geom_type, layers, map_fn, args.dry_run)
+            if not args.dry_run and table == "tertiary_road":
+                dedupe_tertiary_road(conn)
     finally:
         conn.close()
 

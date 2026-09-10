@@ -24,7 +24,7 @@ export default async function DashboardPage() {
         primaryAction={{ label: 'New ticket', href: '/tickets/new' }}
       />
 
-      <main className="flex-1 space-y-6 px-8 py-6 animate-fade-in">
+      <main className="flex-1 space-y-5 px-4 py-4 sm:space-y-6 sm:px-8 sm:py-6 animate-fade-in">
         {/* Stat cards */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard

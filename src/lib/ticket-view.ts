@@ -106,6 +106,8 @@ export type CommentView = {
   isInternal: boolean
   author: PersonView
   createdAt: string
+  kind: 'comment' | 'questionnaire'
+  questionnaireId: string | null
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -116,6 +118,80 @@ export function toCommentView(c: any): CommentView {
     isInternal: c.isInternal,
     author: toPerson(c.authorId),
     createdAt: new Date(c.createdAt).toISOString(),
+    kind: c.kind === 'questionnaire' ? 'questionnaire' : 'comment',
+    questionnaireId: c.questionnaireId ? String(c.questionnaireId) : null,
+  }
+}
+
+export type AttachmentView = {
+  id: string
+  phase: 'before' | 'after'
+  url: string
+  width: number | null
+  height: number | null
+  uploader: PersonView
+  createdAt: string
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function toAttachmentView(a: any): AttachmentView {
+  return {
+    id: String(a._id),
+    phase: a.phase,
+    url: a.url,
+    width: a.width ?? null,
+    height: a.height ?? null,
+    uploader: toPerson(a.uploaderId),
+    createdAt: new Date(a.createdAt).toISOString(),
+  }
+}
+
+export type QuestionnaireAnswerView = {
+  questionId: string
+  skipped: boolean
+  choice: 'yes' | 'no' | 'na' | null
+  required: number | null
+  actual: number | null
+  length: number | null
+  width: number | null
+  value: number | null
+  text: string | null
+}
+
+export type QuestionnaireView = {
+  id: string
+  templateKey: string
+  version: number
+  answers: QuestionnaireAnswerView[]
+  remarksHtml: string | null
+  surveyor: PersonView
+  answeredCount: number
+  skippedCount: number
+  createdAt: string
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function toQuestionnaireView(q: any): QuestionnaireView {
+  return {
+    id: String(q._id),
+    templateKey: q.templateKey,
+    version: q.version,
+    answers: (q.answers ?? []).map((a: Record<string, unknown>) => ({
+      questionId: a.questionId,
+      skipped: !!a.skipped,
+      choice: a.choice ?? null,
+      required: a.required ?? null,
+      actual: a.actual ?? null,
+      length: a.length ?? null,
+      width: a.width ?? null,
+      value: a.value ?? null,
+      text: a.text ?? null,
+    })),
+    remarksHtml: q.remarks ?? null,
+    surveyor: toPerson(q.surveyorId),
+    answeredCount: q.answeredCount ?? 0,
+    skippedCount: q.skippedCount ?? 0,
+    createdAt: new Date(q.createdAt).toISOString(),
   }
 }
 

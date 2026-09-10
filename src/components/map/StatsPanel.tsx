@@ -20,6 +20,7 @@ import {
   PinClusterIcon,
   GridIcon,
   ChevronDownIcon,
+  MapPinIcon,
 } from '@/components/map/icons'
 
 const POI_COLORS: Record<string, string> = {
@@ -40,6 +41,12 @@ function roadTypeKey(type: string): string {
   return `road_${type.toLowerCase().replace(/\s+/g, '_')}`
 }
 
+/** Must match MapView.tsx's locateKey -- identifies one open locator list so
+ *  several can be tracked at once in the keyed results maps below. */
+function locateKey(group: string, subclass: string | null, sector?: number | null): string {
+  return `${group}||${subclass ?? ''}||${sector ?? ''}`
+}
+
 type Stats = {
   byClass: { class_group: string; features: number; hectares: string }[]
   bySubclass: { class_group: string; subclass: string; features: number; hectares: string }[]
@@ -53,12 +60,19 @@ type Stats = {
   }[]
   poiByLayer: { layer: string; features: number; hectares: string | null }[]
   poiBySubclass: { layer: string; subclass: string; features: number }[]
+  /** kumbh.tertiary_road's total feature count (sector-scoped like every other stat
+   *  here) -- deliberately NOT a poiByLayer row (21k+ rows would dominate that
+   *  features-sorted list), surfaced instead as a standalone footer note under the
+   *  Points of interest section. See the comment on POI_TABLES in /api/stats. */
+  tertiaryRoadCount: number
 }
 
-/** Bounding box + per-feature centroids for whatever single class or
- *  sub-class the filter currently narrows to -- backs the locator list
- *  rendered under that row in ClassAreaTable. Null once the selection is
- *  broader than one target (nothing to locate a single place for). */
+/** Bounding box + per-feature centroids for whichever class or sub-class row
+ *  currently has its "show list" chevron open (see locateTarget) -- backs
+ *  the locator list rendered under that row in ClassAreaTable. Independent
+ *  of classFilter/subclassFilter: opening a row's list doesn't select it,
+ *  and selecting a row doesn't open its list. Null while nothing is open, or
+ *  while the fetch for a just-opened row hasn't resolved yet. */
 type LocateResult = {
   classGroup: string
   subclass: string | null
@@ -76,14 +90,27 @@ type LocateResult = {
 }
 
 /** Same idea as LocateResult but for a single POI layer -- POI tables live
- *  outside kumbh.sector_plan and carry only an id/optional name label, not
- *  the sector/plot/block fields sector_plan features have. */
+ *  outside kumbh.sector_plan and carry no plot/block fields; the sector is
+ *  derived spatially by /api/poi/locate rather than stored on the row. */
 type PoiLocateResult = {
   layer: string
+  /** Which sub-class the locate result is scoped to, or null when it covers
+   *  the whole layer -- mirrors LocateResult.subclass above. */
+  subclass: string | null
   total: number
   bbox: [number, number, number, number] | null
-  features: { id: number; label: string | null; lng: number; lat: number }[]
+  features: {
+    id: number
+    label: string | null
+    sector_no: number | null
+    lng: number
+    lat: number
+  }[]
 }
+
+/** A locate that failed, as opposed to one still in flight (`null`) -- the
+ *  two were indistinguishable before, so a failed fetch spun forever. */
+type LocateState<T> = T | 'error' | null
 
 // Per-section accent hue, referencing the theme-aware CSS variables defined alongside
 // globals.css's --map-* group (dark: brighter hue over a translucent tint; light: the original
@@ -268,6 +295,267 @@ const SUBCLASS_ROW_CAP = 4
  *  deeper than the row it belongs to. */
 const LOCATOR_ROW_CAP = 4
 
+/** Which column a stats table is sorted by, and in which direction. Sorting
+ *  is per-table local UI state -- it never touches the filters or the map. */
+type SortKey = 'name' | 'features' | 'area'
+type SortState = { key: SortKey; desc: boolean }
+
+/** Clickable column header. Numeric columns default to descending on first
+ *  click (planners scanning "what's biggest?" want the top of the list, not
+ *  the bottom); the name column defaults to ascending. */
+function SortHeader({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  align = 'right',
+  className = '',
+}: {
+  label: string
+  sortKey: SortKey
+  sort: SortState
+  onSort: (key: SortKey) => void
+  align?: 'left' | 'right'
+  className?: string
+}) {
+  const isActive = sort.key === sortKey
+  return (
+    <th
+      // Deliberately NOT sticky: every section's table shares the panel's one
+      // scroll container, so `sticky top-0` pins each header independently and
+      // one section's header ends up floating over the next section's rows.
+      // Fixing that properly needs a scroll container per section, which is a
+      // bigger change than the benefit justifies here.
+      aria-sort={isActive ? (sort.desc ? 'descending' : 'ascending') : 'none'}
+      style={{ background: 'var(--map-surface)', color: 'var(--map-fg-faint)' }}
+      className={`pt-1 pb-1.5 text-[10.5px] font-semibold uppercase tracking-wide ${
+        align === 'right' ? 'text-right' : 'text-left'
+      } ${className}`}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        title={`Sort by ${label}`}
+        style={{ color: isActive ? 'var(--map-fg-muted)' : 'inherit' }}
+        className={`inline-flex cursor-pointer items-center gap-0.5 rounded uppercase tracking-wide hover:text-[var(--map-fg-muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--map-accent)] ${
+          align === 'right' ? 'flex-row-reverse' : ''
+        }`}
+      >
+        <span>{label}</span>
+        <span aria-hidden="true" className={isActive ? '' : 'opacity-0'}>
+          {sort.desc ? '↓' : '↑'}
+        </span>
+      </button>
+    </th>
+  )
+}
+
+/** The same checkbox the left search panel draws for every class/layer, so a
+ *  Stats row's selectability is visible before clicking rather than inferred.
+ *  Without it the row label looks like plain text and gives no hint that it
+ *  filters the map (and is a different action from the expand chevron beside
+ *  it and the locate pin after it). Supports the indeterminate dash for a
+ *  parent with only some sub-classes selected. */
+function RowCheckbox({
+  checked,
+  indeterminate = false,
+  color,
+  size = 'md',
+}: {
+  checked: boolean
+  indeterminate?: boolean
+  color: string
+  size?: 'sm' | 'md'
+}) {
+  const box = size === 'sm' ? 'h-3 w-3' : 'h-3.5 w-3.5'
+  const tick = size === 'sm' ? 'h-2 w-2' : 'h-2.5 w-2.5'
+  return (
+    <span
+      aria-hidden="true"
+      className={`flex ${box} shrink-0 items-center justify-center rounded-[4px] border`}
+      style={{
+        // Unchecked still carries the class colour (at low alpha) rather than
+        // a neutral grey: this box is now the only swatch on the row, so it
+        // has to keep tying the row to its colour on the map and in the left
+        // panel's tree even when nothing is selected.
+        borderColor:
+          checked || indeterminate ? color : `color-mix(in srgb, ${color} 45%, transparent)`,
+        background: checked || indeterminate ? color : 'transparent',
+      }}
+    >
+      {indeterminate ? (
+        <span className="h-[2px] w-1.5 rounded-full bg-white" />
+      ) : (
+        checked && (
+          <svg viewBox="0 0 24 24" fill="none" className={tick}>
+            <path
+              d="M5 13l4 4L19 7"
+              stroke="white"
+              strokeWidth={3}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        )
+      )}
+    </span>
+  )
+}
+
+/** Compact hectare/count formatting -- these columns are ~58px wide, and a
+ *  raw value like kumbh.district_boundary's 5341448.0 ha physically overflows
+ *  the panel. Thousands/millions collapse to 5.3M, everything else keeps the
+ *  precision it already had. */
+function formatStatValue(raw: string | number | null | undefined): string {
+  if (raw === null || raw === undefined) return '—'
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return String(raw)
+  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (Math.abs(n) >= 10_000) return `${(n / 1_000).toFixed(0)}k`
+  // No "<0.1" case here on purpose: /api/stats already rounds hectares to one
+  // decimal in SQL, so a sub-0.05 ha parcel reaches this function as exactly
+  // 0 and is indistinguishable from a true zero. Showing "<0.1" would need
+  // the API to send more precision first.
+  return String(raw)
+}
+
+/** Horizontal magnitude bar drawn behind a numeric cell, so relative size is
+ *  readable at a glance instead of requiring the reader to compare digits
+ *  down a 26-row column.
+ *
+ *  Rendered as a thin rule UNDER the number on a fixed-width track, not as a
+ *  wash behind it. An earlier version sized the bar as a percentage of the
+ *  cell: because each cell is only ~55px wide, the largest row filled it edge
+ *  to edge with no visible terminus while small rows collapsed to 2-3px
+ *  slivers pressed against the digits, reading as rendering artifacts rather
+ *  than data. A constant-width track gives every row the same baseline to be
+ *  compared against, and putting it below the text keeps the number legible
+ *  and clear of the row's selection tint. */
+const BAR_TRACK_PX = 34
+
+function MagnitudeBar({ value, max, color }: { value: number; max: number; color: string }) {
+  if (!(max > 0) || !(value > 0)) return null
+  // sqrt compresses one dominant outlier (Parking's 365 ha vs Pathway's 0.2)
+  // so smaller rows stay distinguishable from each other.
+  const pct = Math.max(4, Math.min(100, Math.sqrt(value / max) * 100))
+  return (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute bottom-[3px] right-2 h-[3px] rounded-full"
+      style={{
+        width: BAR_TRACK_PX,
+        // The unfilled remainder has to stay visible -- it's the "out of what"
+        // reference that makes the fixed track worth its vertical space.
+        background: `color-mix(in srgb, ${color} 24%, transparent)`,
+      }}
+    >
+      <span
+        className="absolute inset-y-0 right-0 rounded-full"
+        style={{ width: `${pct}%`, background: color }}
+      />
+    </span>
+  )
+}
+
+/** Per-row "show list" affordance -- a pin distinct from the row's own
+ *  selection click, so clicking it opens/closes that row's LocatorList
+ *  without touching classFilter/subclassFilter (or poiSubclassFilter/
+ *  poiVisibility).
+ *
+ *  Deliberately a PIN, not a chevron: the row's leading disclosure control
+ *  is already a chevron (expand sub-classes), and drawing both with the
+ *  same glyph at the same size made two unrelated actions indistinguishable
+ *  before clicking. The pin matches the marker drawn beside every entry in
+ *  the list it opens, so the icon predicts its own payload. Filled with the
+ *  row's color while open; a spinner replaces it while its fetch is in
+ *  flight. Stops propagation so it never also triggers the row's onClick
+ *  underneath it. */
+function LocateToggleButton({
+  isOpen,
+  isLoading,
+  color,
+  onClick,
+  label,
+}: {
+  isOpen: boolean
+  isLoading: boolean
+  color: string
+  onClick: () => void
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+      aria-expanded={isOpen}
+      aria-label={label}
+      title={label}
+      style={{
+        color: isOpen ? color : 'var(--map-fg-faint)',
+        background: isOpen ? `color-mix(in srgb, ${color} 16%, transparent)` : undefined,
+      }}
+      className="flex h-[18px] w-[18px] shrink-0 cursor-pointer items-center justify-center rounded hover:bg-[var(--map-surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--map-accent)]"
+    >
+      {isLoading ? (
+        <span
+          className="h-2.5 w-2.5 animate-spin rounded-full border-[1.5px]"
+          style={{ borderColor: 'var(--map-switch-track)', borderTopColor: color }}
+        />
+      ) : (
+        <MapPinIcon className="h-3 w-3" />
+      )}
+    </button>
+  )
+}
+
+/** Shown in place of a locator list whose fetch failed. Mirrors the panel's
+ *  existing "Failed to load stats" treatment, which the locate lists
+ *  previously had no equivalent of -- they just spun. */
+/** Subtitle for a POI locator entry: the sector it sits in plus its row id.
+ *  POI titles are frequently useless as identifiers -- 42 of the 50 layers in
+ *  /api/poi/locate have no name column at all (every row renders the bare
+ *  layer name), and even the named ones repeat heavily: kumbh.sanitation's
+ *  114 Toilets share 7 capacity-spec strings, and all 1022 ashram rows carry
+ *  the same name. Without this, expanding a list gives a column of rows with
+ *  identical text that differ only in where they fly. The id is the tiebreak
+ *  when several sit in one sector. */
+function makePoiSubtitle(sectorNo: number | null) {
+  return (f: { id: number; sector_no: number | null }): string => {
+    // With a sector already selected every row sits in it, so repeating it on
+    // each line is noise -- the id alone is what distinguishes them there.
+    if (sectorNo !== null) return `#${f.id}`
+    const where =
+      f.sector_no !== null ? `Sector ${String(f.sector_no).padStart(2, '0')}` : 'Outside sectors'
+    return `${where} · #${f.id}`
+  }
+}
+
+function LocatorError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <tr>
+      <td colSpan={3} className="py-0 pl-0 pr-3.5">
+        <div
+          className="my-0.5 ml-[30px] flex items-center gap-2 border-l-2 py-1 pl-2 text-[11px]"
+          style={{ borderColor: 'var(--map-danger, #ef4444)', color: 'var(--map-fg-faint)' }}
+        >
+          <span>Couldn&apos;t load locations.</span>
+          <button
+            type="button"
+            onClick={onRetry}
+            style={{ color: 'var(--map-accent)' }}
+            className="cursor-pointer font-semibold underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--map-accent)]"
+          >
+            Retry
+          </button>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
 /** One clickable "fly to this feature" list, nested under whatever row
  *  (a sub-class in ClassAreaTable, a POI layer below) it belongs to.
  *  Generic over the feature shape via `title`/`subtitle` renderers -- the
@@ -281,6 +569,7 @@ function LocatorList<F extends { id: number; lng: number; lat: number }>({
   color,
   title,
   subtitle,
+  sectorNo,
 }: {
   features: F[]
   total: number
@@ -288,10 +577,20 @@ function LocatorList<F extends { id: number; lng: number; lat: number }>({
   color: string
   title: (f: F) => string
   subtitle?: (f: F) => string | null
+  /** Only so the empty state can word itself correctly -- "none in this
+   *  sector" is a false statement when no sector is selected. */
+  sectorNo?: number | null
 }) {
   const [uncapped, setUncapped] = useState(false)
   const visible = uncapped ? features : features.slice(0, LOCATOR_ROW_CAP)
-  const hiddenCount = total - visible.length
+  // Counted against what actually arrived, not the DB total: the locate
+  // endpoints cap their feature list server-side (MAX_FEATURES), so a class
+  // with 800 matches ships far fewer rows. Subtracting from `total` promised
+  // "Show 796 more…" and then produced a fraction of that, with nothing
+  // explaining where the rest went. `truncated` states that separately and
+  // honestly, instead of hiding it inside a number that was never real.
+  const hiddenCount = features.length - visible.length
+  const truncated = total > features.length
 
   return (
     <tr>
@@ -300,6 +599,18 @@ function LocatorList<F extends { id: number; lng: number; lat: number }>({
           className="my-0.5 ml-[30px] flex flex-col gap-0.5 border-l-2 pl-2"
           style={{ borderColor: `color-mix(in srgb, ${color} 40%, transparent)` }}
         >
+          {/* Reachable in normal use, not just in theory: /api/stats returns
+              0-count rows on purpose so every known value stays listed, and
+              now that locate is sector-scoped those rows genuinely have no
+              features here. Without this the row rendered as a bare coloured
+              strip with nothing in it. */}
+          {features.length === 0 && (
+            <div className="py-1 pl-1.5 text-[11px]" style={{ color: 'var(--map-fg-faint)' }}>
+              {sectorNo !== null && sectorNo !== undefined
+                ? 'None in this sector'
+                : 'No features to show'}
+            </div>
+          )}
           {visible.map((f) => {
             const sub = subtitle?.(f)
             return (
@@ -366,6 +677,13 @@ function LocatorList<F extends { id: number; lng: number; lat: number }>({
               Show {hiddenCount} more…
             </button>
           )}
+          {/* Only once the list is fully expanded, so it explains the gap at
+              the moment the user can see there is one. */}
+          {(uncapped || hiddenCount === 0) && truncated && (
+            <div className="py-1 pl-1.5 text-[10.5px]" style={{ color: 'var(--map-fg-faint)' }}>
+              Showing {features.length} of {total} — zoom or filter to narrow
+            </div>
+          )}
         </div>
       </td>
     </tr>
@@ -386,8 +704,12 @@ function PoiTable({
   onSubclassFilterChange,
   expandedLayers,
   onToggleExpanded,
-  poiLocateResult,
+  poiLocateTargets,
+  onTogglePoiLocate,
+  onRetryPoiLocate,
+  poiLocateResults,
   onPoiLocateFeatureClick,
+  sectorNo,
 }: {
   rows: { layer: string; features: number; hectares: string | null }[]
   poiSubclassRows: { layer: string; subclass: string; features: number }[]
@@ -397,46 +719,86 @@ function PoiTable({
   onSubclassFilterChange: (layerKey: string, subclass: string) => void
   expandedLayers: Set<string>
   onToggleExpanded: (layerKey: string) => void
-  poiLocateResult: PoiLocateResult | null
+  poiLocateTargets: { layer: string; subclass: string | null }[]
+  onTogglePoiLocate: (layerKey: string, subclass: string | null) => void
+  /** Clears a failed locate so it refetches -- see MapView's retryPoiLocate.
+   *  Distinct from the toggle: the row is still open when the error shows. */
+  onRetryPoiLocate: (layerKey: string, subclass: string | null) => void
+  poiLocateResults: Record<string, LocateState<PoiLocateResult>>
   onPoiLocateFeatureClick: (lng: number, lat: number) => void
+  /** Part of the locate cache key -- see locateKey. */
+  sectorNo: number | null
 }) {
+  // Defaults to name-ascending, matching how this list has always read; the
+  // numeric columns are opt-in via their headers.
+  const [sort, setSort] = useState<SortState>({ key: 'name', desc: false })
+  function onSort(key: SortKey) {
+    setSort((prev) =>
+      prev.key === key ? { key, desc: !prev.desc } : { key, desc: key !== 'name' },
+    )
+  }
+  const label = (layer: string) => POI_LABELS[layer] ?? layer
+  const sortedRows = [...rows].sort((a, b) => {
+    const dir = sort.desc ? -1 : 1
+    if (sort.key === 'name') return dir * label(a.layer).localeCompare(label(b.layer))
+    if (sort.key === 'features') return dir * (a.features - b.features)
+    return dir * ((Number(a.hectares) || 0) - (Number(b.hectares) || 0))
+  })
+  const maxFeatures = Math.max(...rows.map((r) => r.features), 0)
+  const maxArea = Math.max(...rows.map((r) => Number(r.hectares) || 0), 0)
+
   return (
     <div className="-mx-3.5">
-      <table className="w-full border-separate border-spacing-0 text-[12px]">
+      {/* table-fixed + explicit numeric widths: without them the long class
+          names size the first column and push Features/Ha past the panel's
+          right edge, clipping the values. */}
+      <table className="w-full table-fixed border-separate border-spacing-0 text-[12px]">
+        <colgroup>
+          <col />
+          <col className="w-[62px]" />
+          <col className="w-[58px]" />
+        </colgroup>
         <thead>
           <tr>
-            <th
-              style={{ background: 'var(--map-surface)', color: 'var(--map-fg-faint)' }}
-              className="pl-3.5 pt-1 pb-1.5 pr-2 text-left text-[10.5px] font-semibold uppercase tracking-wide"
-            >
-              Layer
-            </th>
-            <th
-              style={{ background: 'var(--map-surface)', color: 'var(--map-fg-faint)' }}
-              className="pt-1 pb-1.5 pr-2 text-right text-[10.5px] font-semibold uppercase tracking-wide"
-            >
-              Features
-            </th>
-            <th
-              style={{ background: 'var(--map-surface)', color: 'var(--map-fg-faint)' }}
-              className="pt-1 pb-1.5 pr-3.5 text-right text-[10.5px] font-semibold uppercase tracking-wide"
-            >
-              Ha
-            </th>
+            <SortHeader
+              label="Layer"
+              sortKey="name"
+              sort={sort}
+              onSort={onSort}
+              align="left"
+              className="pl-3.5 pr-2"
+            />
+            <SortHeader
+              label="Features"
+              sortKey="features"
+              sort={sort}
+              onSort={onSort}
+              className="pr-2"
+            />
+            <SortHeader label="Ha" sortKey="area" sort={sort} onSort={onSort} className="pr-3.5" />
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
+          {sortedRows.map((row) => {
             const signageCode = POI_SIGNAGE_CODES[row.layer]
             const color = POI_COLORS[row.layer] ?? '#cbd5e1'
             const subs = poiSubclassRows.filter((r) => r.layer === row.layer)
             const hasChildren = subs.length > 1
-            const isExpanded = expandedLayers.has(row.layer)
+            // Auto-expands when this layer's list (or a sub-class within it)
+            // is open, so opening a sub-class's list from elsewhere (e.g. the
+            // Layers panel) never leaves it hidden behind a collapsed row.
+            const isExpanded =
+              expandedLayers.has(row.layer) || poiLocateTargets.some((t) => t.layer === row.layer)
             const partialSubs = poiSubclassFilter[row.layer]
             const isFullyOn = poiVisibility[row.layer] && !partialSubs
             const isActive = isFullyOn || (!!partialSubs && partialSubs.length > 0)
+            const isPartial = !isFullyOn && !!partialSubs && partialSubs.length > 0
             const rowTint = `color-mix(in srgb, ${color} var(--map-row-tint-pct), transparent)`
-            const showLocator = poiLocateResult && poiLocateResult.layer === row.layer
+            const isLayerListOpen = poiLocateTargets.some(
+              (t) => t.layer === row.layer && t.subclass === null,
+            )
+            const layerListResult = poiLocateResults[locateKey(row.layer, null, sectorNo)] ?? null
+            const isLayerListLoading = isLayerListOpen && layerListResult === null
 
             return (
               <Fragment key={row.layer}>
@@ -462,6 +824,7 @@ function PoiTable({
                           onClick={() => onToggleExpanded(row.layer)}
                           aria-expanded={isExpanded}
                           aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${POI_LABELS[row.layer] ?? row.layer} sub-classes`}
+                          title={`${isExpanded ? 'Collapse' : 'Expand'} sub-classes`}
                           style={{ color: 'var(--map-fg-faint)' }}
                           className="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-[var(--map-surface-hover)]"
                         >
@@ -475,95 +838,158 @@ function PoiTable({
                       <button
                         type="button"
                         onClick={() => onRowClick(row.layer)}
-                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left"
+                        aria-pressed={isActive}
+                        title={`${isActive ? 'Hide' : 'Show'} ${POI_LABELS[row.layer] ?? row.layer} on the map`}
+                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--map-accent)]"
                       >
-                        {signageCode ? (
+                        <RowCheckbox checked={isActive} indeterminate={isPartial} color={color} />
+                        {/* Signage-coded layers keep their badge; everything
+                            else relies on the checkbox's own colour -- see the
+                            matching note in ClassAreaTable. */}
+                        {signageCode && (
                           <span
                             className="flex h-3.5 shrink-0 items-center justify-center rounded-[3px] px-1 text-[8.5px] font-bold leading-none text-white"
                             style={{ background: color }}
                           >
                             {signageCode}
                           </span>
-                        ) : (
-                          <span
-                            className="h-2 w-2 shrink-0 rounded-full"
-                            style={{ background: color }}
-                          />
                         )}
                         <span className="truncate">{POI_LABELS[row.layer] ?? row.layer}</span>
                       </button>
+                      <LocateToggleButton
+                        isOpen={isLayerListOpen}
+                        isLoading={isLayerListLoading}
+                        color={color}
+                        onClick={() => onTogglePoiLocate(row.layer, null)}
+                        label={`${isLayerListOpen ? 'Hide' : 'Show'} ${POI_LABELS[row.layer] ?? row.layer} locations`}
+                      />
                     </span>
                   </td>
                   <td
                     style={{ color: isActive ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
-                    className={`cursor-pointer py-1.5 pr-2 text-right tabular-nums ${isActive ? 'font-semibold' : ''}`}
+                    className={`relative cursor-pointer overflow-hidden pt-1.5 pb-2.5 pr-2 text-right tabular-nums ${isActive ? 'font-semibold' : ''}`}
                     onClick={() => onRowClick(row.layer)}
                   >
-                    {row.features}
+                    <MagnitudeBar value={row.features} max={maxFeatures} color={color} />
+                    <span className="relative" title={String(row.features)}>
+                      {formatStatValue(row.features)}
+                    </span>
                   </td>
                   <td
                     style={{ color: isActive ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
-                    className={`cursor-pointer py-1.5 pr-3.5 text-right tabular-nums ${isActive ? 'font-semibold' : ''}`}
+                    className={`relative cursor-pointer overflow-hidden pt-1.5 pb-2.5 pr-3.5 text-right tabular-nums ${isActive ? 'font-semibold' : ''}`}
                     onClick={() => onRowClick(row.layer)}
                   >
-                    {row.hectares ?? '—'}
+                    <MagnitudeBar value={Number(row.hectares) || 0} max={maxArea} color={color} />
+                    <span className="relative" title={row.hectares ?? undefined}>
+                      {formatStatValue(row.hectares)}
+                    </span>
                   </td>
                 </tr>
+                {isLayerListOpen && layerListResult === 'error' && (
+                  <LocatorError onRetry={() => onRetryPoiLocate(row.layer, null)} />
+                )}
+                {isLayerListOpen && layerListResult && layerListResult !== 'error' && (
+                  <LocatorList
+                    features={layerListResult.features}
+                    total={layerListResult.total}
+                    onFeatureClick={onPoiLocateFeatureClick}
+                    color={color}
+                    title={(f) => f.label ?? POI_LABELS[row.layer] ?? row.layer}
+                    subtitle={makePoiSubtitle(sectorNo)}
+                  />
+                )}
                 {hasChildren &&
                   isExpanded &&
                   subs.map((sub) => {
                     const subChecked = isFullyOn
                       ? true
                       : (partialSubs?.includes(sub.subclass) ?? false)
+                    const isSubListOpen = poiLocateTargets.some(
+                      (t) => t.layer === row.layer && t.subclass === sub.subclass,
+                    )
+                    const subListResult =
+                      poiLocateResults[locateKey(row.layer, sub.subclass, sectorNo)] ?? null
+                    const isSubListLoading = isSubListOpen && subListResult === null
                     return (
-                      <tr
-                        key={`${row.layer}::${sub.subclass}`}
-                        className="cursor-pointer hover:bg-[var(--map-surface-hover)]"
-                        style={
-                          subChecked
-                            ? {
-                                background: `color-mix(in srgb, ${color} calc(var(--map-row-tint-pct) * 0.6), transparent)`,
-                              }
-                            : undefined
-                        }
-                        onClick={() => onSubclassFilterChange(row.layer, sub.subclass)}
-                      >
-                        <td
-                          style={{ color: subChecked ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
-                          className={`py-1 pl-3.5 pr-2 text-left text-[11.5px] ${subChecked ? 'font-medium' : ''}`}
+                      <Fragment key={`${row.layer}::${sub.subclass}`}>
+                        <tr
+                          className="cursor-pointer hover:bg-[var(--map-surface-hover)]"
+                          style={
+                            subChecked
+                              ? {
+                                  background: `color-mix(in srgb, ${color} var(--map-row-tint-pct), transparent)`,
+                                }
+                              : undefined
+                          }
+                          onClick={() => onSubclassFilterChange(row.layer, sub.subclass)}
                         >
-                          <span className="flex items-center gap-1.5 pl-5">
-                            <span
-                              className="h-1.5 w-1.5 shrink-0 rounded-full"
-                              style={{ background: color, opacity: subChecked ? 1 : 0.45 }}
-                            />
-                            <span className="truncate">{sub.subclass}</span>
-                          </span>
-                        </td>
-                        <td
-                          style={{ color: subChecked ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
-                          className="py-1 pr-2 text-right text-[11.5px] tabular-nums"
-                        >
-                          {sub.features}
-                        </td>
-                        <td
-                          style={{ color: subChecked ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
-                          className="py-1 pr-3.5 text-right text-[11.5px] tabular-nums"
-                        >
-                          —
-                        </td>
-                      </tr>
+                          <td
+                            style={{ color: subChecked ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
+                            className={`relative py-1 pl-3.5 pr-2 text-left text-[11.5px] ${subChecked ? 'font-semibold' : ''}`}
+                          >
+                            {subChecked && (
+                              <span
+                                aria-hidden="true"
+                                className="absolute inset-y-0.5 left-0 w-[3px] rounded-full"
+                                style={{ background: color }}
+                              />
+                            )}
+                            <span className="flex items-center gap-1.5 pl-5">
+                              {/* The row's <tr> keeps its own onClick for mouse users, but the
+                                  label is a real button so the primary action is focusable and
+                                  reachable by keyboard -- a <tr onClick> alone is not. */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  onSubclassFilterChange(row.layer, sub.subclass)
+                                }}
+                                aria-pressed={subChecked}
+                                title={`${subChecked ? 'Clear' : 'Filter map to'} ${sub.subclass}`}
+                                className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--map-accent)]"
+                              >
+                                <RowCheckbox checked={subChecked} color={color} size="sm" />
+                                <span className="min-w-0 truncate">{sub.subclass}</span>
+                              </button>
+                              <LocateToggleButton
+                                isOpen={isSubListOpen}
+                                isLoading={isSubListLoading}
+                                color={color}
+                                onClick={() => onTogglePoiLocate(row.layer, sub.subclass)}
+                                label={`${isSubListOpen ? 'Hide' : 'Show'} ${sub.subclass} locations`}
+                              />
+                            </span>
+                          </td>
+                          <td
+                            style={{ color: subChecked ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
+                            className="py-1 pr-2 text-right text-[11.5px] tabular-nums"
+                          >
+                            {sub.features}
+                          </td>
+                          <td
+                            style={{ color: subChecked ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
+                            className="py-1 pr-3.5 text-right text-[11.5px] tabular-nums"
+                          >
+                            —
+                          </td>
+                        </tr>
+                        {isSubListOpen && subListResult === 'error' && (
+                          <LocatorError onRetry={() => onRetryPoiLocate(row.layer, sub.subclass)} />
+                        )}
+                        {isSubListOpen && subListResult && subListResult !== 'error' && (
+                          <LocatorList
+                            features={subListResult.features}
+                            total={subListResult.total}
+                            onFeatureClick={onPoiLocateFeatureClick}
+                            color={color}
+                            title={(f) => f.label ?? sub.subclass}
+                            subtitle={makePoiSubtitle(sectorNo)}
+                          />
+                        )}
+                      </Fragment>
                     )
                   })}
-                {showLocator && poiLocateResult && (
-                  <LocatorList
-                    features={poiLocateResult.features}
-                    total={poiLocateResult.total}
-                    onFeatureClick={onPoiLocateFeatureClick}
-                    color={color}
-                    title={(f) => f.label ?? POI_LABELS[row.layer] ?? row.layer}
-                  />
-                )}
               </Fragment>
             )
           })}
@@ -590,8 +1016,12 @@ function ClassAreaTable({
   onToggleExpanded,
   uncappedClasses,
   onUncap,
-  locateResult,
+  locateTargets,
+  onToggleLocate,
+  onRetryLocate,
+  locateResults,
   onLocateFeatureClick,
+  sectorNo,
 }: {
   rows: Stats['byClass']
   subclassRows: Stats['bySubclass']
@@ -603,59 +1033,99 @@ function ClassAreaTable({
   onToggleExpanded: (cls: string) => void
   uncappedClasses: Set<string>
   onUncap: (cls: string) => void
-  locateResult: LocateResult | null
+  locateTargets: { classGroup: string; subclass: string | null }[]
+  onToggleLocate: (classGroup: string, subclass: string | null) => void
+  /** See onRetryPoiLocate. */
+  onRetryLocate: (classGroup: string, subclass: string | null) => void
+  locateResults: Record<string, LocateState<LocateResult>>
   onLocateFeatureClick: (lng: number, lat: number) => void
+  /** Part of the locate cache key -- see locateKey. */
+  sectorNo: number | null
 }) {
+  const [sort, setSort] = useState<SortState>({ key: 'area', desc: true })
+  function onSort(key: SortKey) {
+    setSort((prev) =>
+      prev.key === key ? { key, desc: !prev.desc } : { key, desc: key !== 'name' },
+    )
+  }
+  const sortedRows = [...rows].sort((a, b) => {
+    const dir = sort.desc ? -1 : 1
+    if (sort.key === 'name') return dir * a.class_group.localeCompare(b.class_group)
+    if (sort.key === 'features') return dir * (a.features - b.features)
+    return dir * (Number(a.hectares) - Number(b.hectares))
+  })
+  const maxFeatures = Math.max(...rows.map((r) => r.features), 0)
+  const maxArea = Math.max(...rows.map((r) => Number(r.hectares) || 0), 0)
+
   return (
     <div className="-mx-3.5">
-      <table className="w-full border-separate border-spacing-0 text-[12px]">
+      {/* table-fixed + explicit numeric widths: without them the long class
+          names size the first column and push Features/Ha past the panel's
+          right edge, clipping the values. */}
+      <table className="w-full table-fixed border-separate border-spacing-0 text-[12px]">
+        <colgroup>
+          <col />
+          <col className="w-[62px]" />
+          <col className="w-[58px]" />
+        </colgroup>
         <thead>
           <tr>
-            <th
-              style={{ background: 'var(--map-surface)', color: 'var(--map-fg-faint)' }}
-              className="pl-3.5 pt-1 pb-1.5 pr-2 text-left text-[10.5px] font-semibold uppercase tracking-wide"
-            >
-              Class
-            </th>
-            <th
-              style={{ background: 'var(--map-surface)', color: 'var(--map-fg-faint)' }}
-              className="pt-1 pb-1.5 pr-2 text-right text-[10.5px] font-semibold uppercase tracking-wide"
-            >
-              Features
-            </th>
-            <th
-              style={{ background: 'var(--map-surface)', color: 'var(--map-fg-faint)' }}
-              className="pt-1 pb-1.5 pr-3.5 text-right text-[10.5px] font-semibold uppercase tracking-wide"
-            >
-              Ha
-            </th>
+            <SortHeader
+              label="Class"
+              sortKey="name"
+              sort={sort}
+              onSort={onSort}
+              align="left"
+              className="pl-3.5 pr-2"
+            />
+            <SortHeader
+              label="Features"
+              sortKey="features"
+              sort={sort}
+              onSort={onSort}
+              className="pr-2"
+            />
+            <SortHeader label="Ha" sortKey="area" sort={sort} onSort={onSort} className="pr-3.5" />
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
+          {sortedRows.map((row) => {
             const cls = row.class_group
             const color = CLASS_GROUP_COLORS[cls] ?? '#cbd5e1'
-            const subs = subclassRows.filter((r) => r.class_group === cls)
+            // Null-subclass rows are excluded, matching the left panel's
+            // dropdown tree. kumbh.sector_plan has 2 such rows (both in
+            // "Reserved Area"), and /api/stats does not filter them out, so
+            // they previously rendered as a nameless row whose checkbox and
+            // pin sat next to blank text -- and worse, that pin's identity
+            // was (cls, null), colliding with the class-level pin: the same
+            // locateKey, so the two rows shared one open state and one
+            // cached result.
+            const subs = subclassRows.filter((r) => r.class_group === cls && r.subclass !== null)
             const hasChildren = subs.length > 1
-            // Auto-expands when the locate target lands inside this class
-            // (e.g. a sub-class checked from the Layers panel's tree, not
-            // this row's own chevron) so the locator list is never hidden
-            // behind a collapsed row.
+            // Auto-expands when this class's list (or a sub-class within it)
+            // is open, so opening a sub-class's list from elsewhere (e.g. the
+            // Layers panel) never leaves it hidden behind a collapsed row.
             const isExpanded =
-              expandedClasses.has(cls) || (locateResult !== null && locateResult.classGroup === cls)
+              expandedClasses.has(cls) || locateTargets.some((t) => t.classGroup === cls)
             const isFullySelected = classFilter.includes(cls)
             const partialSubs = subclassFilter[cls]
             const isActive = isFullySelected || (!!partialSubs && partialSubs.length > 0)
             const rowTint = `color-mix(in srgb, ${color} var(--map-row-tint-pct), transparent)`
-            // Also uncaps automatically when the locate target is a
-            // sub-class that would otherwise fall past the default cap --
-            // a user who explicitly picked it (from here or the Layers
-            // panel) shouldn't have its locator list silently missing.
-            const targetSubclassCapped =
-              locateResult !== null &&
-              locateResult.classGroup === cls &&
-              locateResult.subclass !== null &&
-              subs.findIndex((s) => s.subclass === locateResult.subclass) >= SUBCLASS_ROW_CAP
+            const isClassListOpen = locateTargets.some(
+              (t) => t.classGroup === cls && t.subclass === null,
+            )
+            const classListResult = locateResults[locateKey(cls, null, sectorNo)] ?? null
+            const isClassListLoading = isClassListOpen && classListResult === null
+            // Also uncaps automatically when the open list is a sub-class
+            // that would otherwise fall past the default cap -- a user who
+            // explicitly opened it (from here or the Layers panel) shouldn't
+            // have its locator list silently missing.
+            const targetSubclassCapped = locateTargets.some(
+              (t) =>
+                t.classGroup === cls &&
+                t.subclass !== null &&
+                subs.findIndex((s) => s.subclass === t.subclass) >= SUBCLASS_ROW_CAP,
+            )
             const capped = !uncappedClasses.has(cls) && !targetSubclassCapped
             const visibleSubs = capped ? subs.slice(0, SUBCLASS_ROW_CAP) : subs
             const hiddenCount = subs.length - visibleSubs.length
@@ -684,6 +1154,7 @@ function ClassAreaTable({
                           onClick={() => onToggleExpanded(cls)}
                           aria-expanded={isExpanded}
                           aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${cls} sub-classes`}
+                          title={`${isExpanded ? 'Collapse' : 'Expand'} sub-classes`}
                           style={{ color: 'var(--map-fg-faint)' }}
                           className="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-[var(--map-surface-hover)]"
                         >
@@ -697,62 +1168,83 @@ function ClassAreaTable({
                       <button
                         type="button"
                         onClick={() => onClassFilterChange(cls)}
-                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left"
+                        aria-pressed={isActive}
+                        title={`${isActive ? 'Clear' : 'Filter map to'} ${cls}`}
+                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--map-accent)]"
                       >
-                        <span
-                          className="h-2 w-2 shrink-0 rounded-[2px]"
-                          style={{ background: color }}
+                        <RowCheckbox
+                          checked={isActive}
+                          indeterminate={
+                            !isFullySelected && !!partialSubs && partialSubs.length > 0
+                          }
+                          color={color}
                         />
+                        {/* No separate colour dot: RowCheckbox already fills
+                            with the class colour when checked, and its border
+                            carries it when unchecked, so a second swatch 2px
+                            away just read as one smeared control. */}
                         <span className="truncate">{cls}</span>
                       </button>
+                      <LocateToggleButton
+                        isOpen={isClassListOpen}
+                        isLoading={isClassListLoading}
+                        color={color}
+                        onClick={() => onToggleLocate(cls, null)}
+                        label={`${isClassListOpen ? 'Hide' : 'Show'} ${cls} locations`}
+                      />
                     </span>
                   </td>
                   <td
                     style={{ color: isActive ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
-                    className={`cursor-pointer py-1.5 pr-2 text-right tabular-nums ${isActive ? 'font-semibold' : ''}`}
+                    className={`relative cursor-pointer overflow-hidden pt-1.5 pb-2.5 pr-2 text-right tabular-nums ${isActive ? 'font-semibold' : ''}`}
                     onClick={() => onClassFilterChange(cls)}
                   >
-                    {row.features}
+                    <MagnitudeBar value={row.features} max={maxFeatures} color={color} />
+                    <span className="relative" title={String(row.features)}>
+                      {formatStatValue(row.features)}
+                    </span>
                   </td>
                   <td
                     style={{ color: isActive ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
-                    className={`cursor-pointer py-1.5 pr-3.5 text-right tabular-nums ${isActive ? 'font-semibold' : ''}`}
+                    className={`relative cursor-pointer overflow-hidden pt-1.5 pb-2.5 pr-3.5 text-right tabular-nums ${isActive ? 'font-semibold' : ''}`}
                     onClick={() => onClassFilterChange(cls)}
                   >
-                    {row.hectares}
+                    <MagnitudeBar value={Number(row.hectares)} max={maxArea} color={color} />
+                    <span className="relative" title={row.hectares}>
+                      {formatStatValue(row.hectares)}
+                    </span>
                   </td>
                 </tr>
-                {isFullySelected &&
-                  locateResult &&
-                  locateResult.classGroup === cls &&
-                  locateResult.subclass === null && (
-                    <LocatorList
-                      key={`${cls}::locate`}
-                      features={locateResult.features}
-                      total={locateResult.total}
-                      onFeatureClick={onLocateFeatureClick}
-                      color={color}
-                      title={(f) =>
-                        (f.sector_no !== null
-                          ? `Sector ${String(f.sector_no).padStart(2, '0')}`
-                          : 'Peripheral') + (f.plot_no ? ` · Plot ${f.plot_no}` : '')
-                      }
-                      subtitle={(f) => f.label}
-                    />
-                  )}
+                {isClassListOpen && classListResult === 'error' && (
+                  <LocatorError onRetry={() => onRetryLocate(cls, null)} />
+                )}
+                {isClassListOpen && classListResult && classListResult !== 'error' && (
+                  <LocatorList
+                    key={`${cls}::locate`}
+                    features={classListResult.features}
+                    total={classListResult.total}
+                    onFeatureClick={onLocateFeatureClick}
+                    color={color}
+                    title={(f) =>
+                      (f.sector_no !== null
+                        ? `Sector ${String(f.sector_no).padStart(2, '0')}`
+                        : 'Peripheral') + (f.plot_no ? ` · Plot ${f.plot_no}` : '')
+                    }
+                    subtitle={(f) => f.label}
+                  />
+                )}
                 {hasChildren &&
                   isExpanded &&
                   visibleSubs.map((sub) => {
                     const subChecked = isFullySelected
                       ? true
                       : (partialSubs?.includes(sub.subclass) ?? false)
-                    const showLocator =
-                      !isFullySelected &&
-                      subChecked &&
-                      partialSubs?.length === 1 &&
-                      locateResult &&
-                      locateResult.classGroup === cls &&
-                      locateResult.subclass === sub.subclass
+                    const isSubListOpen = locateTargets.some(
+                      (t) => t.classGroup === cls && t.subclass === sub.subclass,
+                    )
+                    const subListResult =
+                      locateResults[locateKey(cls, sub.subclass, sectorNo)] ?? null
+                    const isSubListLoading = isSubListOpen && subListResult === null
                     return (
                       <Fragment key={`${cls}::${sub.subclass}`}>
                         <tr
@@ -768,14 +1260,43 @@ function ClassAreaTable({
                         >
                           <td
                             style={{ color: subChecked ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
-                            className={`py-1 pl-3.5 pr-2 text-left text-[11.5px] ${subChecked ? 'font-medium' : ''}`}
+                            className={`relative py-1 pl-3.5 pr-2 text-left text-[11.5px] ${subChecked ? 'font-semibold' : ''}`}
                           >
-                            <span className="flex items-center gap-1.5 pl-5">
+                            {/* Same selected-state treatment as PoiTable's
+                                sub-rows: these two tables sit inches apart and
+                                otherwise share a visual language, but this one
+                                drew no accent bar and used a lighter weight,
+                                so the identical state read differently
+                                depending on which table you were looking at. */}
+                            {subChecked && (
                               <span
-                                className="h-1.5 w-1.5 shrink-0 rounded-full"
-                                style={{ background: color, opacity: subChecked ? 1 : 0.45 }}
+                                aria-hidden="true"
+                                className="absolute inset-y-0.5 left-0 w-[3px] rounded-full"
+                                style={{ background: color }}
                               />
-                              <span className="truncate">{sub.subclass}</span>
+                            )}
+                            <span className="flex items-center gap-1.5 pl-5">
+                              {/* Focusable label button -- see the matching comment in PoiTable. */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  onSubclassFilterChange(cls, sub.subclass)
+                                }}
+                                aria-pressed={subChecked}
+                                title={`${subChecked ? 'Clear' : 'Filter map to'} ${sub.subclass}`}
+                                className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--map-accent)]"
+                              >
+                                <RowCheckbox checked={subChecked} color={color} size="sm" />
+                                <span className="min-w-0 truncate">{sub.subclass}</span>
+                              </button>
+                              <LocateToggleButton
+                                isOpen={isSubListOpen}
+                                isLoading={isSubListLoading}
+                                color={color}
+                                onClick={() => onToggleLocate(cls, sub.subclass)}
+                                label={`${isSubListOpen ? 'Hide' : 'Show'} ${sub.subclass} locations`}
+                              />
                             </span>
                           </td>
                           <td
@@ -791,10 +1312,13 @@ function ClassAreaTable({
                             {sub.hectares}
                           </td>
                         </tr>
-                        {showLocator && locateResult && (
+                        {isSubListOpen && subListResult === 'error' && (
+                          <LocatorError onRetry={() => onRetryLocate(cls, sub.subclass)} />
+                        )}
+                        {isSubListOpen && subListResult && subListResult !== 'error' && (
                           <LocatorList
-                            features={locateResult.features}
-                            total={locateResult.total}
+                            features={subListResult.features}
+                            total={subListResult.total}
                             onFeatureClick={onLocateFeatureClick}
                             color={color}
                             title={(f) =>
@@ -841,17 +1365,26 @@ export default function StatsPanel({
   onClassFilterChange,
   subclassFilter,
   onSubclassFilterChange,
-  locateResult,
+  locateTargets,
+  onToggleLocate,
+  onRetryLocate,
+  locateResults,
   onLocateFeatureClick,
   poiVisibility,
   onTogglePoiLayer,
   poiSubclassFilter,
   onPoiSubclassFilterChange,
-  poiLocateResult,
+  poiLocateTargets,
+  onTogglePoiLocate,
+  onRetryPoiLocate,
+  poiLocateResults,
   onPoiLocateFeatureClick,
   roadTypeVisibility,
   onToggleRoadType,
   onWidthChange,
+  forceCollapsed,
+  onExpand,
+  onCollapse,
 }: {
   icon: ReactNode
   /** Restricts every table to one sector's rows when set. */
@@ -871,14 +1404,25 @@ export default function StatsPanel({
   /** Sub-class selections for classes that are only partially checked --
    *  keyed by class_group, same partial-selection model as the Layers
    *  panel's class tree (a class fully in classFilter implies all its
-   *  sub-classes and has no entry here). */
+   *  sub-classes and has no entry here). Several sub-classes across several
+   *  classes can be selected at once -- this is a genuine multi-select. */
   subclassFilter: Record<string, string[]>
   /** Toggles a single (class, subclass) pair in/out of the active set. */
   onSubclassFilterChange: (className: string, subclass: string) => void
-  /** Bbox + per-feature centroids for the single class/sub-class the
-   *  filter currently resolves to, or null when the selection is broader
-   *  than one target -- drives the locator list nested under that row. */
-  locateResult: LocateResult | null
+  /** Every class/sub-class row with its locator list currently open --
+   *  independent of classFilter/subclassFilter (a class can be selected
+   *  without its list open, or listed without being selected). subclass is
+   *  null for the class-level (not sub-class) list. Several stay open at
+   *  once so two classes can be compared side by side. */
+  locateTargets: { classGroup: string; subclass: string | null }[]
+  /** Opens/closes one row's locator list, mirroring onTogglePoiLocate. */
+  onToggleLocate: (classGroup: string, subclass: string | null) => void
+  /** See onRetryPoiLocate. */
+  onRetryLocate: (classGroup: string, subclass: string | null) => void
+  /** Bbox + per-feature centroids per open row, keyed by locateKey. A key
+   *  mapped to null means its fetch is still in flight (drives that row's
+   *  spinner); an absent key means that row's list is closed. */
+  locateResults: Record<string, LocateState<LocateResult>>
   /** Flies the map to one specific matched feature from the locator list. */
   onLocateFeatureClick: (lng: number, lat: number) => void
   /** Same on/off map keyed by POI layer key as the Layers panel's toggles --
@@ -888,13 +1432,20 @@ export default function StatsPanel({
   onTogglePoiLayer: (layerKey: string) => void
   /** Sub-class selections for POI layers that are only partially checked --
    *  same partial-selection model as subclassFilter, keyed by POI layer key
-   *  instead of class_group. */
+   *  instead of class_group. Also a genuine multi-select now (Temple and
+   *  Mosque can both be checked at once). */
   poiSubclassFilter: Record<string, string[]>
   onPoiSubclassFilterChange: (layerKey: string, subclass: string) => void
-  /** Bbox + per-feature centroids for whichever POI layer was last clicked
-   *  on here, or null once nothing's been clicked -- drives the locator
-   *  list nested under that layer's row, mirroring locateResult above. */
-  poiLocateResult: PoiLocateResult | null
+  /** Every POI layer/sub-class row with its locator list open -- mirrors
+   *  locateTargets above, independent of poiSubclassFilter/poiVisibility. */
+  poiLocateTargets: { layer: string; subclass: string | null }[]
+  /** Opens/closes one row's locator list, mirroring onToggleLocate. */
+  onTogglePoiLocate: (layerKey: string, subclass: string | null) => void
+  /** Clears a failed locate so it refetches -- see MapView's retryPoiLocate.
+   *  Distinct from the toggle: the row is still open when the error shows. */
+  onRetryPoiLocate: (layerKey: string, subclass: string | null) => void
+  /** Keyed by locateKey, mirroring locateResults. */
+  poiLocateResults: Record<string, LocateState<PoiLocateResult>>
   /** Flies the map to one specific matched POI feature. */
   onPoiLocateFeatureClick: (lng: number, lat: number) => void
   /** Same visibility map, keyed by road type -- independent on/off per row,
@@ -905,6 +1456,15 @@ export default function StatsPanel({
    *  MapView, which uses it to keep fitBounds/flyTo results centered in the
    *  space actually free of this panel instead of half-hidden behind it. */
   onWidthChange?: (width: number) => void
+  /** Forwarded to the underlying Panel -- forces this panel closed on a phone-width viewport
+   *  while the left search panel is open there instead (see Panel.tsx's forceCollapsed doc). */
+  forceCollapsed?: boolean
+  /** Forwarded to the underlying Panel -- fires when the user expands this panel, so MapView can
+   *  force-collapse the left search panel on a phone-width viewport. */
+  onExpand?: () => void
+  /** Forwarded to the underlying Panel -- fires when the user collapses this panel, so MapView
+   *  can clear its "which panel is expanded" tracker and let the search panel reappear. */
+  onCollapse?: () => void
 }) {
   const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(true)
@@ -976,6 +1536,9 @@ export default function StatsPanel({
       minWidth={260}
       maxWidth={640}
       onRenderedWidthChange={onWidthChange}
+      forceCollapsed={forceCollapsed}
+      onExpand={onExpand}
+      onCollapse={onCollapse}
     >
       {filtered && onClearSector && (
         <button
@@ -1046,8 +1609,12 @@ export default function StatsPanel({
                     return next
                   })
                 }
-                locateResult={locateResult}
+                locateTargets={locateTargets}
+                onToggleLocate={onToggleLocate}
+                onRetryLocate={onRetryLocate}
+                locateResults={locateResults}
                 onLocateFeatureClick={onLocateFeatureClick}
+                sectorNo={sectorNo}
               />
             )}
           </Section>
@@ -1111,22 +1678,60 @@ export default function StatsPanel({
               </p>
             ) : (
               (() => {
-                const poiRows = [...stats.poiByLayer].sort((a, b) =>
-                  (POI_LABELS[a.layer] ?? a.layer).localeCompare(POI_LABELS[b.layer] ?? b.layer),
-                )
                 return (
-                  <PoiTable
-                    rows={poiRows}
-                    poiSubclassRows={stats.poiBySubclass}
-                    poiVisibility={poiVisibility}
-                    poiSubclassFilter={poiSubclassFilter}
-                    onRowClick={onTogglePoiLayer}
-                    onSubclassFilterChange={onPoiSubclassFilterChange}
-                    expandedLayers={expandedPoiLayers}
-                    onToggleExpanded={togglePoiExpanded}
-                    poiLocateResult={poiLocateResult}
-                    onPoiLocateFeatureClick={onPoiLocateFeatureClick}
-                  />
+                  <>
+                    {/* PoiTable sorts its own rows (name-ascending by default,
+                        or whichever column header was clicked). */}
+                    <PoiTable
+                      rows={stats.poiByLayer}
+                      poiSubclassRows={stats.poiBySubclass}
+                      poiVisibility={poiVisibility}
+                      poiSubclassFilter={poiSubclassFilter}
+                      onRowClick={onTogglePoiLayer}
+                      onSubclassFilterChange={onPoiSubclassFilterChange}
+                      expandedLayers={expandedPoiLayers}
+                      onToggleExpanded={togglePoiExpanded}
+                      poiLocateTargets={poiLocateTargets}
+                      onTogglePoiLocate={onTogglePoiLocate}
+                      onRetryPoiLocate={onRetryPoiLocate}
+                      poiLocateResults={poiLocateResults}
+                      onPoiLocateFeatureClick={onPoiLocateFeatureClick}
+                      sectorNo={sectorNo}
+                    />
+                    {/* Standalone footer note, not a PoiTable row -- see
+                        tertiaryRoadCount's comment on the Stats type. Same
+                        click-to-toggle affordance as a table row (reuses
+                        onTogglePoiLayer/poiVisibility) but visually set apart
+                        so its 21k+ count never reads as comparable to the
+                        curated layers above it. */}
+                    <button
+                      type="button"
+                      onClick={() => onTogglePoiLayer('tertiary_road')}
+                      className="mt-1.5 flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1 py-1 text-left text-[11px] hover:bg-[var(--map-surface-hover)]"
+                      style={{ color: 'var(--map-fg-faint)' }}
+                    >
+                      <span
+                        className="h-1.5 w-1.5 shrink-0 rounded-full"
+                        style={{
+                          background: POI_COLORS.tertiary_road,
+                          opacity: poiVisibility.tertiary_road ? 1 : 0.45,
+                        }}
+                      />
+                      <span className="truncate">
+                        + {stats.tertiaryRoadCount.toLocaleString()}{' '}
+                        {POI_LABELS.tertiary_road ?? 'Street network (OSM)'} segments
+                      </span>
+                      <span
+                        className="ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide"
+                        style={{
+                          background: 'var(--map-surface-hover)',
+                          color: 'var(--map-fg-faint)',
+                        }}
+                      >
+                        reference
+                      </span>
+                    </button>
+                  </>
                 )
               })()
             )}

@@ -98,128 +98,214 @@ export function TicketsTable({
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[900px] border-collapse text-sm">
-        <thead>
-          <tr className="border-b border-border text-left text-xs text-muted">
-            {table.getHeaderGroups()[0].headers.map((header, i) => {
-              const field = SORTABLE[header.id]
-              const isActive = field === activeSortField
-              return (
-                <th
-                  key={header.id}
-                  className={cn(
-                    'py-3 font-medium',
-                    i === 0 ? 'pl-5 pr-2' : 'px-2',
-                    header.id === 'updatedAt' && 'pr-5 text-right',
+    <>
+      {/* Card list — phones and portrait tablets. A 6-column table needs ~900px (min-w below)
+          to render every column without clipping; at `md` (768px, e.g. an iPad Mini in
+          portrait) the table would already be narrower than its own min-width, so it silently
+          overflows and the last one or two columns (Assignee, Updated) run off the right edge
+          with no visible "scroll for more" affordance -- easy to mistake for a rendering bug.
+          `lg` (1024px) is the first breakpoint that comfortably fits the table, so the card
+          view now covers phones and tablets, and only real desktop/landscape-tablet widths get
+          the table. */}
+      <div className="divide-y divide-border lg:hidden">
+        {tickets.map((t) => (
+          <Link
+            key={t.id}
+            href={`/tickets/${t.number}`}
+            className="relative block px-4 py-3.5 transition-colors active:bg-overlay"
+          >
+            {t.priority?.color && (
+              <span
+                className="pointer-events-none absolute inset-y-3 left-0 w-[3px] rounded-full"
+                style={{ backgroundColor: t.priority.color }}
+                aria-hidden
+              />
+            )}
+            <div className="flex items-start justify-between gap-3 pl-2.5">
+              <div className="min-w-0 flex-1">
+                <p className="font-mono text-[11px] text-muted">#{t.number}</p>
+                <p className="mt-0.5 truncate text-sm font-medium text-foreground">{t.subject}</p>
+                <p className="mt-0.5 truncate text-xs text-muted/80">{t.preview}</p>
+              </div>
+              <span className="shrink-0 pt-0.5 text-[11px] text-muted">{timeAgo(t.updatedAt)}</span>
+            </div>
+
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5 pl-2.5">
+              {t.location && (
+                <span className="flex items-center gap-1.5 rounded-md border border-border bg-overlay px-2 py-0.5 text-[11px]">
+                  <span
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{
+                      backgroundColor:
+                        CLASS_GROUP_COLORS[t.location.classGroup] ?? 'var(--color-muted)',
+                    }}
+                    aria-hidden
+                  />
+                  <span className="font-medium text-muted-strong">{t.location.classGroup}</span>
+                  {t.location.sectorNo !== null && (
+                    <span className="text-muted">· Sector {t.location.sectorNo}</span>
                   )}
-                >
-                  {field ? (
-                    <button
-                      type="button"
-                      onClick={() => toggleSort(header.id)}
-                      className={cn(
-                        'inline-flex cursor-pointer items-center gap-1 transition-colors hover:text-foreground',
-                        header.id === 'updatedAt' && 'flex-row-reverse',
-                        isActive && 'text-muted-strong',
-                      )}
-                    >
-                      {flexRender(header.column.columnDef.header, header.getContext())}
-                      {isActive &&
-                        (activeSortDir === 'desc' ? (
-                          <ArrowDown className="h-3 w-3" strokeWidth={2.5} />
-                        ) : (
-                          <ArrowUp className="h-3 w-3" strokeWidth={2.5} />
-                        ))}
-                    </button>
-                  ) : (
-                    flexRender(header.column.columnDef.header, header.getContext())
-                  )}
-                </th>
-              )
-            })}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {tickets.map((t) => (
-            <tr key={t.id} className="group transition-colors hover:bg-overlay">
-              {/* The coloured accent lives on the first <td> (not the <tr>) -- a table row is
+                </span>
+              )}
+              {t.tags.map((tag) => (
+                <Tag key={tag.id}>{tag.name}</Tag>
+              ))}
+              {t.comments > 0 && (
+                <span className="flex items-center gap-1 text-[11px] text-muted">
+                  <MessageSquare className="h-3 w-3" /> {t.comments}
+                </span>
+              )}
+            </div>
+
+            {/* Status/assignee controls mutate on click — stopPropagation keeps a tap on either
+                from also triggering the card's own Link navigation. */}
+            <div
+              className="mt-2.5 flex items-center justify-between gap-2 pl-2.5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <StatusSelect
+                ticketNumber={t.number}
+                statusId={t.statusId}
+                statuses={statuses}
+                disabled={!canUpdate}
+              />
+              <AssigneeDropdown
+                ticketNumber={t.number}
+                assignee={t.assignee}
+                users={users}
+                disabled={!canAssign}
+              />
+            </div>
+          </Link>
+        ))}
+      </div>
+
+      {/* Table — md and up. */}
+      <div className="hidden overflow-x-auto lg:block">
+        <table className="w-full min-w-[900px] border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-xs text-muted">
+              {table.getHeaderGroups()[0].headers.map((header, i) => {
+                const field = SORTABLE[header.id]
+                const isActive = field === activeSortField
+                return (
+                  <th
+                    key={header.id}
+                    className={cn(
+                      'py-3 font-medium',
+                      i === 0 ? 'pl-5 pr-2' : 'px-2',
+                      header.id === 'updatedAt' && 'pr-5 text-right',
+                    )}
+                  >
+                    {field ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(header.id)}
+                        className={cn(
+                          'inline-flex cursor-pointer items-center gap-1 transition-colors hover:text-foreground',
+                          header.id === 'updatedAt' && 'flex-row-reverse',
+                          isActive && 'text-muted-strong',
+                        )}
+                      >
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                        {isActive &&
+                          (activeSortDir === 'desc' ? (
+                            <ArrowDown className="h-3 w-3" strokeWidth={2.5} />
+                          ) : (
+                            <ArrowUp className="h-3 w-3" strokeWidth={2.5} />
+                          ))}
+                      </button>
+                    ) : (
+                      flexRender(header.column.columnDef.header, header.getContext())
+                    )}
+                  </th>
+                )
+              })}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {tickets.map((t) => (
+              <tr key={t.id} className="group transition-colors hover:bg-overlay">
+                {/* The coloured accent lives on the first <td> (not the <tr>) -- a table row is
                   an unreliable containing block for absolutely-positioned children across
                   browsers, so a span positioned against `relative` on the <tr> itself doesn't
                   consistently scope per-row. */}
-              <td className="relative py-3.5 pl-4 pr-2 font-mono text-xs text-muted">
-                {t.priority?.color && (
-                  <span
-                    className="pointer-events-none absolute inset-y-4 left-0 w-[3px] rounded-full"
-                    style={{ backgroundColor: t.priority.color }}
-                    aria-hidden
-                  />
-                )}
-                #{t.number}
-              </td>
-              <td className="px-2 py-3.5">
-                <Link href={`/tickets/${t.number}`} className="block max-w-md">
-                  <p className="truncate text-sm font-medium text-foreground transition-colors group-hover:text-accent-strong">
-                    {t.subject}
-                  </p>
-                  <p className="mt-0.5 truncate text-xs text-muted/80">{t.preview}</p>
-                  <div className="mt-1.5 flex items-center gap-1.5">
-                    {t.tags.map((tag) => (
-                      <Tag key={tag.id}>{tag.name}</Tag>
-                    ))}
-                    {t.comments > 0 && (
-                      <span className="ml-1 flex items-center gap-1 text-[11px] text-muted">
-                        <MessageSquare className="h-3 w-3" /> {t.comments}
-                      </span>
-                    )}
-                  </div>
-                </Link>
-              </td>
-              <td className="px-2 py-3.5">
-                {t.location ? (
-                  <div className="flex min-w-0 items-center gap-1.5 text-xs">
+                <td className="relative py-3.5 pl-4 pr-2 font-mono text-xs text-muted">
+                  {t.priority?.color && (
                     <span
-                      className="h-1.5 w-1.5 shrink-0 rounded-full"
-                      style={{
-                        backgroundColor:
-                          CLASS_GROUP_COLORS[t.location.classGroup] ?? 'var(--color-muted)',
-                      }}
+                      className="pointer-events-none absolute inset-y-4 left-0 w-[3px] rounded-full"
+                      style={{ backgroundColor: t.priority.color }}
                       aria-hidden
                     />
-                    <span className="truncate">
-                      <span className="font-medium text-muted-strong">{t.location.classGroup}</span>
-                      {t.location.sectorNo !== null && (
-                        <span className="text-muted"> · Sector {t.location.sectorNo}</span>
+                  )}
+                  #{t.number}
+                </td>
+                <td className="px-2 py-3.5">
+                  <Link href={`/tickets/${t.number}`} className="block max-w-md">
+                    <p className="truncate text-sm font-medium text-foreground transition-colors group-hover:text-accent-strong">
+                      {t.subject}
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-muted/80">{t.preview}</p>
+                    <div className="mt-1.5 flex items-center gap-1.5">
+                      {t.tags.map((tag) => (
+                        <Tag key={tag.id}>{tag.name}</Tag>
+                      ))}
+                      {t.comments > 0 && (
+                        <span className="ml-1 flex items-center gap-1 text-[11px] text-muted">
+                          <MessageSquare className="h-3 w-3" /> {t.comments}
+                        </span>
                       )}
-                    </span>
-                  </div>
-                ) : (
-                  <span className="text-xs text-muted/60">—</span>
-                )}
-              </td>
-              <td className="px-2 py-3.5">
-                <StatusSelect
-                  ticketNumber={t.number}
-                  statusId={t.statusId}
-                  statuses={statuses}
-                  disabled={!canUpdate}
-                />
-              </td>
-              <td className="px-2 py-3.5">
-                <AssigneeDropdown
-                  ticketNumber={t.number}
-                  assignee={t.assignee}
-                  users={users}
-                  disabled={!canAssign}
-                />
-              </td>
-              <td className="py-3.5 pl-2 pr-5 text-right text-xs text-muted">
-                {timeAgo(t.updatedAt)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+                    </div>
+                  </Link>
+                </td>
+                <td className="px-2 py-3.5">
+                  {t.location ? (
+                    <div className="flex min-w-0 items-center gap-1.5 text-xs">
+                      <span
+                        className="h-1.5 w-1.5 shrink-0 rounded-full"
+                        style={{
+                          backgroundColor:
+                            CLASS_GROUP_COLORS[t.location.classGroup] ?? 'var(--color-muted)',
+                        }}
+                        aria-hidden
+                      />
+                      <span className="truncate">
+                        <span className="font-medium text-muted-strong">
+                          {t.location.classGroup}
+                        </span>
+                        {t.location.sectorNo !== null && (
+                          <span className="text-muted"> · Sector {t.location.sectorNo}</span>
+                        )}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-muted/60">—</span>
+                  )}
+                </td>
+                <td className="px-2 py-3.5">
+                  <StatusSelect
+                    ticketNumber={t.number}
+                    statusId={t.statusId}
+                    statuses={statuses}
+                    disabled={!canUpdate}
+                  />
+                </td>
+                <td className="px-2 py-3.5">
+                  <AssigneeDropdown
+                    ticketNumber={t.number}
+                    assignee={t.assignee}
+                    users={users}
+                    disabled={!canAssign}
+                  />
+                </td>
+                <td className="py-3.5 pl-2 pr-5 text-right text-xs text-muted">
+                  {timeAgo(t.updatedAt)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   )
 }

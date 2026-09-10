@@ -5,18 +5,22 @@ import { AlertCircle, Lock } from 'lucide-react'
 import { Avatar } from '@/components/ui/Avatar'
 import { Button } from '@/components/ui/Button'
 import { RichTextEditor } from '@/components/editor/RichTextEditor'
+import { QuestionnaireResponseCard } from '@/components/tickets/questionnaire/QuestionnaireResponseCard'
 import { cn, timeAgo } from '@/lib/utils'
 import { addCommentAction, type ActionState } from '@/server/actions/ticket.actions'
-import type { CommentView } from '@/lib/ticket-view'
+import type { CommentView, QuestionnaireView } from '@/lib/ticket-view'
 
 export function CommentThread({
   ticketNumber,
   comments,
+  questionnairesById,
   canComment,
   canNote,
 }: {
   ticketNumber: number
   comments: CommentView[]
+  /** Keyed by TicketQuestionnaire id — looked up via each comment's `questionnaireId`. */
+  questionnairesById: Record<string, QuestionnaireView>
   canComment: boolean
   canNote: boolean
 }) {
@@ -44,36 +48,52 @@ export function CommentThread({
         <p className="text-sm text-muted">No comments yet — be the first to reply.</p>
       )}
 
-      {comments.map((c) => (
-        <div
-          key={c.id}
-          className={cn('flex gap-3', c.isInternal && 'rounded-lg bg-warning-soft/40 p-3')}
-        >
-          <Avatar
-            person={
-              c.author
-                ? { name: c.author.name, initials: c.author.initials, color: '#818cf8' }
-                : { name: 'Unknown', initials: '?', color: '#4b5563' }
-            }
-            size="sm"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <p className="text-sm font-medium text-foreground">{c.author?.name ?? 'Unknown'}</p>
-              {c.isInternal && (
-                <span className="flex items-center gap-1 rounded-md bg-warning-soft px-1.5 py-0.5 text-[10px] font-medium text-warning">
-                  <Lock className="h-2.5 w-2.5" /> Internal note
-                </span>
-              )}
-              <span className="text-[11px] text-muted">{timeAgo(c.createdAt)}</span>
-            </div>
-            <div
-              className="mt-1 text-sm text-muted-strong [&_p]:my-1"
-              dangerouslySetInnerHTML={{ __html: c.bodyHtml }}
+      {comments.map((c) => {
+        if (
+          c.kind === 'questionnaire' &&
+          c.questionnaireId &&
+          questionnairesById[c.questionnaireId]
+        ) {
+          return (
+            <QuestionnaireResponseCard
+              key={c.id}
+              questionnaire={questionnairesById[c.questionnaireId]}
+              surveyorName={c.author?.name ?? 'Unknown'}
             />
+          )
+        }
+
+        return (
+          <div
+            key={c.id}
+            className={cn('flex gap-3', c.isInternal && 'rounded-lg bg-warning-soft/40 p-3')}
+          >
+            <Avatar
+              person={
+                c.author
+                  ? { name: c.author.name, initials: c.author.initials, color: '#818cf8' }
+                  : { name: 'Unknown', initials: '?', color: '#4b5563' }
+              }
+              size="sm"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-foreground">{c.author?.name ?? 'Unknown'}</p>
+                {c.isInternal && (
+                  <span className="flex items-center gap-1 rounded-md bg-warning-soft px-1.5 py-0.5 text-[10px] font-medium text-warning">
+                    <Lock className="h-2.5 w-2.5" /> Internal note
+                  </span>
+                )}
+                <span className="text-[11px] text-muted">{timeAgo(c.createdAt)}</span>
+              </div>
+              <div
+                className="mt-1 text-sm text-muted-strong [&_p]:my-1"
+                dangerouslySetInnerHTML={{ __html: c.bodyHtml }}
+              />
+            </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
 
       {(canComment || canNote) && (
         <form action={formAction} className="space-y-3 border-t border-border pt-4">

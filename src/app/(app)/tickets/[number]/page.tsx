@@ -9,14 +9,24 @@ import { CommentThread } from '@/components/tickets/CommentThread'
 import { ActivityTimeline } from '@/components/tickets/ActivityTimeline'
 import { TicketDetailSidebar } from '@/components/tickets/TicketDetailSidebar'
 import { TicketLocationMap } from '@/components/map/TicketLocationMap'
+import { SitePhotos } from '@/components/tickets/SitePhotos'
+import { QuestionnaireEntry } from '@/components/tickets/questionnaire/QuestionnaireEntry'
 import { requireTicketScope } from '@/server/auth/session'
 import { dbConnect } from '@/server/db/connect'
 import * as ticketService from '@/server/services/ticket.service'
+import * as attachmentService from '@/server/services/attachment.service'
+import * as questionnaireService from '@/server/services/questionnaire.service'
 import { TicketStatusModel } from '@/server/db/models/ticket-status.model'
 import { TicketPriorityModel } from '@/server/db/models/ticket-priority.model'
 import { TicketTypeModel } from '@/server/db/models/ticket-type.model'
 import { UserModel } from '@/server/db/models/user.model'
-import { toTicketDetailView, toCommentView, toEventView } from '@/lib/ticket-view'
+import {
+  toTicketDetailView,
+  toCommentView,
+  toEventView,
+  toAttachmentView,
+  toQuestionnaireView,
+} from '@/lib/ticket-view'
 import { cn } from '@/lib/utils'
 
 export default async function TicketDetailPage({
@@ -42,23 +52,41 @@ export default async function TicketDetailPage({
     if (assigneeId !== user.id) notFound()
   }
 
-  const [commentsRaw, eventsRaw, statuses, priorities, types, users] = await Promise.all([
+  const [
+    commentsRaw,
+    eventsRaw,
+    statuses,
+    priorities,
+    types,
+    users,
+    attachmentsRaw,
+    questionnairesRaw,
+  ] = await Promise.all([
     ticketService.listComments(String(ticketDoc._id)),
     ticketService.listEvents(String(ticketDoc._id)),
     TicketStatusModel.find().sort({ order: 1 }).lean(),
     TicketPriorityModel.find().sort({ order: 1 }).lean(),
     TicketTypeModel.find({ isActive: true }).sort({ name: 1 }).lean(),
     UserModel.find({ isActive: true, deletedAt: null }).select('fullname email').lean(),
+    attachmentService.listAttachments(String(ticketDoc._id)),
+    questionnaireService.listQuestionnaires(String(ticketDoc._id)),
   ])
 
   const ticket = toTicketDetailView(ticketDoc)
   const comments = commentsRaw.map(toCommentView)
   const events = eventsRaw.map(toEventView)
+  const photos = attachmentsRaw.map(toAttachmentView)
+  const questionnaires = questionnairesRaw.map(toQuestionnaireView)
+  const questionnairesById = Object.fromEntries(questionnaires.map((q) => [q.id, q]))
 
   const canUpdate = ability.can('update', 'ticket')
   const canAssign = ability.can('assign', 'ticket')
   const canComment = ability.can('create', 'comment')
   const canNote = ability.can('create', 'note')
+  const canUploadPhoto = ability.can('create', 'attachment')
+  const canDeleteAnyPhoto = ability.can('delete', 'attachment')
+
+  const resolvedStatus = statuses.find((s) => s.isResolved)
 
   const status = statuses.find((s) => String(s._id) === ticket.statusId)
   const priority = priorities.find((p) => String(p._id) === ticket.priorityId)
@@ -70,10 +98,10 @@ export default async function TicketDetailPage({
         description={ticket.owner?.name ?? undefined}
       />
 
-      <main className="flex-1 px-8 py-6 animate-fade-in">
+      <main className="flex-1 px-4 py-4 sm:px-8 sm:py-6 animate-fade-in">
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_300px]">
-          <div className="space-y-5">
-            <Card className="p-6">
+          <div className="order-1 space-y-5 lg:order-2">
+            <Card className="p-4 sm:p-6">
               <div className="flex flex-wrap items-center gap-2">
                 {status && <DynamicBadge label={status.name} color={status.color} dot={false} />}
                 {priority && <DynamicBadge label={priority.name} color={priority.color} />}
@@ -104,18 +132,52 @@ export default async function TicketDetailPage({
               )}
             </Card>
 
-            <Card className="p-6">
+            {/* Site Photos + the Questionnaire entry are a Surveyor's two field tasks — kept
+                together in one card right under the ticket header, ahead of the read-only
+                Conversation/Details content, so neither requires scrolling past metadata a
+                surveyor standing at the site doesn't need. */}
+            {(canComment || photos.length > 0) && (
+              <Card className="space-y-5 p-4 sm:p-6">
+                <div>
+                  <h2 className="mb-4 text-sm font-semibold text-foreground">Site Photos</h2>
+                  <SitePhotos
+                    ticketNumber={ticket.number}
+                    initialPhotos={photos}
+                    currentUserId={user.id}
+                    canUpload={canUploadPhoto}
+                    canDeleteAny={canDeleteAnyPhoto}
+                  />
+                </div>
+
+                {canComment && (
+                  <div className="border-t border-border pt-5">
+                    <h2 className="mb-4 text-sm font-semibold text-foreground">
+                      Surveyor Questionnaire
+                    </h2>
+                    <QuestionnaireEntry
+                      ticketNumber={ticket.number}
+                      hasExistingResponse={questionnaires.length > 0}
+                      resolvedStatusId={resolvedStatus ? String(resolvedStatus._id) : null}
+                      canUpdateStatus={canUpdate}
+                    />
+                  </div>
+                )}
+              </Card>
+            )}
+
+            <Card className="p-4 sm:p-6">
               <h2 className="mb-4 text-sm font-semibold text-foreground">Conversation</h2>
               <CommentThread
                 ticketNumber={ticket.number}
                 comments={comments}
+                questionnairesById={questionnairesById}
                 canComment={canComment}
                 canNote={canNote}
               />
             </Card>
           </div>
 
-          <div className="space-y-5">
+          <div className="order-2 space-y-5 lg:order-1">
             <Card className="p-5">
               <h2 className="mb-4 text-xs font-semibold uppercase tracking-wide text-muted">
                 Details

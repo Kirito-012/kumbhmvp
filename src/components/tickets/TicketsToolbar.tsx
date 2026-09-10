@@ -149,7 +149,7 @@ export function TicketsToolbar({
 
       <div className="mt-3.5 flex flex-wrap items-center gap-2.5">
         <form
-          className="relative min-w-[240px] flex-1"
+          className="relative min-w-full flex-1 sm:min-w-[240px]"
           onSubmit={(e) => {
             e.preventDefault()
             pushParams({ q: search || null })

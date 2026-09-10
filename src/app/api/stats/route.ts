@@ -57,6 +57,13 @@ const POI_TABLES = [
   'location_entry',
   'other_transport',
   'other_transport_point',
+  // kumbh.tertiary_road (21k+ OSM street centrelines, see
+  // PLAN-deferred-roads.md) is deliberately NOT included here. poiByLayer is
+  // sorted ORDER BY features DESC and rendered as a flat list in the Stats
+  // panel -- at 21,284 rows it would sit at the very top, 15-70x every other
+  // layer, and bury the curated project data the panel exists to summarize.
+  // It's still fully queryable/toggleable via the tiles route and the layer
+  // panel; it just doesn't get a Stats panel row.
 ] as const
 
 // Subset of POI_TABLES whose geometry is a polygon (matches
@@ -136,8 +143,8 @@ export async function GET(req: NextRequest) {
     )
     .join('\n    UNION ALL\n    ')
 
-  const [byClass, bySubclass, roadByType, perSector, poiByLayer, poiBySubclass] = await Promise.all(
-    [
+  const [byClass, bySubclass, roadByType, perSector, poiByLayer, poiBySubclass, tertiaryRoad] =
+    await Promise.all([
       // Cross-joins every class_group that exists anywhere against the current
       // sector filter (rather than a plain GROUP BY on the filtered rows) so a
       // class with zero features in this sector still comes back as a 0 row
@@ -222,8 +229,24 @@ export async function GET(req: NextRequest) {
       `,
         [sectorNo],
       ),
-    ],
-  )
+      // kumbh.tertiary_road (21k+ OSM street centrelines) stays out of
+      // poiByLayerSql/POI_TABLES on purpose (see that comment above) -- it
+      // would dominate a features-sorted list. It still gets a single count
+      // here, surfaced as a standalone footer note rather than a ranked row
+      // (see StatsPanel), so the layer is acknowledged without burying the
+      // curated data the rest of this panel exists to summarize.
+      pool.query(
+        `
+      SELECT count(*) AS features
+      FROM kumbh.tertiary_road
+      WHERE $1::int IS NULL OR EXISTS (
+        SELECT 1 FROM kumbh.sector_boundary b
+        WHERE b.sector_no = $1 AND ST_Intersects(b.geom, kumbh.tertiary_road.geom)
+      );
+      `,
+        [sectorNo],
+      ),
+    ])
 
   return Response.json({
     byClass: byClass.rows,
@@ -232,5 +255,6 @@ export async function GET(req: NextRequest) {
     perSector: perSector.rows,
     poiByLayer: poiByLayer.rows,
     poiBySubclass: poiBySubclass.rows,
+    tertiaryRoadCount: Number(tertiaryRoad.rows[0]?.features ?? 0),
   })
 }

@@ -16,6 +16,9 @@ export default function Panel({
   maxWidth = 560,
   overlayOpen = false,
   onRenderedWidthChange,
+  forceCollapsed = false,
+  onExpand,
+  onCollapse,
 }: {
   icon: ReactNode
   title: string
@@ -40,16 +43,49 @@ export default function Panel({
    *  collapsed. Fires on mount, on every collapse/expand, and on every
    *  resize-drag frame. */
   onRenderedWidthChange?: (width: number) => void
+  /** When true, forces this panel closed regardless of its own state -- used on phone-width
+   *  viewports so opening one docked panel (left search / right Stats) auto-closes the other:
+   *  both go full-bleed width when expanded there (see the max-sm:w-[...] class below), so two
+   *  expanded at once would stack directly on top of each other with no way to reach the one
+   *  underneath. Desktop/tablet never sets this -- the two panels dock side-by-side there and
+   *  can coexist open. */
+  forceCollapsed?: boolean
+  /** Fires when the user expands this panel (not on mount, not on forced collapse) -- the
+   *  sibling panel's forceCollapsed above is driven from this. */
+  onExpand?: () => void
+  /** Fires when the user collapses this panel by their own action (never on a *forced*
+   *  collapse, which didn't originate from this panel). The caller uses this to clear
+   *  whichever "which panel is expanded" tracker is driving the sibling's forceCollapsed --
+   *  without it, that tracker would stay pointed at this panel forever after its first
+   *  expansion, permanently hiding the sibling even once this panel is closed again. */
+  onCollapse?: () => void
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const [width, setWidth] = useState(defaultWidth)
   const [dragging, setDragging] = useState(false)
   const dragState = useRef({ startX: 0, startWidth: defaultWidth })
+  const effectiveCollapsed = collapsed || forceCollapsed
+
+  // On a phone-width viewport the panel is forced to ~full width (see the max-sm:w-[...] class
+  // below) -- staying open there by default would cover almost the entire map on first load,
+  // which is fine for the Stats panel (already opts into defaultCollapsed) but not for the left
+  // search panel, which never did. This can't be decided during the initial render -- the server
+  // has no viewport to check, so `useState(defaultCollapsed)` above has to match the server's
+  // guess-free render to avoid a hydration mismatch -- so it's corrected once, immediately after
+  // mount, purely from the actual viewport. The condition is folded into a single expression
+  // (rather than an early-return `if` before the setState call) because the lint rule below
+  // otherwise flags *any* conditional path to a setState in an effect as "derivable during
+  // render", even when — as here — the condition genuinely isn't renderable server-side.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCollapsed((current) => current || (!defaultCollapsed && window.innerWidth < 640))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
-    onRenderedWidthChange?.(collapsed ? 0 : width)
+    onRenderedWidthChange?.(effectiveCollapsed ? 0 : width)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onRenderedWidthChange is expected to be a stable setter identity from the caller, not a dep that should re-fire this
-  }, [collapsed, width])
+  }, [effectiveCollapsed, width])
 
   function startDrag(e: React.PointerEvent) {
     e.preventDefault()
@@ -81,17 +117,51 @@ export default function Panel({
     window.addEventListener('pointerup', onUp)
   }
 
+  function toggleCollapsed() {
+    // While forceCollapsed (the sibling docked panel is open on a phone), any tap here means
+    // "open me" -- never "collapse further" -- so this sets collapsed to false outright and
+    // tells the parent to force-collapse the sibling via onExpand, rather than toggling
+    // `collapsed` (which, since it may already be false underneath the forced closure, would
+    // otherwise flip it to true and do the opposite of what the tap asked for). This branch can
+    // only ever be an expand, so onCollapse never fires from it.
+    if (forceCollapsed) {
+      onExpand?.()
+      setCollapsed(false)
+      return
+    }
+    if (collapsed) onExpand?.()
+    else onCollapse?.()
+    setCollapsed((v) => !v)
+  }
+
   return (
     <div
       style={{
+        // Below `sm` the panel is always full-bleed width (the max-sm:w-[calc(100vw-24px)]!
+        // class below wins), so the drag-resized pixel width only needs to actually apply at
+        // sm+ -- but inline styles can't be media-gated, so it's simplest to just always set it
+        // and let the higher-specificity `!` mobile override win under 640px regardless.
         ...(resizable ? { width } : undefined),
         background: 'var(--map-panel-bg)',
         borderColor: 'var(--map-panel-border)',
         boxShadow: `0 8px 30px var(--map-panel-shadow)`,
         color: 'var(--map-fg)',
       }}
-      className={`absolute ${side === 'left' ? 'top-16 left-3 max-h-[calc(100vh-76px)]' : 'top-3 right-3 max-h-[calc(100vh-24px)]'} z-20
-        ${resizable ? '' : 'w-72'} max-w-[calc(100vw-24px)]
+      className={`absolute ${side === 'left' ? 'top-16 left-3 max-h-[calc(100dvh-76px)]' : 'top-3 right-3 max-h-[calc(100dvh-24px)]'} z-20
+        ${
+          // forceCollapsed on a phone means the *sibling* panel is currently expanded there --
+          // an expanded panel goes full-bleed width AND close to full height (max-h above), so
+          // this panel's own collapsed pill would sit directly underneath it regardless of the
+          // top-16-vs-top-3 vertical offset that keeps two *collapsed* pills apart. Hiding it
+          // outright while forced closed is simpler and more correct than trying to find a
+          // gap for it to peek out of: the only way back to it is collapsing the sibling first,
+          // which is the intended one-panel-open-at-a-time flow on a phone anyway.
+          forceCollapsed
+            ? 'max-sm:hidden'
+            : effectiveCollapsed
+              ? 'max-sm:w-36!'
+              : 'max-sm:w-[calc(100vw-24px)]!'
+        } ${resizable ? '' : 'w-72'} max-w-[calc(100vw-24px)]
         rounded-2xl border
         backdrop-blur-md
         flex flex-col
@@ -104,7 +174,7 @@ export default function Panel({
           role="separator"
           aria-orientation="vertical"
           aria-label={`Resize ${title} panel`}
-          className={`group absolute inset-y-0 ${side === 'right' ? '-left-1.5' : '-right-1.5'} z-20 flex w-3 cursor-col-resize items-center justify-center touch-none`}
+          className={`group absolute inset-y-0 ${side === 'right' ? '-left-1.5' : '-right-1.5'} z-20 hidden w-3 cursor-col-resize items-center justify-center touch-none sm:flex`}
         >
           <span
             className="h-10 w-1 rounded-full transition-colors"
@@ -114,17 +184,17 @@ export default function Panel({
       )}
 
       <div
-        onClick={() => setCollapsed((v) => !v)}
+        onClick={toggleCollapsed}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()
-            setCollapsed((v) => !v)
+            toggleCollapsed()
           }
         }}
-        aria-label={collapsed ? `Expand ${title} panel` : `Collapse ${title} panel`}
-        aria-expanded={!collapsed}
+        aria-label={effectiveCollapsed ? `Expand ${title} panel` : `Collapse ${title} panel`}
+        aria-expanded={!effectiveCollapsed}
         style={{ borderColor: 'var(--map-panel-border)' }}
         className="flex items-center gap-2 px-3.5 py-3 border-b shrink-0 cursor-pointer select-none"
       >
@@ -143,7 +213,10 @@ export default function Panel({
           </h2>
           {subtitle && (
             <p
-              className="truncate text-[11px] leading-tight"
+              // Hidden while collapsed on a phone -- the collapsed pill is only ~144px wide
+              // there (max-sm:w-36 above), not enough room for a subtitle alongside the title
+              // without truncating it to nothing useful.
+              className={`truncate text-[11px] leading-tight ${effectiveCollapsed ? 'max-sm:hidden' : ''}`}
               style={{ color: 'var(--map-fg-faint)' }}
             >
               {subtitle}
@@ -155,12 +228,12 @@ export default function Panel({
           style={{ color: 'var(--map-fg-faint)' }}
         >
           <ChevronDownIcon
-            className={`h-4 w-4 transition-transform duration-200 ${collapsed ? '-rotate-90' : ''}`}
+            className={`h-4 w-4 transition-transform duration-200 ${effectiveCollapsed ? '-rotate-90' : ''}`}
           />
         </span>
       </div>
 
-      {!collapsed && (
+      {!effectiveCollapsed && (
         <div
           className={`min-h-0 flex-1 px-3.5 py-3 kumbh-scroll ${overlayOpen ? 'overflow-visible' : 'overflow-y-auto'}`}
         >
