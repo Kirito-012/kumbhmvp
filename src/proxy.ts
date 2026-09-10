@@ -28,7 +28,13 @@ export default auth((request) => {
 })
 
 export const config = {
-  // Run on everything except static assets, image optimization, and common
-  // metadata files — those should never be blocked by a host check or auth guard.
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt).*)'],
+  // Run on everything except static assets, image optimization, common metadata
+  // files, and /api/auth/* — that last one is Auth.js's own route handler
+  // (src/app/api/auth/[...nextauth]/route.ts) and must reach it untouched. This
+  // proxy wraps a *second*, provider-free NextAuth instance (see authConfig above)
+  // purely to read the session cookie for route guarding; letting it also intercept
+  // /api/auth/* makes it try to dispatch sign-in/callback/session actions itself,
+  // which it can't do without providers — that surfaces as `UnknownAction` errors
+  // and breaks login entirely.
+  matcher: ['/((?!api/auth|_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt).*)'],
 }
