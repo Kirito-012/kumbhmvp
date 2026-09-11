@@ -59,13 +59,13 @@ drop Z. No existing table hits this, so `load_new_table` has never needed it.
 
 ## Geometry summary
 
-| Layer                  | Geometry               | Rows   | Verdict                      |
-| ---------------------- | ---------------------- | ------ | ---------------------------- |
-| `Tertiary_Road`        | MultiLineString        | 21,281 | Load (Phase 1–3)             |
-| `Sector_Tertiary_Road` | MultiLineString **3D** | 7,068  | Merge in as `in_sector=true` |
-| `Road_Secondary`       | MultiLineString        | 109    | Classify then load (Phase 4) |
-| `Road_Secondary_Poly`  | MultiPolygon           | 13     | **Skip permanently**         |
-| `Road_Poly`            | MultiPolygon           | 1      | **Skip permanently**         |
+| Layer                  | Geometry               | Rows   | Verdict                                   |
+| ---------------------- | ---------------------- | ------ | ----------------------------------------- |
+| `Tertiary_Road`        | MultiLineString        | 21,281 | Load (Phase 1–3)                          |
+| `Sector_Tertiary_Road` | MultiLineString **3D** | 7,068  | Merge in as `in_sector=true`              |
+| `Road_Secondary`       | MultiLineString        | 109    | Classified, loaded 12/109 (Phase 4, done) |
+| `Road_Secondary_Poly`  | MultiPolygon           | 13     | **Skip permanently**                      |
+| `Road_Poly`            | MultiPolygon           | 1      | **Skip permanently**                      |
 
 `Road_Secondary_Poly` has only `SHAPE_Length`/`SHAPE_Area` — no name field at all.
 13 anonymous blobs plus 1 more in `Road_Poly`; nothing to label, click, or filter.
@@ -408,52 +408,72 @@ subset?") — ship both and let the user pick; cost is one filter expression.
 
 ---
 
-# Phase 4 — `Road_Secondary`: classify, then load
+# Phase 4 — `Road_Secondary`: classify, then load (done 2026-09-11)
 
-Do **not** auto-classify. 61 of 109 rows have no name; guessing mislabels them.
+Auto-classification was rejected as planned — 61 of 109 rows have no name, so
+guessing would have mislabelled them. What shipped instead:
 
-### 4a. Produce a review artifact first
+### 4a. Classification method (length-coverage, not centroid distance)
 
-Write a throwaway script (scratchpad, not committed) dumping all 109 rows as CSV:
-`row index, Name, SHAPE_Length, WKT centroid, nearest kumbh.traffic_route name +
-distance, nearest kumbh.road road_name + distance`.
+Centroid distance (the method originally proposed above) is too weak: two
+different roads can share a centroid, and a partially-overlapping segment still
+reads as "close." What was used instead: for each of the 109 candidate lines,
+what fraction of its length falls within a buffer (5m/15m/30m tested) of the
+**union** of nearby `kumbh.traffic_route`/`kumbh.road` geometry, measured planar
+in EPSG:32644 (the gdb's native UTM zone, to avoid geography-cast distortion).
+Summing per-reference-row intersection length double-counts where reference
+buffers overlap, so the union step matters — an early version of the query
+produced impossible coverage values >1.0 before this fix.
 
-The spatial comparison is what resolves the nameless 61 — a row whose geometry sits
-within a few metres of an existing `kumbh.traffic_route` feature is a duplicate of
-already-loaded data and must be dropped, not loaded under either label.
+The result was cleanly bimodal: at 15m, only 5 of 109 rows fell between 0.5 and
+0.9 coverage; everything else sat at ~1.0 or ~0.0. That separation is what made
+auto-classification safe to _propose_ (still human-confirmed, never auto-applied).
 
-Heuristic to _pre-fill_ the proposed classification (for a human to confirm, not to
-trust):
+### 4b. Human review
 
-- name matches `/entry|exit|peak|weekend/i` → `traffic_route`
-- real road name (Madhya Marg, Haridwar Main Road, Upper Road) → `road`
-- name null/blank → decide by proximity: near an existing traffic_route → **drop
-  (duplicate)**; otherwise → `road` with `road_name = NULL`
-- "Untitled Path" (4 rows) → treat as blank
+A CSV (name, length, per-tolerance coverage against both reference layers,
+nearest named feature + distance, proposed verdict) was generated and reviewed.
+Verdict:
 
-### 4b. Get it confirmed
+- **97 of 109 rows dropped as duplicates** — 93 by the >=90%-coverage rule, plus
+  4 more (idx 0/2/25/42: a set of loosely-digitised "Entry"/"Exit"/"Peak day
+  entry" routes, 72–89% covered at 15m but >=92% at 30m) confirmed duplicate by
+  the human reviewer since the coverage test alone was ambiguous for those.
+- **12 rows kept**: 11 genuinely new unnamed segments (all stay under 90%
+  coverage even at 30m tolerance) plus "Haridwar Main Road" (idx 88 — 100%
+  covered by a `traffic_route` but only 55% by `kumbh.road`, i.e. a route running
+  _along_ an existing road, not a re-digitisation of the road itself; only
+  `kumbh.road` coverage is evidence of _road_ duplication).
+- No rows needed the `traffic_route` destination in the end — the 4 borderline
+  routing-labelled rows were all confirmed as duplicates, not new routes. The
+  casing-normalisation and NULL-flag-column plan below was written but never
+  exercised; keep it here in case a future gdb revision reintroduces new routes.
 
-Present the CSV to the user (or whoever produced the gdb) before any write. This is
-a genuine blocking checkpoint — Pending.md flagged it as unsafe to auto-decide and
-that judgment is correct. Everything in Phases 1–3 is independent and should ship
-without waiting on this.
+### 4c. Load
 
-### 4c. Load the confirmed split
+`kumbh.road` already supported this: `_road_map` tags `road_class = "Secondary"`
+for any layer that is not `ROAD_IN_M`/`Road`, and `road` is a `REPLACE_SPECS`
+entry, so `Road_Secondary` was appended to that spec's `layers` list. The 97
+dropped rows are excluded via a new `skip_hashes` mechanism on the spec: each
+row's geometry (post-reprojection to EPSG:4326, vertices rounded to 7 decimals)
+is MD5-hashed, and `ROAD_SECONDARY_DUPLICATE_HASHES` in `load_kumbh_2027.py`
+holds the 97 hashes to skip. Content-keyed rather than index-keyed deliberately:
+a re-exported/reordered gdb can't silently invalidate a human-reviewed drop list.
+If the gdb's `Road_Secondary` geometry ever changes, every hash stops matching
+and `load_replace_table` raises loudly (`skip_hashes declared ... but none
+matched`) instead of quietly re-admitting duplicates — regenerate the hash set
+in that case rather than deleting the check.
 
-`kumbh.road` already supports this: `_road_map` tags `road_class = "Secondary"` for
-any layer that is not `ROAD_IN_M`/`Road` (`load_kumbh_2027.py:132`), and `road` is a
-`REPLACE_SPECS` entry, so `Road_Secondary` can simply be appended to that spec's
-`layers` list once routing/duplicate rows are excluded. Routing rows go to
-`kumbh.traffic_route` — note its schema has many int flag columns (`weekend` /
-`normal` / `peak_day` / …) that `Road_Secondary` cannot populate; leave them NULL
-and set `name` + `entry_exit` from the parsed label.
+Result: `kumbh.road` 752 → 764 rows, verified by `--dry-run` before the real load
+and spot-checked by ID/length/name after.
 
-**Normalise the casing** on load: "Peak Day Entry" / "Peak day Entry" / "Peak day
-entry" / "entry" are the same thing in four spellings. Six variants collapse to
-`Entry` / `Exit` / `Peak Day Entry` / `Peak Day Exit`.
-
-Since `road` is a replace-spec, re-running rebuilds the whole table — verify the
-`road` row count rises by exactly the number of confirmed road-shaped rows.
+If a future gdb revision needs the routing destination after all: `kumbh.road`
+handles it, but `kumbh.traffic_route`'s schema has many int flag columns
+(`weekend`/`normal`/`peak_day`/…) that `Road_Secondary` cannot populate — leave
+them NULL and set `name` + `entry_exit` from the parsed label. Casing needs
+normalising: "Peak Day Entry" / "Peak day Entry" / "Peak day entry" / "entry" are
+the same thing in four spellings; six variants collapse to `Entry` / `Exit` /
+`Peak Day Entry` / `Peak Day Exit`.
 
 ---
 
@@ -479,8 +499,10 @@ Add `tertiary_road` to the other whitelists for consistency, **except where it h
 `Pending.md`: move `Tertiary_Road` / `Sector_Tertiary_Road` from "deferred" to
 "loaded", record the subset finding, and record that `Road_Secondary_Poly` /
 `Road_Poly` are now **permanently skipped** (reason: 13+1 unnamed polygons,
-derivable via `ST_Buffer`). Leave `Road_Secondary` pending until Phase 4 clears its
-checkpoint. Update the "65 of 67" accounting line.
+derivable via `ST_Buffer`). Update the "65 of 67" accounting line.
+
+(Done as of 2026-09-11 — `Road_Secondary` cleared its Phase 4 checkpoint the same
+day, so `Pending.md` now records 67/67 loaded with nothing deferred.)
 
 ---
 
@@ -502,3 +524,6 @@ checkpoint. Update the "65 of 67" accounting line.
 - Light and dark both legible; project road network clearly on top in both.
 - Toggling theme with the layer on keeps the correct per-theme colour (3b's trap).
 - No regression in the 45 pre-existing tile layers (they take none of the new fields).
+- `kumbh.road` = 764 rows (752 + 12 confirmed `Road_Secondary` survivors); re-running
+  `load_kumbh_2027.py --only road` reproduces the same 97-skipped/12-loaded split
+  (verified via `--dry-run` — done 2026-09-11).

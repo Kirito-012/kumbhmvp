@@ -56,6 +56,14 @@
   --category-heading: #f4f5f7;
   --category-hovercard-bg: #16191f;
   --category-hovercard-border: rgba(255, 255, 255, 0.1);
+  /* Controls hosted *inside* the liquid panel (the sector filter). The panel keeps its own
+     near-black glass in both themes, so the app-wide input tokens (--border-strong/--overlay)
+     are tuned for the page background and all but vanish against it — these are sized to clear
+     WCAG 1.4.11's 3:1 boundary contrast against --category-panel-top specifically. */
+  --category-control-bg: rgba(255, 255, 255, 0.06);
+  --category-control-border: rgba(255, 255, 255, 0.32);
+  --category-control-menu-bg: #21252e;
+  --category-control-menu-border: rgba(255, 255, 255, 0.28);
 
   /* Map glass panels (Panel.tsx/StatsPanel.tsx/MapView.tsx floating chrome) — dark: a lifted
      dark-slate glass (not near-black) so the panel still reads as translucent "glass over the
@@ -169,6 +177,10 @@
   --category-heading: #0f172a;
   --category-hovercard-bg: #ffffff;
   --category-hovercard-border: #e2e8f0;
+  --category-control-bg: #f8fafc;
+  --category-control-border: #8593a6;
+  --category-control-menu-bg: #ffffff;
+  --category-control-menu-border: #94a3b8;
 
   /* Map glass panels — light: the original white-glass-on-map look (unchanged values, just
      named so MapView/Panel/StatsPanel can reference one variable set across both themes). */
@@ -326,7 +338,12 @@ body {
 }
 
 .animate-fade-in {
-  animation: fade-in 0.4s ease both;
+  /* No forwards/both fill-mode: once the animation ends, `transform` must fall back to the
+     element's un-animated value (`none`), not linger as a resolved identity matrix. A transform
+     value other than the literal keyword `none` establishes a containing block for descendant
+     `position: fixed`/`sticky` elements (see the portal comment in Sheet.tsx) even when it's
+     visually a no-op, which silently breaks sticky positioning anywhere inside an animated page. */
+  animation: fade-in 0.4s ease backwards;
 }
 
 /* Indeterminate loading sweep for the tickets toolbar's top-edge progress bar (shown while a

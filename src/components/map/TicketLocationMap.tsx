@@ -43,5 +43,12 @@ export function TicketLocationMap({ lng, lat }: { lng: number; lat: number }) {
     }
   }, [lng, lat])
 
-  return <div ref={container} className="h-40 w-full overflow-hidden rounded-lg" />
+  return (
+    <div
+      ref={container}
+      role="img"
+      aria-label={`Ticket location map at ${lat.toFixed(5)}, ${lng.toFixed(5)}`}
+      className="aspect-[16/10] min-h-48 w-full overflow-hidden rounded-xl border border-border sm:aspect-[16/9] xl:aspect-[4/3] xl:min-h-56"
+    />
+  )
 }

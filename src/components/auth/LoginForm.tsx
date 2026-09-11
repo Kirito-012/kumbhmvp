@@ -1,6 +1,5 @@
 'use client'
 
-import Link from 'next/link'
 import { useActionState, useState } from 'react'
 import { Mail, Lock, ArrowRight, AlertCircle, Eye, EyeOff } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -31,24 +30,16 @@ export function LoginForm() {
             type="text"
             autoComplete="email"
             required
-            placeholder="you@company.com"
-            className="h-10 w-full rounded-lg border border-border-strong bg-overlay pl-9 pr-3 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20"
+            placeholder="you@kumbhdrishti.gov.in"
+            className="h-11 w-full rounded-lg border border-border-strong bg-overlay pl-9 pr-3 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20"
           />
         </div>
       </div>
 
       <div>
-        <div className="mb-1.5 flex items-center justify-between">
-          <label htmlFor="password" className="block text-xs font-medium text-muted-strong">
-            Password
-          </label>
-          <Link
-            href="/forgot-password"
-            className="text-xs font-medium text-accent-strong hover:text-accent"
-          >
-            Forgot password?
-          </Link>
-        </div>
+        <label htmlFor="password" className="mb-1.5 block text-xs font-medium text-muted-strong">
+          Password
+        </label>
         <div className="relative">
           <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
           <input
@@ -58,7 +49,7 @@ export function LoginForm() {
             autoComplete="current-password"
             required
             placeholder="••••••••••"
-            className="h-10 w-full rounded-lg border border-border-strong bg-overlay pl-9 pr-9 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20"
+            className="h-11 w-full rounded-lg border border-border-strong bg-overlay pl-9 pr-9 text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20"
           />
           <button
             type="button"
@@ -71,14 +62,6 @@ export function LoginForm() {
           </button>
         </div>
       </div>
-
-      <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-strong">
-        <input
-          type="checkbox"
-          className="h-3.5 w-3.5 cursor-pointer rounded border-border-strong bg-transparent accent-emerald-500"
-        />
-        Keep me signed in for 30 days
-      </label>
 
       <Button type="submit" size="lg" className="w-full" disabled={pending}>
         {pending ? 'Signing in…' : 'Sign in'}

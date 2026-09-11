@@ -25,13 +25,16 @@ const ACTION_LABEL: Record<string, string> = {
   restored: 'restored ticket',
   commented: 'commented on',
   note_added: 'added a note to',
+  questionnaire_submitted: 'submitted the questionnaire on',
+  attachment_added: 'added a photo to',
+  attachment_removed: 'removed a photo from',
 }
 
 function labelForEvent(action: string, field?: string | null) {
   if (action === 'field_changed') {
     return `changed the ${FIELD_LABEL[field ?? ''] ?? 'details'} on`
   }
-  return ACTION_LABEL[action] ?? action
+  return ACTION_LABEL[action] ?? action.replace(/_/g, ' ')
 }
 
 export type NotificationItem = {

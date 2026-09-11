@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Pencil } from 'lucide-react'
 import { Select } from '@/components/ui/Select'
 import { StatusSelect } from '@/components/tickets/StatusSelect'
 import { AssigneeDropdown } from '@/components/tickets/AssigneeDropdown'
@@ -57,11 +57,21 @@ export function TicketDetailSidebar({
   }
 
   return (
-    <div className="space-y-4">
-      {error && <p className="text-xs text-danger">{error}</p>}
+    <div className="space-y-5">
+      {(canUpdate || canAssign) && (
+        <p className="flex items-center gap-2 rounded-lg border border-border bg-overlay/50 px-3 py-2 text-sm text-muted-strong">
+          <Pencil className="h-3.5 w-3.5 shrink-0 text-accent-strong" />
+          Select a field below to edit
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      )}
       {pending && (
-        <p className="flex items-center gap-1.5 text-xs text-muted">
-          <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+        <p role="status" className="flex items-center gap-1.5 text-sm text-muted">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…
         </p>
       )}
 
@@ -112,10 +122,10 @@ export function TicketDetailSidebar({
           onChange={(e) =>
             update('dueDate', e.target.value ? new Date(e.target.value).toISOString() : null)
           }
-          className="h-9 w-full rounded-lg border border-border-strong bg-overlay px-2.5 text-sm text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          className="h-11 w-full rounded-lg border border-border-strong bg-overlay px-3 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
         />
         {values.dueDate && (
-          <p className="mt-1 text-[11px] text-muted">Due {timeAgo(values.dueDate)}</p>
+          <p className="mt-1.5 text-sm text-muted">Due {timeAgo(values.dueDate)}</p>
         )}
       </Field>
     </div>
@@ -125,9 +135,7 @@ export function TicketDetailSidebar({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted/70">
-        {label}
-      </p>
+      <p className="mb-2 text-sm font-medium text-muted-strong">{label}</p>
       {children}
     </div>
   )

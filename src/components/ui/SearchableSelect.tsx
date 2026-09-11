@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Search, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -16,9 +16,10 @@ export type SearchableSelectOption = { value: string; label: string; color?: str
  * light/dark, and portaled via usePopoverPosition so it can't get clipped
  * inside a scrolling toolbar.
  *
- * When the active option has a colour, the trigger becomes a solid fill in
- * that colour (not just a tint) with text flipped to whichever of
- * white/near-black reads against it (see readableTextOn) -- the selection
+ * When there's a colour for the active option (its own, or `selectionColor`
+ * for lists where a per-option dot would carry no information) the closed
+ * trigger becomes a solid fill in that colour with text flipped to whichever
+ * of white/near-black reads against it (see readableTextOn) -- the selection
  * should be readable at a glance, not just hinted at. A trailing "x" clears
  * the selection and returns focus to the search input.
  */
@@ -28,7 +29,10 @@ export function SearchableSelect({
   options,
   placeholder = 'Search…',
   emptyLabel,
+  selectionColor,
   className,
+  inputClassName,
+  menuClassName,
 }: {
   value: string
   onChange: (value: string) => void
@@ -36,20 +40,30 @@ export function SearchableSelect({
   placeholder?: string
   /** Label for the "no filter" option, shown first in the list. Omit to skip it. */
   emptyLabel?: string
+  /** Fill colour for the closed trigger when a selection is active, for lists whose options
+   *  don't each carry their own colour. A per-option `color` still wins when present. */
+  selectionColor?: string
   className?: string
+  /** Extra classes for the input itself — for hosts whose surface the app-wide input tokens
+   *  aren't tuned against (e.g. the dashboard's fixed-dark category panel). */
+  inputClassName?: string
+  /** Extra classes for the portaled listbox, for the same reason as `inputClassName`. */
+  menuClassName?: string
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
   const listboxId = useId()
   const triggerRef = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const position = usePopoverPosition(triggerRef, open)
 
   const selected = options.find((o) => o.value === value)
-  // Mirrors the map's Class filter: opening the box shows the current
-  // selection's label until the user actually types, so it doesn't blank
-  // out just from focusing in.
-  const inputValue = selected ? search || selected.label : search
+
+  // Open = a search box (empty to start, with the selection demoted to the placeholder); closed =
+  // a label. Carrying the selection in `value` while open is what made typing *append* to it --
+  // "Ram" after picking sector 3 became "3. RANIPUR-03CHANDIRam" and matched nothing.
+  const inputValue = open ? search : (selected?.label ?? '')
 
   useEffect(() => {
     if (!open) return
@@ -70,7 +84,32 @@ export function SearchableSelect({
   }, [open])
 
   const query = search.trim().toLowerCase()
-  const filtered = query ? options.filter((o) => o.label.toLowerCase().includes(query)) : options
+  const filtered = useMemo(
+    () => (query ? options.filter((o) => o.label.toLowerCase().includes(query)) : options),
+    [options, query],
+  )
+
+  // One flat list so the keyboard treats the "clear" row as just another option. `null` is that
+  // row; everything else is a real option.
+  const rows = useMemo<(SearchableSelectOption | null)[]>(
+    () => (emptyLabel ? [null, ...filtered] : filtered),
+    [emptyLabel, filtered],
+  )
+
+  // Keep the highlighted row inside the scroll box, so arrowing past the ~7 visible rows of a
+  // 33-sector list actually goes somewhere visible.
+  useEffect(() => {
+    if (!open) return
+    menuRef.current
+      ?.querySelector(`[data-row-index="${activeIndex}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex, open])
+
+  function openMenu() {
+    setSearch('')
+    setActiveIndex(0)
+    setOpen(true)
+  }
 
   function choose(next: SearchableSelectOption | null) {
     setOpen(false)
@@ -78,15 +117,17 @@ export function SearchableSelect({
     onChange(next?.value ?? '')
   }
 
-  const fill = selected?.color ? solidFillColor(selected.color) : undefined
+  const fillSource = selected ? (selected.color ?? selectionColor) : undefined
+  const fill = fillSource ? solidFillColor(fillSource) : undefined
   const fillText = fill ? readableTextOn(fill) : undefined
-  const isFilled = Boolean(selected?.color) && !open
+  const isFilled = Boolean(fill) && !open
+  const hasDots = options.some((o) => o.color)
 
   return (
-    <div className={cn('relative w-full', className)}>
+    <div className={cn('relative w-full text-muted', className)}>
       <div className="relative">
         {!isFilled && (
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-current" />
         )}
         <input
           ref={triggerRef}
@@ -95,24 +136,53 @@ export function SearchableSelect({
           aria-expanded={open}
           aria-haspopup="listbox"
           aria-controls={listboxId}
+          aria-autocomplete="list"
+          aria-activedescendant={open ? `${listboxId}-row-${activeIndex}` : undefined}
           value={inputValue}
-          onFocus={() => setOpen(true)}
+          onFocus={openMenu}
+          // Focus alone can't reopen the menu after choosing: `choose` closes it while the input
+          // still holds focus, so the next click fires no focus event at all and nothing happens.
+          onMouseDown={() => {
+            if (!open) openMenu()
+          }}
           onChange={(e) => {
-            setSearch(e.target.value)
+            const next = e.target.value
+            setSearch(next)
+            // Re-filtering shrinks the list under the highlight; leaving it where it was would
+            // ring a different option than the one Enter goes on to pick. Once a query is typed
+            // the highlight skips the "clear" row too: Enter on it would wipe the very filter
+            // being typed, which is the opposite of what someone mid-search is asking for.
+            setActiveIndex(emptyLabel && next.trim() ? 1 : 0)
             setOpen(true)
           }}
           onKeyDown={(e) => {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault()
+              if (!open) {
+                openMenu()
+                return
+              }
+              const delta = e.key === 'ArrowDown' ? 1 : -1
+              setActiveIndex((i) => Math.min(Math.max(i + delta, 0), Math.max(rows.length - 1, 0)))
+            }
+            if (e.key === 'Home' && open) {
+              e.preventDefault()
+              setActiveIndex(0)
+            }
+            if (e.key === 'End' && open) {
+              e.preventDefault()
+              setActiveIndex(Math.max(rows.length - 1, 0))
+            }
             if (e.key === 'Enter') {
               e.preventDefault()
-              const first = filtered[0]
-              if (first) choose(first)
+              if (open && activeIndex < rows.length) choose(rows[activeIndex])
             }
             if (e.key === 'Escape') {
               setOpen(false)
               setSearch('')
             }
           }}
-          placeholder={placeholder}
+          placeholder={open && selected ? selected.label : placeholder}
           style={
             isFilled && fill
               ? { backgroundColor: fill, borderColor: fill, color: fillText }
@@ -120,23 +190,28 @@ export function SearchableSelect({
           }
           className={cn(
             'h-9 w-full rounded-lg border text-sm outline-none transition-colors',
-            isFilled ? 'pl-3 pr-8 font-medium' : 'pl-8 pr-2.5',
+            isFilled ? 'pl-3 pr-9 font-medium' : 'pl-8 pr-2.5',
             isFilled
               ? 'placeholder:text-current/70'
-              : 'border-border-strong bg-overlay text-foreground placeholder:text-muted focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20',
+              : cn(
+                  'border-border-strong bg-overlay text-foreground placeholder:text-muted focus:border-accent/50 focus:bg-overlay-strong focus:ring-2 focus:ring-accent/20',
+                  inputClassName,
+                ),
           )}
         />
         {isFilled && (
           <button
             type="button"
             aria-label={`Clear ${selected?.label} filter`}
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation()
               choose(null)
               triggerRef.current?.focus()
             }}
             style={{ color: fillText, backgroundColor: `${fillText}1a` }}
-            className="absolute right-2 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full opacity-80 transition-opacity hover:opacity-100"
+            // 24px square, to clear WCAG 2.5.8's minimum target size on touch.
+            className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full opacity-80 transition-opacity hover:opacity-100"
           >
             <X className="h-3.5 w-3.5" strokeWidth={2.5} />
           </button>
@@ -151,45 +226,62 @@ export function SearchableSelect({
             id={listboxId}
             role="listbox"
             style={{ ...position.style, minWidth: position.minWidth }}
-            className="z-50 overflow-y-auto rounded-lg border border-border bg-background-elevated p-1 shadow-lg"
+            className={cn(
+              'z-50 overflow-y-auto rounded-lg border border-border-strong bg-background-elevated p-1 shadow-[0_18px_44px_-12px_rgba(0,0,0,0.55)]',
+              menuClassName,
+            )}
           >
             {emptyLabel && (
               <button
                 type="button"
                 role="option"
+                id={`${listboxId}-row-0`}
+                data-row-index={0}
                 aria-selected={value === ''}
+                onMouseEnter={() => setActiveIndex(0)}
                 onClick={() => choose(null)}
                 className={cn(
-                  'flex w-full cursor-pointer items-center rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-overlay-strong',
+                  'flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors',
+                  activeIndex === 0 && 'bg-overlay-strong',
                   value === '' ? 'text-foreground' : 'text-muted-strong',
                 )}
               >
-                {emptyLabel}
+                {/* Spacer matching the option dots, so this row's label starts on the same left
+                    edge as every other one instead of jogging 18px inward at the top of the list. */}
+                {hasDots && <span className="h-2.5 w-2.5 shrink-0" aria-hidden />}
+                <span className="truncate">{emptyLabel}</span>
               </button>
             )}
             {filtered.length === 0 && <p className="px-2.5 py-2 text-sm text-muted">No matches</p>}
-            {filtered.map((o) => (
-              <button
-                key={o.value}
-                type="button"
-                role="option"
-                aria-selected={o.value === value}
-                onClick={() => choose(o)}
-                className={cn(
-                  'flex w-full cursor-pointer items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-overlay-strong',
-                  o.value === value ? 'text-foreground' : 'text-muted-strong',
-                )}
-              >
-                {o.color && (
-                  <span
-                    className="h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ background: o.color }}
-                    aria-hidden
-                  />
-                )}
-                <span className="truncate">{o.label}</span>
-              </button>
-            ))}
+            {filtered.map((o, i) => {
+              const rowIndex = emptyLabel ? i + 1 : i
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  role="option"
+                  id={`${listboxId}-row-${rowIndex}`}
+                  data-row-index={rowIndex}
+                  aria-selected={o.value === value}
+                  onMouseEnter={() => setActiveIndex(rowIndex)}
+                  onClick={() => choose(o)}
+                  className={cn(
+                    'flex w-full cursor-pointer items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-2 text-left text-sm transition-colors',
+                    activeIndex === rowIndex && 'bg-overlay-strong',
+                    o.value === value ? 'text-foreground' : 'text-muted-strong',
+                  )}
+                >
+                  {o.color && (
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ background: o.color }}
+                      aria-hidden
+                    />
+                  )}
+                  <span className="truncate">{o.label}</span>
+                </button>
+              )
+            })}
           </div>,
           document.body,
         )}

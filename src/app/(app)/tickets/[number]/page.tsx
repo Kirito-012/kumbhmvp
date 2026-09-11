@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import { ExternalLink, MapPin } from 'lucide-react'
+import { AlertTriangle, CalendarClock, Check, ExternalLink, MapPin, UserRound } from 'lucide-react'
 import { Topbar } from '@/components/layout/Topbar'
 import { Card } from '@/components/ui/Card'
 import { buttonVariants } from '@/components/ui/Button'
@@ -90,30 +90,101 @@ export default async function TicketDetailPage({
 
   const status = statuses.find((s) => String(s._id) === ticket.statusId)
   const priority = priorities.find((p) => String(p._id) === ticket.priorityId)
+  const beforePhotoCount = photos.filter((photo) => photo.phase === 'before').length
+  const afterPhotoCount = photos.filter((photo) => photo.phase === 'after').length
+  const questionnaireCount = questionnaires.length
+  // listQuestionnaires sorts createdAt ascending, so the last entry is the most recent submission.
+  const latestQuestionnaire =
+    questionnaires.length > 0 ? questionnaires[questionnaires.length - 1] : null
+  const isResolved = Boolean(status?.isResolved)
+  const isOverdue = Boolean(ticket.dueDate && !isResolved && new Date(ticket.dueDate) < new Date())
+  const dueDateLabel = ticket.dueDate
+    ? new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', year: 'numeric' }).format(
+        new Date(ticket.dueDate),
+      )
+    : 'No due date'
 
   return (
     <>
-      <Topbar
-        title={`#${ticket.number} ${ticket.subject}`}
-        description={ticket.owner?.name ?? undefined}
-      />
+      <Topbar title={`Ticket #${ticket.number}`} description={ticket.owner?.name ?? undefined} />
 
-      <main className="flex-1 px-4 py-4 sm:px-8 sm:py-6 animate-fade-in">
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_300px]">
-          <div className="order-1 space-y-5 lg:order-2">
-            <Card className="p-4 sm:p-6">
-              <div className="flex flex-wrap items-center gap-2">
-                {status && <DynamicBadge label={status.name} color={status.color} dot={false} />}
-                {priority && <DynamicBadge label={priority.name} color={priority.color} />}
-                {ticket.tags.map((t) => (
-                  <Tag key={t.id}>{t.name}</Tag>
-                ))}
+      <main className="flex-1 animate-fade-in px-4 pb-24 pt-4 sm:px-6 sm:py-6 lg:px-8">
+        <div className="mx-auto max-w-[1280px] space-y-5">
+          <Card className="overflow-hidden">
+            <div className="border-b border-border bg-overlay/40 p-4 sm:p-6">
+              <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold tracking-wide text-accent-strong">
+                      #{ticket.number}
+                    </span>
+                    {status && (
+                      <DynamicBadge label={status.name} color={status.color} dot={false} />
+                    )}
+                    {priority && <DynamicBadge label={priority.name} color={priority.color} />}
+                  </div>
+                  <h1 className="mt-2 text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
+                    {ticket.subject}
+                  </h1>
+                  <div className="mt-4 flex flex-wrap gap-x-5 gap-y-3 text-sm text-muted-strong">
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      <UserRound className="h-4 w-4 shrink-0 text-muted" />
+                      <span className="text-muted">Assignee</span>
+                      <strong className="truncate font-medium text-foreground">
+                        {ticket.assignee?.name ?? 'Unassigned'}
+                      </strong>
+                    </span>
+                    <span
+                      className={cn(
+                        'inline-flex items-center gap-2',
+                        isOverdue && 'font-medium text-danger',
+                      )}
+                    >
+                      <CalendarClock className="h-4 w-4 shrink-0" />
+                      <span>{isOverdue ? 'Overdue' : 'Due'}</span>
+                      <strong className="font-medium">{dueDateLabel}</strong>
+                    </span>
+                    {ticket.location && (
+                      <span className="inline-flex items-center gap-2">
+                        <MapPin className="h-4 w-4 shrink-0 text-muted" />
+                        <strong className="font-medium text-foreground">
+                          {ticket.location.classGroup}
+                          {ticket.location.sectorNo !== null
+                            ? ` · Sector ${ticket.location.sectorNo}`
+                            : ''}
+                        </strong>
+                      </span>
+                    )}
+                  </div>
+                  {ticket.tags.length > 0 && (
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      {ticket.tags.map((tag) => (
+                        <Tag key={tag.id}>{tag.name}</Tag>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {canComment && (
+                  <div className="w-full shrink-0 xl:w-72">
+                    <QuestionnaireEntry
+                      ticketNumber={ticket.number}
+                      hasExistingResponse={questionnaireCount > 0}
+                      resolvedStatusId={resolvedStatus ? String(resolvedStatus._id) : null}
+                      canUpdateStatus={canUpdate}
+                      previousQuestionnaire={latestQuestionnaire}
+                    />
+                  </div>
+                )}
               </div>
-              <h1 className="mt-3 text-xl font-semibold tracking-tight text-foreground">
-                {ticket.subject}
-              </h1>
+            </div>
+
+            <section aria-labelledby="issue-heading" className="p-4 sm:p-6">
+              <h2 id="issue-heading" className="text-base font-semibold text-foreground">
+                Issue description
+              </h2>
               <div
-                className="mt-3 text-sm text-muted-strong [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5"
+                className="mt-2 break-words text-sm leading-6 text-muted-strong [&_a]:break-all [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
                 dangerouslySetInnerHTML={{ __html: ticket.issueHtml }}
               />
               {ticket.droneSevaUrl && (
@@ -123,23 +194,65 @@ export default async function TicketDetailPage({
                   rel="noopener noreferrer"
                   className={cn(
                     buttonVariants({ variant: 'secondary', size: 'sm' }),
-                    'mt-4 border-accent/30 bg-accent-soft text-accent-strong hover:bg-accent-soft/80',
+                    'mt-4 min-h-11 max-w-full border-accent/30 bg-accent-soft text-accent-strong hover:bg-accent-soft/80',
                   )}
                 >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  View in DroneSeva
+                  <ExternalLink className="h-4 w-4 shrink-0" />
+                  <span className="truncate">View in DroneSeva</span>
                 </a>
               )}
-            </Card>
+            </section>
+          </Card>
 
-            {/* Site Photos + the Questionnaire entry are a Surveyor's two field tasks — kept
-                together in one card right under the ticket header, ahead of the read-only
-                Conversation/Details content, so neither requires scrolling past metadata a
-                surveyor standing at the site doesn't need. */}
-            {(canComment || photos.length > 0) && (
-              <Card className="space-y-5 p-4 sm:p-6">
-                <div>
-                  <h2 className="mb-4 text-sm font-semibold text-foreground">Site Photos</h2>
+          <Card className="p-4 sm:p-6">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-sm font-medium text-accent-strong">Evidence workflow</p>
+                <h2 className="mt-0.5 text-lg font-semibold text-foreground">
+                  Complete the site record
+                </h2>
+              </div>
+              <p className="text-sm text-muted">3 required stages</p>
+            </div>
+            <ol className="mt-5 grid gap-3 md:grid-cols-3">
+              <WorkflowStage
+                step={1}
+                label="Before photo"
+                count={beforePhotoCount}
+                complete={beforePhotoCount > 0}
+              />
+              <WorkflowStage
+                step={2}
+                label="Questionnaire"
+                count={questionnaireCount}
+                complete={questionnaireCount > 0}
+              />
+              <WorkflowStage
+                step={3}
+                label="After photo"
+                count={afterPhotoCount}
+                complete={afterPhotoCount > 0}
+              />
+            </ol>
+            {!isResolved &&
+              (beforePhotoCount === 0 || questionnaireCount === 0 || afterPhotoCount === 0) && (
+                <div className="mt-4 flex items-start gap-2 rounded-xl border border-warning/30 bg-warning-soft/40 px-3.5 py-3 text-sm text-warning">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <p>Complete all evidence stages before resolving this ticket.</p>
+                </div>
+              )}
+          </Card>
+
+          <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="order-1 min-w-0 space-y-5">
+              {(canComment || photos.length > 0) && (
+                <Card className="p-4 sm:p-6">
+                  <div className="mb-5">
+                    <h2 className="text-base font-semibold text-foreground">Site photos</h2>
+                    <p className="mt-1 text-sm text-muted">
+                      Add clear before and after evidence from the work site.
+                    </p>
+                  </div>
                   <SitePhotos
                     ticketNumber={ticket.number}
                     initialPhotos={photos}
@@ -147,102 +260,124 @@ export default async function TicketDetailPage({
                     canUpload={canUploadPhoto}
                     canDeleteAny={canDeleteAnyPhoto}
                   />
-                </div>
+                </Card>
+              )}
 
-                {canComment && (
-                  <div className="border-t border-border pt-5">
-                    <h2 className="mb-4 text-sm font-semibold text-foreground">
-                      Surveyor Questionnaire
-                    </h2>
-                    <QuestionnaireEntry
-                      ticketNumber={ticket.number}
-                      hasExistingResponse={questionnaires.length > 0}
-                      resolvedStatusId={resolvedStatus ? String(resolvedStatus._id) : null}
-                      canUpdateStatus={canUpdate}
-                    />
-                  </div>
-                )}
+              <Card className="p-4 sm:p-6">
+                <h2 className="mb-4 text-base font-semibold text-foreground">Conversation</h2>
+                <CommentThread
+                  ticketNumber={ticket.number}
+                  comments={comments}
+                  questionnairesById={questionnairesById}
+                  canComment={canComment}
+                  canNote={canNote}
+                />
               </Card>
-            )}
+            </div>
 
-            <Card className="p-4 sm:p-6">
-              <h2 className="mb-4 text-sm font-semibold text-foreground">Conversation</h2>
-              <CommentThread
-                ticketNumber={ticket.number}
-                comments={comments}
-                questionnairesById={questionnairesById}
-                canComment={canComment}
-                canNote={canNote}
-              />
-            </Card>
-          </div>
-
-          <div className="order-2 space-y-5 lg:order-1">
-            <Card className="p-5">
-              <h2 className="mb-4 text-xs font-semibold uppercase tracking-wide text-muted">
-                Details
-              </h2>
-              <TicketDetailSidebar
-                ticketNumber={ticket.number}
-                statusId={ticket.statusId}
-                assignee={ticket.assignee}
-                priorityId={ticket.priorityId}
-                typeId={ticket.typeId}
-                dueDate={ticket.dueDate}
-                statuses={statuses.map((s) => ({
-                  id: String(s._id),
-                  name: s.name,
-                  color: s.color,
-                }))}
-                priorities={priorities.map((p) => ({
-                  id: String(p._id),
-                  name: p.name,
-                  color: p.color,
-                }))}
-                types={types.map((t) => ({ id: String(t._id), name: t.name }))}
-                users={users.map((u) => ({
-                  id: String(u._id),
-                  name: u.fullname || u.email || 'Unknown',
-                }))}
-                canUpdate={canUpdate}
-                canAssign={canAssign}
-              />
-            </Card>
-
-            {ticket.location && (
+            <aside className="order-2 min-w-0 space-y-5 xl:sticky xl:top-24 xl:self-start">
               <Card className="p-5">
-                <h2 className="mb-4 text-xs font-semibold uppercase tracking-wide text-muted">
-                  Location
-                </h2>
-                <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-muted-strong">
-                  <Tag>{ticket.location.classGroup}</Tag>
-                  {ticket.location.sectorNo !== null && (
-                    <span className="text-xs text-muted">Sector {ticket.location.sectorNo}</span>
-                  )}
-                </div>
-                <TicketLocationMap lng={ticket.location.lng} lat={ticket.location.lat} />
-                <Link
-                  href={`/?parcel=${ticket.location.sectorPlanId}&lng=${ticket.location.lng}&lat=${ticket.location.lat}&sector=${ticket.location.sectorNo ?? ''}`}
-                  className={cn(
-                    buttonVariants({ variant: 'secondary', size: 'sm' }),
-                    'mt-3 w-full',
-                  )}
-                >
-                  <MapPin className="h-3.5 w-3.5" />
-                  View on map
-                </Link>
+                <h2 className="mb-1 text-base font-semibold text-foreground">Ticket controls</h2>
+                <p className="mb-5 text-sm text-muted">
+                  Update ownership, timing, and classification.
+                </p>
+                <TicketDetailSidebar
+                  ticketNumber={ticket.number}
+                  statusId={ticket.statusId}
+                  assignee={ticket.assignee}
+                  priorityId={ticket.priorityId}
+                  typeId={ticket.typeId}
+                  dueDate={ticket.dueDate}
+                  statuses={statuses.map((item) => ({
+                    id: String(item._id),
+                    name: item.name,
+                    color: item.color,
+                  }))}
+                  priorities={priorities.map((item) => ({
+                    id: String(item._id),
+                    name: item.name,
+                    color: item.color,
+                  }))}
+                  types={types.map((item) => ({ id: String(item._id), name: item.name }))}
+                  users={users.map((item) => ({
+                    id: String(item._id),
+                    name: item.fullname || item.email || 'Unknown',
+                  }))}
+                  canUpdate={canUpdate}
+                  canAssign={canAssign}
+                />
               </Card>
-            )}
 
-            <Card className="p-5">
-              <h2 className="mb-4 text-xs font-semibold uppercase tracking-wide text-muted">
-                Activity
-              </h2>
-              <ActivityTimeline events={events} />
-            </Card>
+              {ticket.location && (
+                <Card className="p-5">
+                  <h2 className="text-base font-semibold text-foreground">Location</h2>
+                  <div className="mb-4 mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-strong">
+                    <Tag>{ticket.location.classGroup}</Tag>
+                    {ticket.location.sectorNo !== null && (
+                      <span>Sector {ticket.location.sectorNo}</span>
+                    )}
+                  </div>
+                  <TicketLocationMap lng={ticket.location.lng} lat={ticket.location.lat} />
+                  <Link
+                    href={`/?parcel=${ticket.location.sectorPlanId}&lng=${ticket.location.lng}&lat=${ticket.location.lat}&sector=${ticket.location.sectorNo ?? ''}`}
+                    className={cn(
+                      buttonVariants({ variant: 'secondary', size: 'sm' }),
+                      'mt-3 min-h-11 w-full',
+                    )}
+                  >
+                    <MapPin className="h-4 w-4" />
+                    View on map
+                  </Link>
+                </Card>
+              )}
+
+              <Card className="p-5">
+                <h2 className="mb-4 text-base font-semibold text-foreground">Activity</h2>
+                <ActivityTimeline events={events} />
+              </Card>
+            </aside>
           </div>
         </div>
       </main>
     </>
+  )
+}
+
+function WorkflowStage({
+  step,
+  label,
+  count,
+  complete,
+}: {
+  step: number
+  label: string
+  count: number
+  complete: boolean
+}) {
+  return (
+    <li
+      className={cn(
+        'flex min-h-20 items-center gap-3 rounded-xl border px-3.5 py-3',
+        complete ? 'border-accent/30 bg-accent-soft/50' : 'border-border bg-overlay/40',
+      )}
+    >
+      <span
+        className={cn(
+          'flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-sm font-semibold',
+          complete
+            ? 'border-accent/40 bg-accent text-background'
+            : 'border-border-strong bg-overlay-strong text-muted-strong',
+        )}
+        aria-hidden="true"
+      >
+        {complete ? <Check className="h-4 w-4" /> : step}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-foreground">{label}</span>
+        <span className={cn('block text-sm', complete ? 'text-accent-strong' : 'text-muted')}>
+          {complete ? `Completed · ${count}` : 'Required · not started'}
+        </span>
+      </span>
+    </li>
   )
 }

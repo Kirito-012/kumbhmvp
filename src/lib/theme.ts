@@ -31,7 +31,13 @@ export function applyTheme(theme: Theme) {
   if (!document.startViewTransition) {
     set()
   } else {
-    document.startViewTransition(set)
+    // A transition that gets interrupted by a newer one (e.g. two rapid
+    // toggles) rejects its promises with InvalidStateError -- harmless (the
+    // newer transition wins), but left uncaught it surfaces as an unhandled
+    // rejection / dev-overlay runtime error.
+    const transition = document.startViewTransition(set)
+    transition.ready.catch(() => {})
+    transition.finished.catch(() => {})
   }
 
   try {

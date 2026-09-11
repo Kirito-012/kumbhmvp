@@ -29,8 +29,10 @@ function ChoicePill({
       type="button"
       onClick={onClick}
       className={cn(
-        'min-h-12 flex-1 rounded-xl border text-sm font-medium transition-colors',
-        active ? activeTone : 'border-border bg-overlay text-muted-strong active:bg-overlay-strong',
+        'min-h-12 flex-1 cursor-pointer rounded-xl border text-sm font-medium transition-colors lg:min-h-10',
+        active
+          ? activeTone
+          : 'border-border bg-overlay text-muted-strong hover:border-border-strong hover:bg-overlay-strong active:bg-overlay-strong',
       )}
     >
       {label}
@@ -52,7 +54,7 @@ function NumberField({
   return (
     <label className="flex-1">
       <span className="mb-1 block text-xs text-muted">{label}</span>
-      <div className="flex items-center gap-1.5 rounded-xl border border-border bg-overlay px-3">
+      <div className="flex items-center gap-1.5 rounded-xl border border-border bg-overlay px-3 transition-colors focus-within:border-accent">
         <input
           type="text"
           inputMode="decimal"
@@ -62,7 +64,7 @@ function NumberField({
             onChange(raw === '' ? null : Number(raw))
           }}
           placeholder="—"
-          className="min-h-12 w-full bg-transparent text-base text-foreground outline-none"
+          className="min-h-12 w-full bg-transparent text-base text-foreground outline-none lg:min-h-10 lg:text-sm"
         />
         {unit && <span className="shrink-0 text-xs text-muted">{unit}</span>}
       </div>

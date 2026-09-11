@@ -75,7 +75,15 @@ export async function listTickets(params: ListTicketsParams) {
   if (tag) filter.tagIds = tag._id
   if (params.assigneeId === 'unassigned') filter.assigneeId = null
   else if (params.assigneeId) filter.assigneeId = params.assigneeId
-  if (params.q) filter.$text = { $search: params.q }
+  if (params.q) {
+    // A bare (optionally "#"-prefixed) number is unambiguously a ticket ID lookup, not a
+    // free-text search -- route it straight at the unique, indexed `number` field instead of
+    // the text index, which would otherwise return nothing (subject/issue rarely contain the
+    // raw digits) or unrelated partial matches.
+    const idMatch = params.q.trim().match(/^#?(\d+)$/)
+    if (idMatch) filter.number = Number(idMatch[1])
+    else filter.$text = { $search: params.q }
+  }
   if (params.classGroup) filter['location.classGroup'] = params.classGroup
   if (params.sectorNo !== undefined) filter['location.sectorNo'] = params.sectorNo
 
@@ -110,6 +118,18 @@ export async function listTickets(params: ListTicketsParams) {
  *  to their own tickets, matching every other ticket list in the app. */
 export async function searchTickets(query: string, forcedAssigneeId?: string, limit = 5) {
   await dbConnect()
+  const idMatch = query.trim().match(/^#?(\d+)$/)
+
+  if (idMatch) {
+    const filter: QueryFilter<Ticket> = { deletedAt: null, number: Number(idMatch[1]) }
+    if (forcedAssigneeId) filter.assigneeId = forcedAssigneeId
+    return TicketModel.find(filter)
+      .limit(limit)
+      .populate({ path: 'statusId', select: 'name slug color' })
+      .select('number subject statusId')
+      .lean()
+  }
+
   const filter: QueryFilter<Ticket> = { deletedAt: null, $text: { $search: query } }
   if (forcedAssigneeId) filter.assigneeId = forcedAssigneeId
 
@@ -129,6 +149,25 @@ export async function searchTickets(query: string, forcedAssigneeId?: string, li
  * against kumbh.sector_boundary (32 static rows, doesn't change per-ticket) via the same
  * Postgres pool the map already uses — not a per-ticket join, just one lookup for this list.
  */
+/**
+ * `sector_no` -> display name, from Postgres `kumbh.sector_boundary` (32 static rows that don't
+ * change per-ticket). Sector *names* aren't denormalized onto the ticket (only `sectorNo`), so
+ * anything rendering a sector label needs this one small lookup against the same pool the map
+ * already uses — not a per-ticket cross-DB join. Returns an empty map if Postgres is unreachable,
+ * so callers degrade to numeric-only labels rather than failing the whole page over a nicety.
+ */
+async function getSectorNames(): Promise<Map<number, string>> {
+  try {
+    const { getPool } = await import('@/server/db/postgres')
+    const { rows } = await getPool().query<{ sector_no: number; name: string }>(
+      'SELECT sector_no, name FROM kumbh.sector_boundary ORDER BY sector_no',
+    )
+    return new Map(rows.map((r) => [r.sector_no, r.name]))
+  } catch {
+    return new Map()
+  }
+}
+
 export async function getLocationFilterOptions() {
   await dbConnect()
 
@@ -145,17 +184,7 @@ export async function getLocationFilterOptions() {
 
   const sortedSectorNos = (sectorNos as number[]).sort((a, b) => a - b)
 
-  let sectorNames = new Map<number, string>()
-  try {
-    const { getPool } = await import('@/server/db/postgres')
-    const { rows } = await getPool().query<{ sector_no: number; name: string }>(
-      'SELECT sector_no, name FROM kumbh.sector_boundary ORDER BY sector_no',
-    )
-    sectorNames = new Map(rows.map((r) => [r.sector_no, r.name]))
-  } catch {
-    // Postgres unreachable — fall back to numeric-only sector labels rather than failing the
-    // whole Tickets page over a filter-label nicety.
-  }
+  const sectorNames = await getSectorNames()
 
   return {
     classGroups: (classGroups as string[]).sort(),
@@ -229,62 +258,68 @@ export async function getDashboardData(assigneeId?: string) {
   const resolvedStatusIds = await TicketStatusModel.find({ isResolved: true }).select('_id').lean()
   const resolvedIds = resolvedStatusIds.map((s) => s._id)
 
-  const [resolvedTodayCount, priorityRows, categoryRows, volumeRows] = await Promise.all([
-    TicketModel.countDocuments({
-      ...baseMatch,
-      resolvedAt: { $gte: startOfToday },
-    }),
-    TicketModel.aggregate([
-      { $match: { ...baseMatch, statusId: { $nin: resolvedIds } } },
-      { $group: { _id: '$priorityId', count: { $sum: 1 } } },
-    ]),
-    TicketModel.aggregate([
-      { $match: { ...baseMatch, 'location.classGroup': { $ne: null } } },
-      {
-        $group: {
-          _id: '$location.classGroup',
-          total: { $sum: 1 },
-          completed: { $sum: { $cond: [{ $in: ['$statusId', resolvedIds] }, 1, 0] } },
+  const [resolvedTodayCount, priorityRows, categoryRows, volumeRows, sectorNames] =
+    await Promise.all([
+      TicketModel.countDocuments({
+        ...baseMatch,
+        resolvedAt: { $gte: startOfToday },
+      }),
+      TicketModel.aggregate([
+        { $match: { ...baseMatch, statusId: { $nin: resolvedIds } } },
+        { $group: { _id: '$priorityId', count: { $sum: 1 } } },
+      ]),
+      // Grouped by class *and* sector in one pass: the dashboard's category panel ships both the
+      // all-sectors totals and a per-sector breakdown so its sector dropdown filters instantly
+      // client-side, with no round-trip per selection (~25 classes x ~32 sectors is a trivially
+      // small payload, and most pairs don't exist at all).
+      TicketModel.aggregate([
+        { $match: { ...baseMatch, 'location.classGroup': { $ne: null } } },
+        {
+          $group: {
+            _id: { classGroup: '$location.classGroup', sectorNo: '$location.sectorNo' },
+            total: { $sum: 1 },
+            completed: { $sum: { $cond: [{ $in: ['$statusId', resolvedIds] }, 1, 0] } },
+          },
         },
-      },
-    ]),
-    TicketModel.aggregate([
-      {
-        $facet: {
-          created: [
-            { $match: { ...baseMatch, createdAt: { $gte: sevenDaysAgo } } },
-            {
-              $group: {
-                _id: {
-                  $dateToString: {
-                    format: '%Y-%m-%d',
-                    date: '$createdAt',
-                    timezone: dateToStringTimezone,
+      ]),
+      TicketModel.aggregate([
+        {
+          $facet: {
+            created: [
+              { $match: { ...baseMatch, createdAt: { $gte: sevenDaysAgo } } },
+              {
+                $group: {
+                  _id: {
+                    $dateToString: {
+                      format: '%Y-%m-%d',
+                      date: '$createdAt',
+                      timezone: dateToStringTimezone,
+                    },
                   },
+                  n: { $sum: 1 },
                 },
-                n: { $sum: 1 },
               },
-            },
-          ],
-          resolved: [
-            { $match: { ...baseMatch, resolvedAt: { $gte: sevenDaysAgo } } },
-            {
-              $group: {
-                _id: {
-                  $dateToString: {
-                    format: '%Y-%m-%d',
-                    date: '$resolvedAt',
-                    timezone: dateToStringTimezone,
+            ],
+            resolved: [
+              { $match: { ...baseMatch, resolvedAt: { $gte: sevenDaysAgo } } },
+              {
+                $group: {
+                  _id: {
+                    $dateToString: {
+                      format: '%Y-%m-%d',
+                      date: '$resolvedAt',
+                      timezone: dateToStringTimezone,
+                    },
                   },
+                  n: { $sum: 1 },
                 },
-                n: { $sum: 1 },
               },
-            },
-          ],
+            ],
+          },
         },
-      },
-    ]),
-  ])
+      ]),
+      getSectorNames(),
+    ])
 
   const priorities = await TicketPriorityModel.find().sort({ order: 1 }).lean()
   const priorityCountById = new Map(priorityRows.map((r) => [String(r._id), r.count]))
@@ -295,18 +330,55 @@ export async function getDashboardData(assigneeId?: string) {
     value: priorityCountById.get(String(p._id)) ?? 0,
   }))
 
+  // One pass over the class x sector rows builds both shapes the category panel needs: the
+  // all-sectors totals (its default view) and a per-sector count index (its dropdown).
+  type CategoryRow = {
+    _id: { classGroup: string; sectorNo: number | null }
+    total: number
+    completed: number
+  }
+  const overallByGroup = new Map<string, { total: number; completed: number }>()
+  const countsBySector = new Map<number, Map<string, { total: number; completed: number }>>()
+  for (const row of categoryRows as CategoryRow[]) {
+    const { classGroup, sectorNo } = row._id
+    const overall = overallByGroup.get(classGroup) ?? { total: 0, completed: 0 }
+    overall.total += row.total
+    overall.completed += row.completed
+    overallByGroup.set(classGroup, overall)
+
+    // Tickets with no sector number still count toward the all-sectors totals above, but aren't
+    // reachable from any single sector — there's deliberately no "No sector" option.
+    if (sectorNo == null) continue
+    let forSector = countsBySector.get(sectorNo)
+    if (!forSector) {
+      forSector = new Map()
+      countsBySector.set(sectorNo, forSector)
+    }
+    forSector.set(classGroup, { total: row.total, completed: row.completed })
+  }
+
   // Fixed order/color per CLASS_GROUP_COLORS (not sorted by count) so the grid position of each
   // category card stays stable across reloads instead of reshuffling as counts change.
-  const categoryByGroup = new Map(categoryRows.map((r) => [r._id as string, r]))
-  const categoryBreakdown = Object.entries(CLASS_GROUP_COLORS).map(([name, color]) => {
-    const row = categoryByGroup.get(name)
-    return {
-      name,
-      color,
-      total: row?.total ?? 0,
-      completed: row?.completed ?? 0,
-    }
-  })
+  const categoryBreakdown = Object.entries(CLASS_GROUP_COLORS).map(([name, color]) => ({
+    name,
+    color,
+    total: overallByGroup.get(name)?.total ?? 0,
+    completed: overallByGroup.get(name)?.completed ?? 0,
+  }))
+
+  // Only sectors that actually carry tickets become dropdown options. `counts` is a compact
+  // className -> [total, completed] map rather than full entries, since the client already holds
+  // every category's name and colour in `categoryBreakdown` and only needs the numbers swapped.
+  const categorySectors = [...countsBySector.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([sectorNo, counts]) => ({
+      sectorNo,
+      name: sectorNames.get(sectorNo) ?? null,
+      total: [...counts.values()].reduce((sum, c) => sum + c.total, 0),
+      counts: Object.fromEntries(
+        [...counts].map(([name, c]) => [name, [c.total, c.completed] as [number, number]]),
+      ),
+    }))
 
   const days: string[] = []
   for (let i = 0; i < 7; i++) {
@@ -388,6 +460,7 @@ export async function getDashboardData(assigneeId?: string) {
     resolvedTodayCount,
     priorityBreakdown,
     categoryBreakdown,
+    categorySectors,
     ticketVolume,
     workloadByAssignee,
     recentActivity: recentEvents.map((e) => {

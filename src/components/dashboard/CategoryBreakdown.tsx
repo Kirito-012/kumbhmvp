@@ -1,9 +1,11 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { Shapes, CheckCircle2, Circle } from 'lucide-react'
+import { Shapes, CheckCircle2, Circle, MapPin } from 'lucide-react'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
+import { cn } from '@/lib/utils'
 
 export type CategoryBreakdownEntry = {
   name: string
@@ -11,6 +13,21 @@ export type CategoryBreakdownEntry = {
   total: number
   completed: number
 }
+
+/** One sector's ticket counts, keyed by class-group name -> [total, completed]. Only the numbers
+ *  travel: names and colours already live in the `data` prop, so a sector selection just swaps
+ *  counts into those same entries rather than shipping 32 duplicated copies of the whole list. */
+export type CategorySectorOption = {
+  sectorNo: number
+  name: string | null
+  total: number
+  counts: Record<string, [total: number, completed: number]>
+}
+
+/** Solid fill for an active sector selection, so the filter reads as "on" at a glance — same
+ *  treatment the Tickets page's class filter gives its selection. This is --accent; solidFillColor
+ *  deepens it to #047a54 before it becomes a fill, because white-on-#10b981 measures 2.56:1. */
+const SECTOR_FILTER_COLOR = '#10b981'
 
 // Theme-aware via CSS custom properties defined in globals.css (--category-*): dark mode keeps
 // deep glass + a translucent glowing liquid; light mode swaps to opaque solid-color liquid on
@@ -58,6 +75,7 @@ function Tube({
   index,
   active,
   isHovered,
+  maxWidth,
   tubeRef,
   onOpen,
 }: {
@@ -65,6 +83,7 @@ function Tube({
   index: number
   active: boolean
   isHovered: boolean
+  maxWidth: number
   tubeRef: (el: HTMLDivElement | null) => void
   onOpen: (entry: CategoryBreakdownEntry) => void
 }) {
@@ -84,8 +103,17 @@ function Tube({
     <div
       ref={tubeRef}
       data-tube-index={index}
-      className="flex min-w-[52px] flex-col"
-      style={{ flexGrow: Math.sqrt(entry.total) || 1, flexBasis: 0 }}
+      className="flex min-w-[56px] flex-col"
+      style={{
+        flexGrow: Math.sqrt(entry.total) || 1,
+        flexBasis: 0,
+        // Capped so a sector with only a handful of categories gets a row of normal-looking tubes
+        // rather than three tubes stretched across the whole panel (the cap is relaxed for sparse
+        // rows by the caller). flex-grow is transitioned because filtering re-proportions every
+        // surviving tube.
+        maxWidth,
+        transition: 'flex-grow 600ms cubic-bezier(0.16, 1, 0.3, 1)',
+      }}
     >
       <div
         role="link"
@@ -213,14 +241,17 @@ function Tube({
       </div>
 
       <div className="mt-2 flex min-w-0 flex-col items-center gap-0.5">
-        <span className="flex max-w-full items-center gap-1.5">
+        {/* Wraps to two lines rather than truncating: at a full row of categories the tubes sit
+            near their min-width, and an ellipsis there hides the very thing that identifies the
+            tube. Anything past two lines still clamps, and the hover card always has the full name. */}
+        <span className="flex max-w-full items-start gap-1.5">
           <span
-            className="h-1.5 w-1.5 shrink-0 rounded-full"
+            className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full"
             style={{ backgroundColor: c }}
             aria-hidden
           />
           <span
-            className="truncate text-[11px] font-medium"
+            className="line-clamp-2 text-center text-[11px] font-medium leading-tight"
             style={{ color: 'var(--category-label)' }}
           >
             {entry.name}
@@ -387,17 +418,50 @@ function HoverCard({
   )
 }
 
-export function CategoryBreakdown({ data }: { data: CategoryBreakdownEntry[] }) {
+export function CategoryBreakdown({
+  data,
+  sectors,
+}: {
+  data: CategoryBreakdownEntry[]
+  sectors: CategorySectorOption[]
+}) {
   const router = useRouter()
-  const sorted = [...data].sort((a, b) => b.total - a.total)
+
+  // '' = all sectors (the default). Filtering is purely client-side: every sector's counts ship
+  // with the page, so switching is instant and the tubes animate between levels instead of
+  // re-mounting from zero after a server round-trip.
+  const [sectorValue, setSectorValue] = useState('')
+  const activeSector = sectors.find((s) => String(s.sectorNo) === sectorValue) ?? null
+
+  const sorted = useMemo(() => {
+    const scoped = activeSector
+      ? data.map((e) => {
+          const c = activeSector.counts[e.name]
+          return { ...e, total: c?.[0] ?? 0, completed: c?.[1] ?? 0 }
+        })
+      : data
+    // Empty categories are dropped in every scope, not just a filtered one. `data` carries an
+    // entry for all ~25 CLASS_GROUP_COLORS keys whether or not any ticket uses them, so the
+    // default view was leading with 16 flat "0%" glass tubes pushed off the right edge — the
+    // unfiltered panel looked worse than a filtered one, which is backwards.
+    return scoped.filter((e) => e.total > 0).sort((a, b) => b.total - a.total)
+  }, [data, activeSector])
+
   const totalAll = sorted.reduce((s, e) => s + e.total, 0)
   const doneAll = sorted.reduce((s, e) => s + e.completed, 0)
   const pctAll = totalAll > 0 ? Math.round((doneAll / totalAll) * 100) : 0
 
-  // Tickets page reads the category filter from ?class=<classGroup> (see TicketsToolbar.tsx) —
-  // URLSearchParams handles the encoding, so the raw category name (spaces included) is fine here.
+  const sectorLabel = (s: CategorySectorOption) =>
+    s.name ? `${s.sectorNo}. ${s.name}` : `Sector ${s.sectorNo}`
+
+  // Tickets page reads these filters from ?class=<classGroup>&sector=<sectorNo> (see
+  // TicketsToolbar.tsx) — URLSearchParams handles the encoding, so the raw category name
+  // (spaces included) is fine here. Carrying the sector through means the list the user lands on
+  // matches the exact number they clicked on the tube.
   const goToCategory = (entry: CategoryBreakdownEntry) => {
-    router.push(`/tickets?class=${encodeURIComponent(entry.name)}`)
+    const params = new URLSearchParams({ class: entry.name })
+    if (activeSector) params.set('sector', String(activeSector.sectorNo))
+    router.push(`/tickets?${params.toString()}`)
   }
 
   const [active, setActive] = useState(false)
@@ -431,9 +495,11 @@ export function CategoryBreakdown({ data }: { data: CategoryBreakdownEntry[] }) 
     setCursor({ x: e.clientX, y: e.clientY })
 
     let nextIndex: number | null = null
-    for (let i = 0; i < tubeRefs.current.length; i++) {
+    // Bounded by the *current* tube count, not the ref array's length — switching sectors can
+    // shrink the row, and a detached element left in a trailing slot would still match on x.
+    for (let i = 0; i < sorted.length; i++) {
       const el = tubeRefs.current[i]
-      if (!el) continue
+      if (!el || !el.isConnected) continue
       const r = el.getBoundingClientRect()
       if (e.clientX >= r.left && e.clientX <= r.right) {
         nextIndex = i
@@ -443,7 +509,43 @@ export function CategoryBreakdown({ data }: { data: CategoryBreakdownEntry[] }) 
     setHoverIndex(nextIndex)
   }
 
-  const hoveredEntry = hoverIndex !== null ? sorted[hoverIndex] : null
+  const hoveredEntry = (hoverIndex !== null ? sorted[hoverIndex] : null) ?? null
+
+  // Which side(s) of the tube row have content scrolled out of view, so the row can fade at
+  // exactly those edges. Without it the row just ends mid-tube at the panel's edge with nothing
+  // to say there's more — and at 375px most of it is off-screen.
+  const [edges, setEdges] = useState({ left: false, right: false })
+
+  useEffect(() => {
+    const el = rowRef.current
+    if (!el) return
+    const update = () => {
+      const max = el.scrollWidth - el.clientWidth
+      setEdges({ left: el.scrollLeft > 4, right: el.scrollLeft < max - 4 })
+    }
+    update()
+    el.addEventListener('scroll', update, { passive: true })
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    return () => {
+      el.removeEventListener('scroll', update)
+      observer.disconnect()
+    }
+  }, [sorted.length])
+
+  // Masking the scroll container (rather than laying a coloured gradient over it) lets the
+  // panel's own vertical gradient show through the faded edge, so the hint can't mismatch the
+  // background the way a hardcoded fade colour would.
+  const EDGE_FADE = 40
+  const rowMask =
+    edges.left || edges.right
+      ? `linear-gradient(to right, transparent 0px, #000 ${edges.left ? EDGE_FADE : 0}px, #000 calc(100% - ${edges.right ? EDGE_FADE : 0}px), transparent 100%)`
+      : undefined
+
+  // A sector with two categories shouldn't leave 780px of dead panel to the right: sparse rows
+  // get wider tubes and centre themselves instead of hugging the left edge.
+  const sparse = sorted.length <= 5
+  const tubeMaxWidth = sparse ? 176 : 148
 
   return (
     <section
@@ -467,8 +569,8 @@ export function CategoryBreakdown({ data }: { data: CategoryBreakdownEntry[] }) 
         aria-hidden
       />
 
-      <div className="relative flex items-start justify-between gap-4 px-5 pt-5">
-        <div className="flex items-start gap-3">
+      <div className="relative flex flex-col gap-4 px-5 pt-5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
           <div
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
             style={{
@@ -479,45 +581,93 @@ export function CategoryBreakdown({ data }: { data: CategoryBreakdownEntry[] }) 
           >
             <Shapes className="h-4 w-4" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h3 className="text-sm font-semibold" style={{ color: 'var(--category-heading)' }}>
               Tickets by category
             </h3>
+            <p
+              className="mt-0.5 truncate text-[11px]"
+              style={{ color: 'var(--category-label-muted)' }}
+            >
+              {activeSector
+                ? `${sorted.length} ${sorted.length === 1 ? 'category' : 'categories'} in this sector`
+                : sectors.length > 0
+                  ? `Across all ${sectors.length} sectors`
+                  : 'Across all sectors'}
+            </p>
           </div>
         </div>
-        <div className="pt-0.5 text-right">
-          <p
-            className="text-xl font-semibold leading-none tracking-tight tabular-nums"
-            style={{ color: 'var(--category-heading)' }}
-          >
-            {pctAll}%
-          </p>
-          <p
-            className="mt-1 text-[11px] tabular-nums"
-            style={{ color: 'var(--category-label-muted)' }}
-          >
-            {doneAll.toLocaleString()} of {totalAll.toLocaleString()} resolved
-          </p>
+
+        <div className="flex items-center gap-3 sm:gap-4">
+          {sectors.length > 0 && (
+            <div className="w-full min-w-0 sm:w-60">
+              <SearchableSelect
+                value={sectorValue}
+                onChange={(v) => {
+                  setSectorValue(v)
+                  // The row can shrink under the cursor; a stale index would point at a tube
+                  // that no longer exists (or a different category entirely).
+                  setHoverIndex(null)
+                }}
+                placeholder="All sectors"
+                emptyLabel="All sectors"
+                // The fill rides on the *selection*, not on each option: every sector would carry
+                // the same dot, and 32 identical dots encode nothing — they just add noise to a
+                // list being scanned by name.
+                selectionColor={SECTOR_FILTER_COLOR}
+                className="text-[var(--category-label)]"
+                inputClassName="border-[var(--category-control-border)] bg-[var(--category-control-bg)] text-[var(--category-heading)] placeholder:text-[var(--category-label)]"
+                menuClassName="border-[var(--category-control-menu-border)] bg-[var(--category-control-menu-bg)]"
+                options={sectors.map((s) => ({
+                  value: String(s.sectorNo),
+                  label: sectorLabel(s),
+                }))}
+              />
+            </div>
+          )}
+          <div className="shrink-0 pt-0.5 text-right">
+            <p
+              className="text-xl font-semibold leading-none tracking-tight tabular-nums"
+              style={{ color: 'var(--category-heading)' }}
+            >
+              {pctAll}%
+            </p>
+            <p
+              className="mt-1 whitespace-nowrap text-[11px] tabular-nums"
+              style={{ color: 'var(--category-label-muted)' }}
+            >
+              {doneAll.toLocaleString()} of {totalAll.toLocaleString()} resolved
+            </p>
+          </div>
         </div>
       </div>
 
       {totalAll === 0 ? (
         <div className="relative flex flex-col items-center justify-center gap-1.5 px-5 pb-8 pt-2 text-center">
+          <MapPin className="mb-1 h-5 w-5" style={{ color: 'var(--category-label-muted)' }} />
           <p className="text-sm font-medium" style={{ color: 'var(--category-heading)' }}>
-            No category data yet
+            {activeSector ? `No tickets in ${sectorLabel(activeSector)}` : 'No category data yet'}
           </p>
           <p className="text-xs" style={{ color: 'var(--category-label-muted)' }}>
-            Tickets imported with a map location will show up here.
+            {activeSector
+              ? 'Pick another sector, or clear the filter to see every category.'
+              : 'Tickets imported with a map location will show up here.'}
           </p>
         </div>
       ) : (
         <div
           ref={rowRef}
           className="relative overflow-x-auto px-5 pb-5 pt-6"
+          style={{ WebkitMaskImage: rowMask, maskImage: rowMask }}
           onMouseMove={handlePointerMove}
           onMouseLeave={() => setHoverIndex(null)}
         >
-          <div className="flex min-w-[680px] items-end gap-2.5">
+          {/* min-width forces horizontal scroll rather than squeezing tubes, but is scaled to the
+              tube count so a 3-category sector doesn't sit in a mostly-empty 680px scroll area. */}
+          <div
+            className={cn('flex items-end gap-2.5', sparse && 'justify-center')}
+            style={{ minWidth: Math.min(680, sorted.length * 62) }}
+          >
             {sorted.map((entry, i) => (
               <Tube
                 key={entry.name}
@@ -525,6 +675,7 @@ export function CategoryBreakdown({ data }: { data: CategoryBreakdownEntry[] }) 
                 index={i}
                 active={active}
                 isHovered={hoverIndex === i}
+                maxWidth={tubeMaxWidth}
                 onOpen={goToCategory}
                 tubeRef={(el) => {
                   tubeRefs.current[i] = el

@@ -106,14 +106,16 @@ function PhaseGroup({
   }
 
   return (
-    <div className="min-w-0 flex-1">
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-        {label}{' '}
-        <span className="text-muted/60">
-          ({photos.length}/{MAX_PER_PHASE})
+    <section aria-labelledby={`${phase}-photos-heading`} className="min-w-0 flex-1">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 id={`${phase}-photos-heading`} className="text-sm font-semibold text-foreground">
+          {label} work
+        </h3>
+        <span className="text-sm text-muted">
+          {photos.length}/{MAX_PER_PHASE}
         </span>
-      </p>
-      <div className="grid grid-cols-3 gap-2">
+      </div>
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3">
         {photos.map((photo, i) => (
           <div
             key={photo.id}
@@ -122,26 +124,27 @@ function PhaseGroup({
             <button
               type="button"
               onClick={() => onOpenLightbox(photo.id)}
-              className="absolute inset-0"
+              className="absolute inset-0 cursor-pointer"
               aria-label={`View ${label.toLowerCase()} photo ${i + 1}`}
             >
               <Image
-                src={photo.url.replace('/upload/', '/upload/f_auto,q_auto,w_400/')}
+                src={photo.url.replace('/upload/', '/upload/f_auto,q_auto,w_600/')}
                 alt={`${label} site photo`}
                 fill
-                sizes="150px"
-                className="object-cover"
+                sizes="(min-width: 640px) 220px, 45vw"
+                className="object-cover transition-transform duration-200 group-hover:scale-[1.03]"
                 unoptimized
               />
+              <div className="pointer-events-none absolute inset-0 bg-black/0 transition-colors group-hover:bg-black/10" />
             </button>
             {canDeletePhoto(photo) && (
               <button
                 type="button"
                 onClick={() => handleDelete(photo)}
                 aria-label="Delete photo"
-                className="absolute right-0.5 top-0.5 flex h-11 w-11 items-center justify-center rounded-full bg-black/60 text-white active:bg-black/80"
+                className="absolute right-0.5 top-0.5 flex h-11 w-11 cursor-pointer items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80 active:bg-black/80 lg:h-8 lg:w-8"
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4 lg:h-3.5 lg:w-3.5" />
               </button>
             )}
           </div>
@@ -158,7 +161,7 @@ function PhaseGroup({
                 <button
                   type="button"
                   onClick={() => retry(item)}
-                  className="flex h-11 w-11 items-center justify-center rounded-full bg-overlay-strong text-muted-strong active:bg-border"
+                  className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-full bg-overlay-strong text-muted-strong transition-colors hover:bg-border active:bg-border"
                   aria-label="Retry upload"
                 >
                   <RotateCw className="h-4 w-4" />
@@ -178,14 +181,21 @@ function PhaseGroup({
             type="button"
             onClick={() => inputRef.current?.click()}
             className={cn(
-              'flex aspect-square flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-border text-muted active:bg-overlay',
+              'flex aspect-square min-h-24 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border text-muted-strong transition-colors hover:border-accent/60 hover:bg-accent-soft/30 hover:text-accent-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 active:bg-overlay',
             )}
+            aria-label={`Add ${label.toLowerCase()} work photos`}
           >
-            <Camera className="h-5 w-5" />
-            <span className="text-[10px]">Add photo</span>
+            <Camera className="h-6 w-6" />
+            <span className="text-sm font-medium">Add photos</span>
           </button>
         )}
       </div>
+
+      {canUpload && remaining > 0 && (
+        <p className="mt-3 text-sm leading-5 text-muted">
+          JPG, PNG, HEIC, or other camera image formats. Up to {remaining} more.
+        </p>
+      )}
 
       <input
         ref={inputRef}
@@ -194,9 +204,10 @@ function PhaseGroup({
         capture="environment"
         multiple
         hidden
+        aria-label={`Upload ${label.toLowerCase()} work photos`}
         onChange={(e) => handleFiles(e.target.files)}
       />
-    </div>
+    </section>
   )
 }
 

@@ -23,6 +23,7 @@ export function readableTextOn(hex: string): string {
 // are already fine and don't need it).
 const SOLID_FILL_COLOR_OVERRIDES: Record<string, string> = {
   '#34d399': '#047a54', // "Resolved" status -- matches statusSolidStyles.resolved in Badge.tsx
+  '#10b981': '#047a54', // --accent, used as the dashboard sector filter's solid fill
 }
 
 /** Resolves a DB-stored colour to the shade that should actually be used for a solid-fill pill
@@ -218,8 +219,10 @@ export const LINE_LAYER_COLORS: Record<string, string> = {
   // special-cases tertiary_road's actual line paint with its own theme-aware
   // color/opacity (TERTIARY_ROAD_STYLE) because, unlike every other POI line
   // layer, one flat colour does not survive at this feature density in both
-  // themes -- see the note on POI colours above POLYGON_LAYER_COLORS. Keep
-  // this in sync with TERTIARY_ROAD_STYLE.light.color.
+  // themes -- see the note on POI colours above POLYGON_LAYER_COLORS. The
+  // real paint is a three-tier ramp by fclass (highway/main/lane); this single
+  // swatch stands for the whole layer, so keep it in sync with the mid tier,
+  // TERTIARY_ROAD_STYLE.light.colors.main.
   tertiary_road: '#4285f4',
 }
 

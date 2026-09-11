@@ -16,7 +16,11 @@ const { auth } = NextAuth(authConfig)
 export default auth((request) => {
   const host = request.headers.get('host')
 
-  if (host && host !== CANONICAL_HOST) {
+  // Only enforce the canonical-domain redirect in production -- in dev this
+  // otherwise redirects every localhost:3000 request straight to the hosted
+  // site (host header is "localhost:3000", never CANONICAL_HOST), making it
+  // impossible to test local changes in a browser at all.
+  if (process.env.NODE_ENV === 'production' && host && host !== CANONICAL_HOST) {
     const url = new URL(
       request.nextUrl.pathname + request.nextUrl.search,
       `https://${CANONICAL_HOST}`,

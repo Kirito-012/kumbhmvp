@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'TheCraftSync',
-  description: 'A modern, premium helpdesk & ticketing system.',
+  title: 'Kumbh Drishti',
+  description: 'Field ticketing and GIS for Kumbh Mela 2027 — Haridwar–Rishikesh.',
 }
 
 export default function RootLayout({

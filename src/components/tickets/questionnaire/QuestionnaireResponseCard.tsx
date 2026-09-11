@@ -6,6 +6,30 @@ import { cn, timeAgo } from '@/lib/utils'
 import { GENERAL_CAMPING, type Question } from '@/lib/questionnaire/general-camping'
 import type { QuestionnaireView, QuestionnaireAnswerView } from '@/lib/ticket-view'
 
+/** Whether an answer actually carries a value, as opposed to a placeholder the form submits for
+ *  a question the surveyor never touched. Mirrors `hasAnswerData` in lib/questionnaire/summarize.ts
+ *  (kept in sync manually — one runs here for display, one server-side at submission time). Counts
+ *  are recomputed from the answers themselves rather than trusting the stored answeredCount/
+ *  skippedCount, since those were wrong for questionnaires submitted before this fix. */
+function hasAnswerData(question: Question, answer: QuestionnaireAnswerView | undefined) {
+  if (!answer) return false
+  switch (question.kind) {
+    case 'yes_no':
+    case 'yes_no_na':
+      return answer.choice != null
+    case 'yes_no_measure':
+      return answer.choice != null || answer.required != null || answer.actual != null
+    case 'required_actual':
+      return answer.required != null || answer.actual != null
+    case 'dimensions':
+      return answer.length != null || answer.width != null
+    case 'measurement':
+      return answer.value != null
+    case 'text':
+      return !!answer.text?.trim()
+  }
+}
+
 function formatAnswer(question: Question, answer: QuestionnaireAnswerView | undefined) {
   if (!answer || answer.skipped) return { text: 'Skipped', flagged: false }
 
@@ -56,9 +80,12 @@ export function QuestionnaireResponseCard({
   const template = GENERAL_CAMPING // only template today; templateKey is stored for future ones
   const answerById = new Map(questionnaire.answers.map((a) => [a.questionId, a]))
 
-  const flaggedCount = template.sections
-    .flatMap((s) => s.questions)
-    .filter((q) => formatAnswer(q, answerById.get(q.id)).flagged).length
+  const allQuestions = template.sections.flatMap((s) => s.questions)
+  const flaggedCount = allQuestions.filter(
+    (q) => formatAnswer(q, answerById.get(q.id)).flagged,
+  ).length
+  const answeredCount = allQuestions.filter((q) => hasAnswerData(q, answerById.get(q.id))).length
+  const skippedCount = allQuestions.length - answeredCount
 
   return (
     <div className="rounded-lg border border-accent/30 bg-accent-soft/30 p-3.5">
@@ -76,10 +103,10 @@ export function QuestionnaireResponseCard({
 
           <div className="mt-2.5 flex flex-wrap gap-1.5 text-[11px]">
             <span className="rounded-full bg-background px-2 py-0.5 text-muted-strong">
-              {questionnaire.answeredCount} answered
+              {answeredCount} answered
             </span>
             <span className="rounded-full bg-background px-2 py-0.5 text-muted-strong">
-              {questionnaire.skippedCount} skipped
+              {skippedCount} skipped
             </span>
             {flaggedCount > 0 && (
               <span className="flex items-center gap-1 rounded-full bg-danger/10 px-2 py-0.5 text-danger">

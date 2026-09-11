@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { GENERAL_CAMPING, type Question } from '@/lib/questionnaire/general-camping'
 import type { QuestionnaireAnswer } from '@/lib/schemas/questionnaire'
+import type { QuestionnaireView } from '@/lib/ticket-view'
 import { AnswerInput } from '@/components/tickets/questionnaire/AnswerInput'
 import {
   submitQuestionnaireAction,
@@ -95,12 +96,49 @@ function clearDraft(ticketNumber: number) {
   }
 }
 
+/** Seeds the form with the ticket's most recent submitted response, so resubmitting doesn't mean
+ *  re-answering everything from scratch. Field shapes line up 1:1 with QuestionnaireAnswer — the
+ *  view type is just the persisted-data twin (`T | null` vs. `T | null | undefined`). */
+function answersFromPrevious(view: QuestionnaireView): Record<string, QuestionnaireAnswer> {
+  const out: Record<string, QuestionnaireAnswer> = {}
+  for (const a of view.answers) {
+    out[a.questionId] = {
+      questionId: a.questionId,
+      skipped: a.skipped,
+      choice: a.choice,
+      required: a.required,
+      actual: a.actual,
+      length: a.length,
+      width: a.width,
+      value: a.value,
+      text: a.text,
+    }
+  }
+  return out
+}
+
+/** remarksHtml is sanitized markup (see sanitizeHtml in questionnaire.actions), but the remarks
+ *  field here is a plain textarea — strip tags back down to text for prefill. */
+function remarksFromPrevious(view: QuestionnaireView): string {
+  if (!view.remarksHtml) return ''
+  return view.remarksHtml
+    .replace(/<\/p>\s*<p>/gi, '\n\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .trim()
+}
+
 export function QuestionnaireForm({
   open,
   onClose,
   ticketNumber,
   resolvedStatusId,
   canUpdateStatus,
+  previousQuestionnaire,
 }: {
   open: boolean
   onClose: () => void
@@ -108,6 +146,8 @@ export function QuestionnaireForm({
   /** First status row with isResolved:true, if any — offered as the one-tap post-submit action. */
   resolvedStatusId: string | null
   canUpdateStatus: boolean
+  /** The ticket's most recent submitted response, if any — used to prefill a new submission. */
+  previousQuestionnaire: QuestionnaireView | null
 }) {
   const [answers, setAnswers] = useState<Record<string, QuestionnaireAnswer>>({})
   const [remarks, setRemarks] = useState('')
@@ -143,20 +183,22 @@ export function QuestionnaireForm({
   // update synchronous with the triggering render and avoids an effect for what's actually a
   // derived-state transition, not a sync-with-an-external-system concern.
 
-  // 1) Sheet opened for the first time (or reopened after a full close) -> offer to resume a draft.
+  // 1) Sheet opened for the first time (or reopened after a full close) -> offer to resume a draft;
+  //    otherwise seed the form from the ticket's last submitted response, if any.
   const [prevOpen, setPrevOpen] = useState(open)
   if (open !== prevOpen) {
     setPrevOpen(open)
     if (open) {
       const draft = loadDraft(ticketNumber)
-      if (draft && Object.keys(draft.answers).length > 0) {
-        const resume = window.confirm('Resume your saved draft for this questionnaire?')
-        if (resume) {
-          setAnswers(draft.answers)
-          setRemarks(draft.remarks)
-        } else {
-          clearDraft(ticketNumber)
-        }
+      const resumed = draft && Object.keys(draft.answers).length > 0
+      const resume = resumed && window.confirm('Resume your saved draft for this questionnaire?')
+      if (resume) {
+        setAnswers(draft.answers)
+        setRemarks(draft.remarks)
+      } else {
+        if (resumed) clearDraft(ticketNumber)
+        setAnswers(previousQuestionnaire ? answersFromPrevious(previousQuestionnaire) : {})
+        setRemarks(previousQuestionnaire ? remarksFromPrevious(previousQuestionnaire) : '')
       }
     }
   }
@@ -184,11 +226,9 @@ export function QuestionnaireForm({
   function handleFullClose() {
     setStep(0)
     setResolvePrompt(false)
-    // Reset in-memory answers too, not just the localStorage draft — otherwise reopening to
-    // "Submit another response" after a successful submit would pre-fill the just-submitted
-    // answers instead of starting blank.
-    setAnswers({})
-    setRemarks('')
+    // Answers/remarks are intentionally left as-is here — the next open-transition above reseeds
+    // them (from a resumed draft, the previous submission, or blank), so resetting to blank now
+    // would just be undone a moment later and would fight the "prefill on resubmit" behavior.
     onClose()
   }
 
@@ -208,6 +248,15 @@ export function QuestionnaireForm({
 
   const isReview = step === sections.length
   const currentSection = sections[step]
+
+  const sectionProgress = useMemo(
+    () =>
+      sections.map((s) => {
+        const handled = s.questions.filter((q) => isHandled(q, answers[q.id])).length
+        return { handled, total: s.questions.length }
+      }),
+    [sections, answers],
+  )
 
   // Split into "not reached" (genuinely untouched — worth a nudge before submitting) vs.
   // "skipped" (a deliberate choice, not an oversight) so the review screen doesn't lump a
@@ -248,6 +297,75 @@ export function QuestionnaireForm({
       open={open}
       onClose={handleFullClose}
       title={resolvePrompt ? 'Questionnaire submitted' : TEMPLATE.title}
+      compact={resolvePrompt}
+      sidebar={
+        resolvePrompt ? undefined : (
+          <div className="flex flex-1 flex-col overflow-y-auto p-3">
+            <p className="px-2 pb-2 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted">
+              Sections
+            </p>
+            <div className="space-y-0.5">
+              {sections.map((s, idx) => {
+                const { handled, total } = sectionProgress[idx]
+                const complete = handled === total
+                const active = step === idx
+                return (
+                  <button
+                    key={s.title}
+                    type="button"
+                    onClick={() => setStep(idx)}
+                    className={cn(
+                      'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors',
+                      active
+                        ? 'bg-accent-soft text-accent-strong'
+                        : 'text-muted-strong hover:bg-overlay-strong hover:text-foreground',
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold',
+                        complete
+                          ? 'border-accent/40 bg-accent text-background'
+                          : active
+                            ? 'border-accent-strong text-accent-strong'
+                            : 'border-border-strong text-muted',
+                      )}
+                    >
+                      {complete ? <Check className="h-3 w-3" /> : idx + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium">{s.title}</span>
+                    <span className="shrink-0 text-[11px] text-muted">
+                      {handled}/{total}
+                    </span>
+                  </button>
+                )
+              })}
+              <button
+                type="button"
+                onClick={() => setStep(sections.length)}
+                className={cn(
+                  'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors',
+                  isReview
+                    ? 'bg-accent-soft text-accent-strong'
+                    : 'text-muted-strong hover:bg-overlay-strong hover:text-foreground',
+                )}
+              >
+                <span
+                  className={cn(
+                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold',
+                    isReview
+                      ? 'border-accent-strong text-accent-strong'
+                      : 'border-border-strong text-muted',
+                  )}
+                >
+                  <CheckCircle2 className="h-3 w-3" />
+                </span>
+                <span className="min-w-0 flex-1 truncate font-medium">Review &amp; submit</span>
+              </button>
+            </div>
+          </div>
+        )
+      }
       subheader={
         resolvePrompt ? undefined : (
           <div className="shrink-0 border-b border-border bg-background px-4 pb-3 pt-2 sm:px-5">
@@ -331,15 +449,15 @@ export function QuestionnaireForm({
       }
     >
       {resolvePrompt ? (
-        <div className="flex flex-col items-center gap-4 py-8 text-center">
-          <CheckCircle2 className="h-12 w-12 text-accent" />
-          <div>
-            <p className="text-sm font-medium text-foreground">Questionnaire submitted</p>
-            <p className="mt-1 text-sm text-muted">
-              Would you like to mark this ticket as Resolved?
-            </p>
+        <div className="flex flex-col items-center gap-5 px-2 py-2 text-center">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-accent-soft ring-8 ring-accent-soft/40">
+            <CheckCircle2 className="h-7 w-7 text-accent-strong" />
           </div>
-          <div className="flex w-full gap-2">
+          <p className="max-w-[26ch] text-sm leading-6 text-muted-strong">
+            Would you like to mark this ticket as{' '}
+            <span className="font-semibold text-foreground">Resolved</span>?
+          </p>
+          <div className="flex w-full flex-col gap-2 sm:flex-row">
             <Button
               type="button"
               variant="secondary"
@@ -375,17 +493,19 @@ export function QuestionnaireForm({
           )}
 
           {!isReview ? (
-            <div className="space-y-6">
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 xl:items-start xl:gap-5">
               {currentSection.questions.map((q) => {
                 const answer = answers[q.id] ?? emptyAnswer(q.id)
+                const wide = q.kind === 'text' || q.kind === 'yes_no_measure'
                 return (
                   <div
                     key={q.id}
                     className={cn(
-                      'rounded-xl border p-3.5',
+                      'rounded-xl border p-3.5 transition-colors lg:p-4',
+                      wide && 'xl:col-span-2',
                       answer.skipped
                         ? 'border-border bg-overlay/40'
-                        : 'border-border bg-surface/40',
+                        : 'border-border bg-surface/40 hover:border-border-strong',
                     )}
                   >
                     <div className="mb-2 flex items-start justify-between gap-2">
@@ -399,7 +519,7 @@ export function QuestionnaireForm({
                         type="button"
                         onClick={() => toggleSkip(q.id)}
                         className={cn(
-                          'flex min-h-11 shrink-0 items-center gap-1 rounded-full border px-3 text-[11px] font-medium active:bg-overlay-strong',
+                          'flex min-h-11 shrink-0 cursor-pointer items-center gap-1 rounded-full border px-3 text-[11px] font-medium transition-colors hover:bg-overlay-strong active:bg-overlay-strong lg:min-h-8',
                           answer.skipped
                             ? 'border-accent bg-accent-soft text-accent-strong'
                             : 'border-border text-muted',

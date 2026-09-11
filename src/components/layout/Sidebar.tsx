@@ -2,9 +2,10 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, Map, Ticket, Users, Sparkles, LogOut, X } from 'lucide-react'
+import { LayoutDashboard, Map, Ticket, Users, LogOut, X } from 'lucide-react'
 import { cn, initialsFor } from '@/lib/utils'
 import { Avatar } from '@/components/ui/Avatar'
+import { BrandMark } from '@/components/ui/BrandMark'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
 import { useSidebar } from '@/components/layout/SidebarContext'
 import { logout } from '@/server/actions/auth.actions'
@@ -82,12 +83,7 @@ export function Sidebar({
         )}
       >
         <div className="flex h-16 items-center gap-2.5 px-5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent shadow-[0_0_20px_-4px_rgba(16,185,129,0.7)]">
-            <Sparkles className="h-4.5 w-4.5 text-background" strokeWidth={2.25} />
-          </div>
-          <span className="flex-1 text-[15px] font-semibold tracking-tight text-foreground">
-            TheCraftSync
-          </span>
+          <BrandMark wordmark className="flex-1" />
           <button
             type="button"
             onClick={() => setOpen(false)}

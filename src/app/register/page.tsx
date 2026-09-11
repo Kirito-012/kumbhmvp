@@ -1,5 +1,6 @@
 import Link from 'next/link'
-import { Sparkles, ShieldCheck, Clock, Users } from 'lucide-react'
+import { ShieldCheck, Clock, Users } from 'lucide-react'
+import { BrandMark } from '@/components/ui/BrandMark'
 import { RegisterForm } from '@/components/auth/RegisterForm'
 
 export default function RegisterPage() {
@@ -9,13 +10,8 @@ export default function RegisterPage() {
       <div className="relative hidden w-[46%] shrink-0 flex-col justify-between overflow-hidden border-r border-border bg-background-elevated p-10 lg:flex">
         <div className="bg-glow pointer-events-none absolute inset-0" />
 
-        <div className="relative flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent shadow-[0_0_20px_-4px_rgba(16,185,129,0.7)]">
-            <Sparkles className="h-4.5 w-4.5 text-background" strokeWidth={2.25} />
-          </div>
-          <span className="text-[15px] font-semibold tracking-tight text-foreground">
-            TheCraftSync
-          </span>
+        <div className="relative">
+          <BrandMark wordmark />
         </div>
 
         <div className="relative max-w-md space-y-6">
@@ -40,19 +36,14 @@ export default function RegisterPage() {
           </div>
         </div>
 
-        <p className="relative text-xs text-muted">© 2026 TheCraftSync. All rights reserved.</p>
+        <p className="relative text-xs text-muted">© 2027 TheCraftSync. All rights reserved.</p>
       </div>
 
       {/* Right — form */}
       <div className="flex flex-1 flex-col items-center justify-center bg-background px-6 py-12">
         <div className="w-full max-w-sm animate-fade-in">
-          <div className="mb-8 flex items-center gap-2.5 lg:hidden">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent">
-              <Sparkles className="h-4.5 w-4.5 text-background" strokeWidth={2.25} />
-            </div>
-            <span className="text-[15px] font-semibold tracking-tight text-foreground">
-              TheCraftSync
-            </span>
+          <div className="mb-8 lg:hidden">
+            <BrandMark wordmark />
           </div>
 
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">

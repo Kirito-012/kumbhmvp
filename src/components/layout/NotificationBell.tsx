@@ -92,7 +92,29 @@ export function NotificationBell() {
     })
   }
 
-  const menuMinWidth = position ? Math.max(position.minWidth, MENU_MIN_WIDTH) : undefined
+  // The popover math in usePopoverPosition anchors `right` to the bell icon's own (tiny) width,
+  // then this component forces a much wider MENU_MIN_WIDTH on top of it -- fine on desktop, but on
+  // a narrow phone viewport the fixed 360px width pushes the panel's left edge off-screen. Clamp
+  // the width to the viewport and pull `right` in to match, so the panel never extends past the
+  // screen edges.
+  const POPOVER_MARGIN = 8
+  const menuWidth =
+    position && typeof window !== 'undefined'
+      ? Math.min(
+          Math.max(position.minWidth, MENU_MIN_WIDTH),
+          window.innerWidth - POPOVER_MARGIN * 2,
+        )
+      : undefined
+  const menuStyle =
+    position && menuWidth !== undefined
+      ? {
+          ...position.style,
+          right: Math.min(
+            Number(position.style.right ?? 0),
+            window.innerWidth - POPOVER_MARGIN - menuWidth,
+          ),
+        }
+      : position?.style
 
   return (
     <>
@@ -119,7 +141,7 @@ export function NotificationBell() {
         createPortal(
           <div
             ref={menuRef}
-            style={{ ...position.style, minWidth: menuMinWidth }}
+            style={{ ...menuStyle, width: menuWidth }}
             className="z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-background-elevated shadow-lg"
           >
             <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3.5 py-2.5">

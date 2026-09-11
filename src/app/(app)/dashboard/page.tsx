@@ -93,7 +93,7 @@ export default async function DashboardPage() {
         </div>
 
         {/* Category breakdown — renders its own fixed-dark panel chrome, no Card wrapper */}
-        <CategoryBreakdown data={data.categoryBreakdown} />
+        <CategoryBreakdown data={data.categoryBreakdown} sectors={data.categorySectors} />
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
           {/* Recent activity */}

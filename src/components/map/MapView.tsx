@@ -185,17 +185,186 @@ const SECTOR_BOUNDARY_WIDTH = { light: 1, dark: 1.5 } as const
 // (ROAD_TYPE_COLORS) so nothing is ambiguous about which is which.
 //
 // casingColor is the pale/white border drawn by poi-tertiary_road-casing
-// underneath the solid `color` core -- that light-edge/dark-center pairing
-// (not just a single thick stroke) is what actually reads as Google's bold
+// underneath the solid core -- that light-edge/dark-center pairing (not just
+// a single thick stroke) is what actually reads as Google's bold
 // "3D route ribbon" look rather than a flat thick line. Light mode's casing
 // is white (reads as a clean border against Positron/Bright's pale ground);
 // dark mode's is a deep navy rather than white, since a white casing against
 // Dark Matter's near-black ground would blow out and look like a glow, not
 // a border.
+//
+// `colors` is a three-tier ramp keyed the same way as the width tiers below.
+// Width alone turned out not to be enough separation at this density: with
+// one flat blue across all 21k+ segments, a whole-city view reads as a single
+// uniform mesh where the arterial structure is technically thicker but not
+// actually findable, because every lane is shouting just as loudly. Tiering
+// the colour as well as the width is what makes the arterial skeleton pop out
+// of the residential texture. Each theme moves in the direction that gains
+// contrast against *its* ground: on dark, highways go brighter and more luminous
+// and lanes drop to a dim muted blue; on light, highways go darker and more
+// saturated while lanes wash out pale. `main` keeps the exact previous flat
+// colour in both themes, so the mid tier looks unchanged and only the two
+// extremes move apart.
 const TERTIARY_ROAD_STYLE = {
-  light: { opacity: 0.9, color: '#4285f4', casingColor: '#ffffff' },
-  dark: { opacity: 0.95, color: '#6ea8fe', casingColor: '#1a2b4a' },
+  light: {
+    opacity: 0.9,
+    colors: { highway: '#1967d2', main: '#4285f4', lane: '#8fb4f0' },
+    casingColor: '#ffffff',
+  },
+  dark: {
+    opacity: 0.95,
+    colors: { highway: '#8fbfff', main: '#6ea8fe', lane: '#4a6da5' },
+    casingColor: '#1a2b4a',
+  },
 } as const
+
+// Per-tier colour as a MapLibre expression, built per theme. Mirrors the
+// fclass tiering of TERTIARY_ROAD_CORE_WIDTH below, so a given segment's
+// colour and thickness always agree about which tier it is in.
+function tertiaryRoadColorExpr(theme: 'light' | 'dark'): ExpressionSpecification {
+  const { highway, main, lane } = TERTIARY_ROAD_STYLE[theme].colors
+  return [
+    'match',
+    ['get', 'fclass'],
+    TERTIARY_ROAD_HIGHWAY_FCLASSES,
+    highway,
+    TERTIARY_ROAD_MAIN_FCLASSES,
+    main,
+    lane,
+  ] as unknown as ExpressionSpecification
+}
+
+// tertiary_road's `fclass` (standard OSM road classification, see
+// Pending.md) groups into the same three-tier hierarchy real road atlases
+// use -- highway, main road, local lane -- so width should follow it instead
+// of every one of the 21k+ segments drawing at one flat thickness. Tiers
+// mirror the tiles route's own arterial/everything-else split
+// (src/app/api/tiles/[layer]/[z]/[x]/[y]/route.ts) plus a highway/main split
+// within "arterial": trunk/primary read as highways, secondary/tertiary as
+// ordinary main roads, everything else (residential/service/track/path/...)
+// as a lane. `_link` variants (on-/off-ramps, connectors) follow their
+// parent class.
+const TERTIARY_ROAD_HIGHWAY_FCLASSES = ['trunk', 'primary', 'trunk_link', 'primary_link']
+const TERTIARY_ROAD_MAIN_FCLASSES = ['secondary', 'tertiary', 'secondary_link', 'tertiary_link']
+
+// Core stroke width per tier at each zoom stop -- main-road values are
+// unchanged from the old flat width (so the common case looks the same as
+// before), highway is ~1.4x thicker and lane ~0.55x thinner at every stop.
+const TERTIARY_ROAD_CORE_WIDTH: ExpressionSpecification = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  6,
+  [
+    'match',
+    ['get', 'fclass'],
+    TERTIARY_ROAD_HIGHWAY_FCLASSES,
+    3,
+    TERTIARY_ROAD_MAIN_FCLASSES,
+    2,
+    1.2,
+  ],
+  10,
+  [
+    'match',
+    ['get', 'fclass'],
+    TERTIARY_ROAD_HIGHWAY_FCLASSES,
+    5,
+    TERTIARY_ROAD_MAIN_FCLASSES,
+    3.5,
+    2,
+  ],
+  14,
+  [
+    'match',
+    ['get', 'fclass'],
+    TERTIARY_ROAD_HIGHWAY_FCLASSES,
+    7,
+    TERTIARY_ROAD_MAIN_FCLASSES,
+    5,
+    3,
+  ],
+  16,
+  [
+    'match',
+    ['get', 'fclass'],
+    TERTIARY_ROAD_HIGHWAY_FCLASSES,
+    10,
+    TERTIARY_ROAD_MAIN_FCLASSES,
+    7,
+    4,
+  ],
+  18,
+  [
+    'match',
+    ['get', 'fclass'],
+    TERTIARY_ROAD_HIGHWAY_FCLASSES,
+    14,
+    TERTIARY_ROAD_MAIN_FCLASSES,
+    10,
+    6,
+  ],
+] as unknown as ExpressionSpecification
+
+// Casing stays a fixed margin wider than the core at each zoom (2/3/4/5/6px,
+// same margins the old flat casing used) regardless of tier, so the pale
+// border reads as a consistent edge thickness whether it's wrapping a
+// highway or a lane -- not a halo that scales independently of the core.
+const TERTIARY_ROAD_CASING_WIDTH: ExpressionSpecification = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  6,
+  [
+    'match',
+    ['get', 'fclass'],
+    TERTIARY_ROAD_HIGHWAY_FCLASSES,
+    5,
+    TERTIARY_ROAD_MAIN_FCLASSES,
+    4,
+    3.2,
+  ],
+  10,
+  [
+    'match',
+    ['get', 'fclass'],
+    TERTIARY_ROAD_HIGHWAY_FCLASSES,
+    8,
+    TERTIARY_ROAD_MAIN_FCLASSES,
+    6.5,
+    5,
+  ],
+  14,
+  [
+    'match',
+    ['get', 'fclass'],
+    TERTIARY_ROAD_HIGHWAY_FCLASSES,
+    11,
+    TERTIARY_ROAD_MAIN_FCLASSES,
+    9,
+    7,
+  ],
+  16,
+  [
+    'match',
+    ['get', 'fclass'],
+    TERTIARY_ROAD_HIGHWAY_FCLASSES,
+    15,
+    TERTIARY_ROAD_MAIN_FCLASSES,
+    12,
+    9,
+  ],
+  18,
+  [
+    'match',
+    ['get', 'fclass'],
+    TERTIARY_ROAD_HIGHWAY_FCLASSES,
+    20,
+    TERTIARY_ROAD_MAIN_FCLASSES,
+    16,
+    12,
+  ],
+] as unknown as ExpressionSpecification
 
 // Dark-mode-only fill palette for sector-plan-fill, keyed the same as
 // CLASS_GROUP_COLORS (src/lib/classColors.ts) -- CLASS_GROUP_COLORS itself
@@ -1071,17 +1240,23 @@ export default function MapView({
   // the SAME style object as the basemap.
   useEffect(() => {
     let cancelled = false
-    let appliedTheme: 'light' | 'dark' | null = null
+    // initMap loads the map's initial style from this same theme already
+    // (see loadBasemapStyle(readMapTheme()) at map creation) -- seeded here,
+    // at effect setup, from whatever theme is live *right now* (before any
+    // toggle). Seeding it lazily inside the first syncBasemap() call instead
+    // (as a previous version of this code did) is a bug: the MutationObserver
+    // below only ever fires in response to a real data-theme mutation, so
+    // that "first call" IS the user's first toggle, already carrying the NEW
+    // theme -- seeding appliedTheme to it there makes the theme===appliedTheme
+    // check below pass immediately and silently skip the map update, so the
+    // very first toggle after every page load appeared to do nothing until a
+    // full refresh (which re-mounts the map fresh with the correct theme).
+    let appliedTheme: 'light' | 'dark' = readMapTheme()
 
     async function syncBasemap() {
       const map = mapRef.current
       const theme = readMapTheme()
       if (!map || !map.isStyleLoaded()) return
-      // initMap loads the map's initial style from this same theme already
-      // (see loadBasemapStyle(readMapTheme()) at map creation) -- seed the
-      // tracker from it the first time this runs so a stray mutation before
-      // the user's first real toggle doesn't re-fetch/reapply it needlessly.
-      if (appliedTheme === null) appliedTheme = theme
       if (theme === appliedTheme) return
       // Claim this theme before the await so a second MutationObserver
       // firing (e.g. React StrictMode's double-invoke, or two rapid toggles)
@@ -1105,10 +1280,18 @@ export default function MapView({
       const oldBasemapSourceIds = Object.keys(map.getStyle().sources).filter(
         (id) => !APP_SOURCE_IDS.has(id),
       )
+      // Matched by layer *type* ('background'), not by a hardcoded id string --
+      // CARTO's styles id theirs "background" but MapTiler's ids its "Background"
+      // (capital B), so an id === 'background' check silently failed to match
+      // MapTiler's on a light->dark toggle (it also has no 'source' field, so
+      // the second half of the old OR clause missed it too). The orphaned
+      // layer was never removed, and the *next* dark->light toggle then hit
+      // "Layer already exists on this map" trying to re-add "Background".
       const oldBasemapLayerIds = map
         .getStyle()
         .layers.filter(
-          (l) => l.id === 'background' || ('source' in l && oldBasemapSourceIds.includes(l.source)),
+          (l) =>
+            l.type === 'background' || ('source' in l && oldBasemapSourceIds.includes(l.source)),
         )
         .map((l) => l.id)
       const firstNonBasemapLayerId = map
@@ -1150,7 +1333,7 @@ export default function MapView({
       // layer needs the same per-theme repaint (white border in light mode,
       // navy in dark -- see TERTIARY_ROAD_STYLE's comment).
       if (map.getLayer('poi-tertiary_road')) {
-        map.setPaintProperty('poi-tertiary_road', 'line-color', TERTIARY_ROAD_STYLE[theme].color)
+        map.setPaintProperty('poi-tertiary_road', 'line-color', tertiaryRoadColorExpr(theme))
       }
       if (map.getLayer('poi-tertiary_road-casing')) {
         map.setPaintProperty(
@@ -1858,22 +2041,10 @@ export default function MapView({
                 'line-opacity': TERTIARY_ROAD_STYLE[readMapTheme()].opacity,
                 // Wider than the core line below by a fixed margin at every
                 // zoom so the casing reads as a consistent border thickness,
-                // not a halo that grows/shrinks independently of the core.
-                'line-width': [
-                  'interpolate',
-                  ['linear'],
-                  ['zoom'],
-                  6,
-                  4,
-                  10,
-                  6.5,
-                  14,
-                  9,
-                  16,
-                  12,
-                  18,
-                  16,
-                ],
+                // not a halo that grows/shrinks independently of the core --
+                // tiered by fclass (see TERTIARY_ROAD_CASING_WIDTH) so a
+                // highway's casing is wider than a lane's, matching the core.
+                'line-width': TERTIARY_ROAD_CASING_WIDTH,
               },
             },
             'road-line',
@@ -1899,7 +2070,7 @@ export default function MapView({
               // (TERTIARY_ROAD_STYLE) instead of def.color -- see that
               // constant's comment for why a flat colour doesn't survive at
               // this feature density in both themes.
-              'line-color': isTertiary ? TERTIARY_ROAD_STYLE[readMapTheme()].color : def.color,
+              'line-color': isTertiary ? tertiaryRoadColorExpr(readMapTheme()) : def.color,
               // The core line is drawn fully opaque -- TERTIARY_ROAD_STYLE's
               // opacity now applies only to the casing below it (a
               // semi-transparent core over a semi-transparent casing reads as
@@ -1919,7 +2090,10 @@ export default function MapView({
                     // -- narrower than the casing by a fixed margin at every
                     // zoom so the pale border reads as a consistent edge, the
                     // same layered look as Google's own route polyline.
-                    ['interpolate', ['linear'], ['zoom'], 6, 2, 10, 3.5, 14, 5, 16, 7, 18, 10]
+                    // Tiered by fclass (see TERTIARY_ROAD_CORE_WIDTH) so
+                    // highways draw thicker than main roads, and lanes
+                    // thinner still, instead of one flat width for all three.
+                    TERTIARY_ROAD_CORE_WIDTH
                   : 2,
             },
           },

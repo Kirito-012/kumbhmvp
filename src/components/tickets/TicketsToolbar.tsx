@@ -160,7 +160,7 @@ export function TicketsToolbar({
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by subject or description…"
+            placeholder="Search by ID, subject or description…"
             className="h-9 w-full rounded-lg border border-border bg-overlay pl-9 pr-3 text-sm text-foreground placeholder:text-muted/70 outline-none transition-colors focus:border-accent/40 focus:bg-overlay-strong"
           />
         </form>

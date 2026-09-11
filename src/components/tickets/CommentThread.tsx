@@ -115,21 +115,26 @@ export function CommentThread({
             placeholder={isInternal ? 'Write an internal note…' : 'Write a reply…'}
           />
 
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             {canNote ? (
-              <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-strong">
+              <label className="flex min-h-11 min-w-0 cursor-pointer items-start gap-2.5 rounded-lg px-1 py-2 text-sm leading-5 text-muted-strong sm:items-center">
                 <input
                   type="checkbox"
                   checked={isInternal}
                   onChange={(e) => setIsInternal(e.target.checked)}
-                  className="h-3.5 w-3.5 cursor-pointer rounded border-border-strong bg-transparent accent-amber-500"
+                  className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded border-border-strong bg-transparent accent-amber-500 sm:mt-0"
                 />
-                Internal note (not visible to the requester)
+                <span className="min-w-0">Internal note (not visible to the requester)</span>
               </label>
             ) : (
               <span />
             )}
-            <Button type="submit" size="sm" disabled={pending || !body.trim()}>
+            <Button
+              type="submit"
+              size="sm"
+              className="min-h-11 w-full shrink-0 sm:w-auto"
+              disabled={pending || !body.trim()}
+            >
               {pending ? 'Posting…' : isInternal ? 'Add note' : 'Reply'}
             </Button>
           </div>

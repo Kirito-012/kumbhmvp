@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -66,6 +67,26 @@ def clean(v):
     if isinstance(v, str) and v.strip() == "":
         return None
     return v
+
+
+def geom_content_hash(geom_4326):
+    """MD5 of a geometry's vertex list at mm precision, post-reprojection to EPSG:4326
+    -- i.e. computed on exactly the coordinates load_replace_table/load_new_table already
+    have in hand after `reproject()`. Used to key exclusion sets (see
+    ROAD_SECONDARY_DUPLICATE_HASHES) on geometry *content* rather than source row index,
+    so a re-exported/reordered gdb doesn't silently invalidate a human-reviewed drop list."""
+    coords = []
+
+    def collect(g):
+        if hasattr(g, "geoms"):
+            for part in g.geoms:
+                collect(part)
+        else:
+            coords.extend(g.coords)
+
+    collect(geom_4326)
+    rounded = tuple((round(x, 7), round(y, 7)) for x, y in coords)
+    return hashlib.md5(repr(rounded).encode()).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -122,11 +143,14 @@ def _sector_boundary_map(p, source_layer):
 def _road_map(p, source_layer):
     # ROAD_IN_M is the real curated road layer for the 2027 plan -- it alone
     # carries Type ('Existing Road'/'Proposed Road', matching ROAD_TYPE_COLORS
-    # in classColors.ts exactly) plus Sector_Name/Kumbh_Land. Road and
-    # Secondary_Road (109/55 rows) carry only a bare Name + length and were
+    # in classColors.ts exactly) plus Sector_Name/Kumbh_Land. Road (55 rows) and
+    # Secondary_Road (171 rows) carry only a bare Name + length and were
     # wrongly used as the primary source in the first load pass -- kept here
     # only as a supplementary named-highway layer, tagged road_class so they
-    # stay distinguishable from ROAD_IN_M's project road network.
+    # stay distinguishable from ROAD_IN_M's project road network. Road_Secondary
+    # (109 rows, 97 dropped as duplicates -- see ROAD_SECONDARY_DUPLICATE_HASHES)
+    # is a fourth, unrelated source layer despite the near-identical name; it
+    # falls into the road_class="Secondary" branch below same as Secondary_Road.
     if source_layer == "ROAD_IN_M":
         return {
             "road_name": clean(p.get("Road_Name")),
@@ -316,6 +340,123 @@ def _trench_line_map(p, source_layer):
     }
 
 
+# `Road_Secondary` (109 features, see Pending.md / PLAN-deferred-roads.md Phase 4) is
+# 85% re-digitisation of geometry already loaded from other layers -- 93 of its 109
+# rows are >=90% length-covered (15m buffer, EPSG:32644 planar) by the union of nearby
+# kumbh.traffic_route/kumbh.road geometry, plus 4 more (idx 0/2/25/42, a set of loosely-
+# digitised "Entry"/"Exit"/"Peak day entry" routes at 72-89% coverage at 15m but >=92%
+# at 30m) confirmed as duplicates by a human reviewer rather than auto-classified. The
+# 12 survivors are 11 genuinely new unnamed segments plus one named road ("Haridwar Main
+# Road", idx 88 -- 100% covered by a traffic_route but only 55% by kumbh.road, i.e. a
+# route running along an existing road, not a re-digitisation of the road itself).
+#
+# Keyed on geom_content_hash() (post-reprojection, mm precision) rather than source row
+# index, so a re-exported/reordered gdb doesn't silently invalidate this human-reviewed
+# list. If the gdb's Road_Secondary geometry ever changes, every hash here stops
+# matching and load_replace_table raises (see its "skip_hashes declared ... but none
+# matched" check) instead of silently re-admitting the 97 duplicates -- regenerate this
+# set in that case rather than removing the check.
+ROAD_SECONDARY_DUPLICATE_HASHES = frozenset({
+    "bd5489cdf75ece83b58e8fb39567264d",
+    "e0cae774bbfbb97d8f66ea82a1ea332c",
+    "0e49d24e200ba62c9383692254251dd5",
+    "8ec2d25a95d2928c3458669f5919c96a",
+    "9dcf6c9f1c6b4d8f669be3d14c149ca3",
+    "fccd7ea68cf75bf381f7bc9d71bf7fd0",
+    "0bb679a4b9a85454b716ac679388ecf1",
+    "51598d9232d83a3ece0ac46d712a028b",
+    "c566f5a03998155cb9d44c6433e1b476",
+    "f2744fb98449419bc2e91a222436d914",
+    "4c8ab04d6f1ad077d22b1b91c1824d0f",
+    "d72924014a447c80e824dfb313507481",
+    "4dcf53e26927c758c72407eeb8c663fa",
+    "212f1ede4a8d04ee46c9e068ee478549",
+    "d5619b865dc4161e4aa3b35dbe7a7d19",
+    "20b31e80ab08d12ce60dbdde113adb0f",
+    "d00331796eb691eb4c6f6152806b0eb0",
+    "c76b994da732bdacce7e3503b504594c",
+    "6bbb292f2f013cd21ef8c8ebcf979b7e",
+    "2294a01b6fd081d12209b31088148823",
+    "8482c6dc119a81ad017bce5e4e76e08d",
+    "f68cefd2571502ce7662a449a7070bde",
+    "a0229594dff7d2675dc9c5e6b1518c51",
+    "2eb1e02313e4223100b93258ec79a5b0",
+    "c866b5e72e424939f6554db79ece5623",
+    "086134f2b8df913b30cf55c969fec422",
+    "9491122523e1ab605c13e36c4dffef9a",
+    "a55a948caaf5460eff0009bcc3222850",
+    "b1adac0d4b18dfae5a390b480064b659",
+    "c74fe286bbb3b614d965f3b785ad6bdc",
+    "4a3bfab2c4859b2825317f2618047e39",
+    "4a7c01fe049bbaa407340447c628040c",
+    "8863fe1db65cd4f12e335c59890ecc5c",
+    "6f9cd94c75e84136c87747f24a70f4af",
+    "c6e5e7dc67a57c0df56ac5da2b83043e",
+    "609d06be14817264d624d19203b5a4c3",
+    "57c51181bd92642ea7721f4eaeb8c1b8",
+    "4f977fdd581ac9611e6e26360eae5d86",
+    "cb0580d52eb3b6b2c2acbc2f0e26ef03",
+    "1b7b036dceb2c402c67747f28576ae94",
+    "a079ca068c4845e980eb54727ea904e2",
+    "d1bca619f4ef85ee92a5cb7b29f1f532",
+    "6498bd5dd5e878333079f0dd08b2af6b",
+    "09df397d3f07c1ec5ba2d5a68a147a60",
+    "27aa1cad6cfb75f3bfb42421389ac32e",
+    "d16887bd71804055e63c3b95dc1b9088",
+    "dfd1110050ec3cea44404d5225cdc0d7",
+    "b94d390a17021c5e8c5cbc837e01938c",
+    "0fa962f3022ce3891da1306e03cb37b1",
+    "6510f3a07718881bf41261fc3fa3f9b5",
+    "77d7ce466fdd16f87e4a6328fe8f1e81",
+    "5dfe180ba088058b826a07eb61f794a4",
+    "ff742cdcd3cac68a5407f34d0103b09c",
+    "686c449a8332d40eb6564a4fea8df179",
+    "5ab796091c8c59dd3f388c034e061aa4",
+    "5d6dd9a95f1effe0c4f36ca49f187c10",
+    "488cce72bc403eb26138eb9345676a7e",
+    "24ae67dbf287cb75540500a0d413c98a",
+    "3c0b3b171109459fa2ef6490246f52c7",
+    "b8ca83e982d3d3eefadd3ed05319f7c5",
+    "7a5d3f424e4e82b866cc9b96cae059a6",
+    "9e7abf5e10cc53362625d6b5fa047311",
+    "19a719ba35b8cd2e8d460e5e8784d74d",
+    "fb8bf6b4c0819de9c816fcf42c90662f",
+    "bc33d1563281e70f3510e16c644a1f70",
+    "cc21429264e8f99648c19f8ed47caf75",
+    "067d1600bd7b0b24f655e2bcd096eaf0",
+    "33a83f6c3ea9064444d5ceaa78044487",
+    "ccc4e28be991566372352ea762fe55c2",
+    "316849ac8eb07206aa51f2e64a4bed35",
+    "ae97692c75acbca45261412991e4239e",
+    "e55a7e64fbaf6b30075aedb70de2898b",
+    "9a629e9120a827195985f24d43fecef5",
+    "67a50d7f1c7c5caa94204445fa0e30db",
+    "882b0b032b50524ddc84993ebedbef14",
+    "59a897c9311608803556d2ec6d03c2a5",
+    "f3ea3bad390e9aa14500bf7c8aa17a22",
+    "ed86d7d8885b9f30de4cebc3f98aa74c",
+    "97ded2176e6a73e21e4c91d41497e524",
+    "80f7083c0674159cbfc10e1471f60f0b",
+    "4fc7c55db66b2a52368b89abc5a3807a",
+    "aa85278eb0631e4ad7720ae01d46ff09",
+    "da0422f989ed94cc6625683563cafb6e",
+    "1434be90bc7385017e7bea965528e90b",
+    "89270b1d2c00155b020c0b93eb6b61d0",
+    "572d0417c3be58f5e57fe1498ef0e4fb",
+    "1977637e3537c0b587fe573978a326b5",
+    "6ca002cc16cca27b376d67cd8e2fb605",
+    "8e7eaaea97303bc79db9225ade16eb95",
+    "5e6c687f1f6c777bb77a0d5a9e374022",
+    "aca0d636ce35bf7d88531814ff182660",
+    "79daf1cd00e0bc797c725f3348541c70",
+    "3cd4d69e8c968e77e2e6c3666e59adcb",
+    "894a8c36f1c381ca41ffc1f625854125",
+    "370f516ab4a4d09d87a9f57f09efd5af",
+    "4080dba78e4e15204e6a8c83757b4bb9",
+    "72e43060d4259f49431e0c6449f35c8e",
+})
+
+
 REPLACE_SPECS = [
     {
         "table": "sector_plan",
@@ -331,10 +472,13 @@ REPLACE_SPECS = [
     },
     {
         "table": "road",
-        "layers": ["ROAD_IN_M", "Road", "Secondary_Road"],
+        "layers": ["ROAD_IN_M", "Road", "Secondary_Road", "Road_Secondary"],
         "map": _road_map,
         "geom_type": "MULTILINESTRING",
         "extra_columns": {"road_class": "text"},
+        # See ROAD_SECONDARY_DUPLICATE_HASHES above -- 97 of Road_Secondary's 109 rows
+        # are re-digitisations of geometry already loaded from other layers.
+        "skip_hashes": {"Road_Secondary": ROAD_SECONDARY_DUPLICATE_HASHES},
     },
     {
         "table": "bridge",
@@ -1031,16 +1175,34 @@ def load_replace_table(conn, spec, dry_run):
         print(f"  SKIPPED (see SKIPPED_REPLACE_TABLES note in script)")
         return 0
 
+    skip_hashes = spec.get("skip_hashes", {})
     features = []
+    total_skipped = 0
     for layer in spec["layers"]:
+        layer_skip = skip_hashes.get(layer)
+        layer_skipped = 0
         with fiona.open(GDB_PATH, layer=layer) as src:
             for f in src:
                 if f["geometry"] is None:
                     continue
                 geom = reproject(shape(f["geometry"]))
+                if layer_skip and geom_content_hash(geom) in layer_skip:
+                    layer_skipped += 1
+                    continue
                 row = spec["map"](dict(f["properties"]), layer)
                 features.append((row, geom))
-    print(f"  read {len(features)} features from {spec['layers']}")
+        # Loud failure over silent staleness: if a layer declares skip_hashes but none of
+        # its features matched, either the gdb's geometry changed since the hashes were
+        # generated (drop list stale) or the layer is empty -- either way don't ship
+        # duplicates back into kumbh.road under a mistaken belief the drop list still applies.
+        if layer_skip is not None and layer_skipped == 0:
+            raise RuntimeError(
+                f"skip_hashes declared for layer {layer!r} but none matched -- "
+                f"the drop list is stale (geometry changed) or the layer is empty; "
+                f"regenerate ROAD_SECONDARY_DUPLICATE_HASHES before proceeding"
+            )
+        total_skipped += layer_skipped
+    print(f"  read {len(features)} features from {spec['layers']}" + (f" ({total_skipped} skipped as duplicates)" if total_skipped else ""))
 
     if dry_run:
         return len(features)

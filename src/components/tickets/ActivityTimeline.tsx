@@ -17,6 +17,9 @@ const ACTION_LABELS: Record<string, string> = {
   note_added: 'added an internal note',
   deleted: 'deleted this ticket',
   restored: 'restored this ticket',
+  questionnaire_submitted: 'submitted the questionnaire',
+  attachment_added: 'added a photo',
+  attachment_removed: 'removed a photo',
 }
 
 function describe(event: EventView) {
@@ -27,7 +30,7 @@ function describe(event: EventView) {
     }
     return `changed ${label}`
   }
-  return ACTION_LABELS[event.action] ?? event.action
+  return ACTION_LABELS[event.action] ?? event.action.replace(/_/g, ' ')
 }
 
 export function ActivityTimeline({ events }: { events: EventView[] }) {
@@ -36,7 +39,10 @@ export function ActivityTimeline({ events }: { events: EventView[] }) {
   return (
     <ol className="space-y-3">
       {events.map((e) => (
-        <li key={e.id} className="flex items-start gap-2.5 text-xs">
+        <li
+          key={e.id}
+          className="flex items-start gap-2.5 rounded-lg px-1.5 py-1 text-xs transition-colors -mx-1.5 hover:bg-overlay/60"
+        >
           <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-overlay text-muted">
             <Activity className="h-2.5 w-2.5" />
           </div>

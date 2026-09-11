@@ -15,7 +15,7 @@ export const buttonVariants = cva(
         primary:
           'bg-accent text-background hover:bg-accent-strong shadow-[0_0_0_1px_rgba(16,185,129,0.3),0_8px_20px_-6px_rgba(16,185,129,0.45)]',
         secondary:
-          'bg-overlay-strong text-foreground border border-border-strong hover:bg-overlay-strong',
+          'bg-overlay-strong text-foreground border border-border-strong hover:bg-border hover:border-border-strong',
         ghost: 'text-muted-strong hover:bg-overlay-strong hover:text-foreground',
         danger: 'bg-danger/10 text-danger border border-danger/20 hover:bg-danger/20',
       },
