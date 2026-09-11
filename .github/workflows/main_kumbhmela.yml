@@ -71,15 +71,30 @@ jobs:
           # not a real missing file — retrying the tar invocation clears it.
           #
           # (A prior version of this step worked around the race by excluding
-          # node_modules/.pnpm/node_modules/* as a supposedly-redundant pnpm
-          # convenience layer. It isn't redundant: Next's tracer ships some
+          # ALL of node_modules/.pnpm/node_modules/* as a supposedly-redundant
+          # pnpm convenience layer. It isn't redundant: Next's tracer ships some
           # packages — e.g. @swc/helpers — as a stub node_modules/<pkg> containing
           # only package.json, relying on Node's directory-walk resolution to find
-          # the real content at that intermediate path. Excluding it produced a
-          # MODULE_NOT_FOUND crash in production. Do not reintroduce that exclude.)
+          # the real content at that intermediate path. Excluding all of it produced
+          # a MODULE_NOT_FOUND crash in production. Do not reintroduce that broad
+          # exclude.)
+          #
+          # The retry loop above did NOT clear the race for one specific entry:
+          # node_modules/.pnpm/node_modules/semver consistently vanishes out from
+          # under tar's dereference on this runner, every attempt, every run — not
+          # a one-off. Unlike @swc/helpers, semver has no stub at the top-level
+          # node_modules/semver for the tracer to fall back on, but it's still safe
+          # to drop here: every traced reference to it (.next/**/*.nft.json) traces
+          # back to devDependency-only tooling (eslint/babel/mongodb-memory-server
+          # chains via `pnpm why semver`) that never runs inside the built server —
+          # `grep -r 'require("semver"' .next/standalone` finds nothing. Excluding
+          # just this one path, unlike the broad exclude above, leaves every other
+          # .pnpm/node_modules/* package (including @swc/helpers) untouched.
           for attempt in 1 2 3; do
             rm -f .next/standalone/app-node-modules.tar.gz
-            if tar -czhf .next/standalone/app-node-modules.tar.gz -C .next/standalone node_modules; then
+            if tar -czhf .next/standalone/app-node-modules.tar.gz -C .next/standalone \
+                 --exclude='node_modules/.pnpm/node_modules/semver' \
+                 node_modules; then
               break
             fi
             echo "tar attempt $attempt failed" >&2
