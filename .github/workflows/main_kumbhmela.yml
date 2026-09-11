@@ -64,7 +64,18 @@ jobs:
           # "Cannot find module 'next/dist/compiled/cookie'".
           #
           # -h dereferences them, writing the real files into the archive instead.
-          tar -czhf .next/standalone/app-node-modules.tar.gz -C .next/standalone node_modules
+          #
+          # --exclude drops pnpm's internal "public hoist" convenience symlinks
+          # (node_modules/.pnpm/node_modules/<pkg>, no @version segment) -- an
+          # implementation detail of pnpm's own store, never an ancestor node_modules
+          # Node's resolver would walk into at runtime. The real package contents they
+          # point to still ship, at node_modules/.pnpm/<pkg>@<version>/node_modules/<pkg>,
+          # which this exclude pattern does not touch. Excluding them sidesteps a race
+          # where tar -h intermittently finds one of these already gone by the time it
+          # dereferences it ("File removed before we read it"), failing the whole step.
+          tar -czhf .next/standalone/app-node-modules.tar.gz -C .next/standalone \
+            --exclude='node_modules/.pnpm/node_modules' \
+            node_modules
 
           # Prove the archive is self-contained before shipping it: no symlinks left,
           # and the module whose absence broke the last deploy is really in there.
