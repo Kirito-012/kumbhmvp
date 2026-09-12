@@ -62,9 +62,20 @@ list_pkg_dirs | while read -r top; do
     fi
     real="$cand/node_modules/$rel"
   done
-  if [ -z "$real" ]; then
-    echo "FATAL: stub $rel@$ver has no .pnpm copy under $NM/.pnpm/$enc@$ver*" >&2
-    exit 1
+  # No copy at the pinned version, or the pinned copy is itself content-free.
+  #
+  # This is NOT fixable here, and must not be "fixed" by taking a populated copy at
+  # a DIFFERENT version: bson, mongodb-connection-string-url, real-require and
+  # webidl-conversions each ship content-free at the pinned version while a second,
+  # populated version sits in the store (bson 6.10.4 pinned vs 7.3.1 populated).
+  # Substituting would swap a major version under the Mongo driver.
+  #
+  # These are packages Next's tracer pruned to package.json because the server never
+  # loads them -- verified by booting server.js. Leaving a bare stub is exactly what
+  # the tracer intended, so skip rather than fail.
+  if [ -z "$real" ] || [ "$(find "$real" -type f | wc -l)" -eq 1 ]; then
+    echo "skip: $rel@$ver (tracer shipped no content at the pinned version)"
+    continue
   fi
 
   echo "flatten: $rel@$ver"
@@ -72,10 +83,27 @@ list_pkg_dirs | while read -r top; do
   cp -RL "$real" "$top"   # -L: copy real files, never a link into the store
 done
 
-# The loop runs in a subshell, so re-check rather than trusting an exit flag.
-remaining=$(list_pkg_dirs | while read -r t; do is_stub "$t" && echo "$t"; done)
+# The loop above runs in a subshell, so re-check rather than trusting an exit flag.
+#
+# The `|| true` is load-bearing under `set -e`: is_stub is the last command in the
+# while body, so when the final directory examined is NOT a stub it returns 1, the
+# while returns 1, and the command substitution returns 1 -- killing the script with
+# no error message. Whether that happens depends purely on traversal order, which is
+# why this passed locally and died in CI right after "flatten: atomic-sleep".
+# Flag only stubs that COULD have been flattened -- i.e. a populated copy exists at
+# the pinned version. Anything skipped above is intentional tracer pruning.
+remaining=$(list_pkg_dirs | while read -r t; do
+  is_stub "$t" || continue
+  r=${t#"$NM"/}
+  v=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*//p' "$t/package.json" | head -1)
+  e=$(echo "$r" | tr '/' '+')
+  for c in "$NM/.pnpm/$e@$v" "$NM/.pnpm/$e@${v}_"*; do
+    [ -d "$c/node_modules/$r" ] || continue
+    [ "$(find "$c/node_modules/$r" -type f | wc -l)" -gt 1 ] && echo "$r"
+  done
+done || true)
 if [ -n "$remaining" ]; then
-  echo "FATAL: stub packages remain after flattening:" >&2
+  echo "FATAL: resolvable stub packages remain after flattening:" >&2
   echo "$remaining" >&2
   exit 1
 fi
