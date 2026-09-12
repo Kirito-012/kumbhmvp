@@ -56,45 +56,47 @@ jobs:
           cp -r .next/static .next/standalone/.next/static
           cp startup.sh .next/standalone/startup.sh
 
-          # Next's tracer emits node_modules entries that point into pnpm's store as
-          # symlinks to ABSOLUTE build-machine paths (.../node_modules/.pnpm/...) — it
-          # does this even under a hoisted install, where the top-level node_modules is
-          # already flat. Those links resolve on the builder and nowhere else, so a
-          # plain tar ships dangling links and Azure dies at boot with
-          # "Cannot find module 'next/dist/compiled/cookie'".
+          # Two separate pnpm-layout problems have to be fixed before this tree can
+          # run anywhere but the build machine.
           #
-          # -h dereferences them, writing the real files into the archive instead.
+          # 1. SHADOWING STUBS. Next's tracer emits ~40 packages as a top-level stub
+          #    node_modules/<pkg>/ containing only package.json, leaving the real files
+          #    at .pnpm/<pkg>@<ver>/node_modules/<pkg>/. Node resolves a deep subpath
+          #    against the FIRST <pkg> it finds -- the stub -- and throws
+          #    MODULE_NOT_FOUND; it does not walk on to .pnpm/. This is what crashed
+          #    production with
+          #      Cannot find module '.../node_modules/@swc/helpers/cjs/_interop_require_default.cjs'
+          #    (An earlier comment here claimed Node had a "directory-walk resolution"
+          #    that found the real content at the intermediate .pnpm/node_modules path.
+          #    It does not; that belief is why the bug survived several fixes.)
+          #    The script below replaces each stub with the real directory, choosing it
+          #    by the exact version the stub's package.json pins, and fails the build if
+          #    any stub cannot be resolved unambiguously.
           #
-          # This dereferencing occasionally races on the runner: GNU tar lstats a
-          # symlink, then finds its target gone by the time it opens it ("File
-          # removed before we read it"), aborting the whole step. It's transient,
-          # not a real missing file — retrying the tar invocation clears it.
+          # 2. ABSOLUTE SYMLINKS. The tracer also emits entries pointing into the store
+          #    via symlinks to absolute build-machine paths, which resolve nowhere else.
+          #    `tar -h` dereferences them into real files.
           #
-          # (A prior version of this step worked around the race by excluding
-          # ALL of node_modules/.pnpm/node_modules/* as a supposedly-redundant
-          # pnpm convenience layer. It isn't redundant: Next's tracer ships some
-          # packages — e.g. @swc/helpers — as a stub node_modules/<pkg> containing
-          # only package.json, relying on Node's directory-walk resolution to find
-          # the real content at that intermediate path. Excluding all of it produced
-          # a MODULE_NOT_FOUND crash in production. Do not reintroduce that broad
-          # exclude.)
+          # Flattening (1) first also removes the deploy's dependence on the fragile part
+          # of (2): the stubs used to be rescued only incidentally, by -h dereferencing
+          # .pnpm/node_modules/<pkg>, which is why excluding that path broke production
+          # and why the semver exclude below is safe.
+          bash scripts/flatten-standalone-node-modules.sh .next/standalone/node_modules
+
+          # tar -h occasionally races on this runner: GNU tar lstats a symlink, then
+          # finds the target gone when it opens it ("File removed before we read it"),
+          # aborting the step. Transient, not a real missing file -- retrying clears it.
           #
-          # The retry loop above did NOT clear the race for one specific entry:
-          # node_modules/.pnpm/node_modules/semver consistently vanishes out from
-          # under tar's dereference on this runner, every attempt, every run — not
-          # a one-off. Unlike @swc/helpers, semver has no stub at the top-level
-          # node_modules/semver for the tracer to fall back on, but it's still safe
-          # to drop here: every traced reference to it (.next/**/*.nft.json) traces
-          # back to devDependency-only tooling (eslint/babel/mongodb-memory-server
-          # chains via `pnpm why semver`) that never runs inside the built server —
-          # `grep -r 'require("semver"' .next/standalone` finds nothing. Excluding
-          # just this one path, unlike the broad exclude above, leaves every other
-          # .pnpm/node_modules/* package (including @swc/helpers) untouched.
+          # The exception is node_modules/.pnpm/node_modules/semver, which vanishes
+          # every attempt, every run. It is safe to drop: every traced reference
+          # (.next/**/*.nft.json) comes from devDependency-only tooling (eslint/babel/
+          # mongodb-memory-server) that never runs in the built server, and
+          # `grep -r 'require("semver"' .next/standalone` finds nothing. Excluding this
+          # one path leaves every other .pnpm/node_modules/* package untouched. Do NOT
+          # broaden it to .pnpm/node_modules/* -- that shipped a broken tree before.
           for attempt in 1 2 3; do
             rm -f .next/standalone/app-node-modules.tar.gz
-            if tar -czhf .next/standalone/app-node-modules.tar.gz -C .next/standalone \
-                 --exclude='node_modules/.pnpm/node_modules/semver' \
-                 node_modules; then
+            if tar -czhf .next/standalone/app-node-modules.tar.gz -C .next/standalone \n                 --exclude='node_modules/.pnpm/node_modules/semver' \n                 node_modules; then
               break
             fi
             echo "tar attempt $attempt failed" >&2
@@ -105,18 +107,20 @@ jobs:
             sleep 2
           done
 
-          # Prove the archive is self-contained before shipping it: no symlinks left,
-          # and the module whose absence broke the last deploy is really in there.
+          # Prove the archive is self-contained before shipping it: no symlinks left, and
+          # the two modules whose absence broke earlier deploys are really in there --
+          # as files, at the top-level path Node will actually look at.
           if tar -tvzf .next/standalone/app-node-modules.tar.gz | grep -q '^l'; then
             echo "FATAL: app-node-modules.tar.gz still contains symlinks." >&2
             tar -tvzf .next/standalone/app-node-modules.tar.gz | grep '^l' | head >&2
             exit 1
           fi
-          if ! tar -tzf .next/standalone/app-node-modules.tar.gz \
-               | grep -q '^node_modules/next/dist/compiled/cookie/index.js$'; then
-            echo "FATAL: next/dist/compiled/cookie missing from the archive." >&2
-            exit 1
-          fi
+          for required in \n            'node_modules/next/dist/compiled/cookie/index.js' \n            'node_modules/@swc/helpers/cjs/_interop_require_default.cjs'; do
+            if ! tar -tzf .next/standalone/app-node-modules.tar.gz | grep -qx "$required"; then
+              echo "FATAL: $required missing from the archive." >&2
+              exit 1
+            fi
+          done
           rm -rf .next/standalone/node_modules
 
       - name: Package the standalone output as a tarball
