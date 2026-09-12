@@ -96,7 +96,9 @@ jobs:
           # broaden it to .pnpm/node_modules/* -- that shipped a broken tree before.
           for attempt in 1 2 3; do
             rm -f .next/standalone/app-node-modules.tar.gz
-            if tar -czhf .next/standalone/app-node-modules.tar.gz -C .next/standalone \n                 --exclude='node_modules/.pnpm/node_modules/semver' \n                 node_modules; then
+            if tar -czhf .next/standalone/app-node-modules.tar.gz -C .next/standalone \
+                 --exclude='node_modules/.pnpm/node_modules/semver' \
+                 node_modules; then
               break
             fi
             echo "tar attempt $attempt failed" >&2
@@ -115,7 +117,9 @@ jobs:
             tar -tvzf .next/standalone/app-node-modules.tar.gz | grep '^l' | head >&2
             exit 1
           fi
-          for required in \n            'node_modules/next/dist/compiled/cookie/index.js' \n            'node_modules/@swc/helpers/cjs/_interop_require_default.cjs'; do
+          for required in \
+            'node_modules/next/dist/compiled/cookie/index.js' \
+            'node_modules/@swc/helpers/cjs/_interop_require_default.cjs'; do
             if ! tar -tzf .next/standalone/app-node-modules.tar.gz | grep -qx "$required"; then
               echo "FATAL: $required missing from the archive." >&2
               exit 1
