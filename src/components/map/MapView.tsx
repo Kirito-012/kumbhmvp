@@ -109,7 +109,16 @@ async function loadBasemapStyle(theme: 'light' | 'dark') {
   // Only the light (MapTiler) style has any "{key}" placeholders -- the dark
   // (CARTO) style's replaceAll is a harmless no-op since it never contains
   // the token.
-  const withKey = text.replaceAll('{key}', process.env.NEXT_PUBLIC_MAPTILER_KEY ?? '')
+  //
+  // Stripped of surrounding quotes and whitespace because NEXT_PUBLIC_* values are
+  // inlined verbatim at build time from whatever the environment holds, and the two
+  // sources disagree: dotenv strips the quotes in KEY="abc" for local dev, but a CI
+  // secret is a raw string, so a value pasted with quotes ships as ?key="abc" and
+  // MapTiler 403s every tile and glyph. That failure is silent and light-mode-only
+  // (CARTO needs no key), so it reads as "the map doesn't render in light mode"
+  // rather than as a bad credential. Has happened in production; don't remove.
+  const key = (process.env.NEXT_PUBLIC_MAPTILER_KEY ?? '').trim().replace(/^["']|["']$/g, '')
+  const withKey = text.replaceAll('{key}', key)
   return JSON.parse(withKey) as {
     sprite?: string
     sources: Record<string, unknown>
