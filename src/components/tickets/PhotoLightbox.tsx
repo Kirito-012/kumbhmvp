@@ -70,20 +70,20 @@ export function PhotoLightbox({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[60] flex flex-col bg-black/95 sm:items-center sm:justify-center sm:bg-black/70 sm:p-6"
+      className="fixed inset-0 z-[60] flex flex-col bg-background sm:items-center sm:justify-center sm:bg-black/50 sm:p-6"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
       onTouchStart={(e) => setTouchStartX(e.touches[0].clientX)}
       onTouchEnd={handleTouchEnd}
     >
-      <div className="flex min-h-0 w-full flex-1 flex-col sm:h-[min(80vh,860px)] sm:w-[min(70vw,1100px)] sm:flex-none sm:overflow-hidden sm:rounded-2xl sm:border sm:border-white/10 sm:bg-black sm:shadow-2xl">
+      <div className="flex min-h-0 w-full flex-1 flex-col sm:h-[min(80vh,860px)] sm:w-[min(70vw,1100px)] sm:flex-none sm:overflow-hidden sm:rounded-2xl sm:border sm:border-border sm:bg-background sm:shadow-2xl">
         <div
-          className="flex shrink-0 items-center justify-between px-4 py-3"
+          className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"
           style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
         >
-          <div className="text-xs text-white/70">
-            <span className="font-medium capitalize text-white">{photo.phase}</span>
+          <div className="text-xs text-muted">
+            <span className="font-medium capitalize text-foreground">{photo.phase}</span>
             {' · '}
             {photo.uploader?.name ?? 'Unknown'} · {timeAgo(photo.createdAt)}
           </div>
@@ -91,13 +91,13 @@ export function PhotoLightbox({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full text-white transition-colors hover:bg-white/10 active:bg-white/10 sm:h-9 sm:w-9"
+            className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-strong transition-colors hover:bg-overlay-strong hover:text-foreground active:bg-overlay-strong sm:h-9 sm:w-9"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="relative min-h-0 flex-1" style={{ touchAction: 'pinch-zoom' }}>
+        <div className="relative min-h-0 flex-1 bg-overlay" style={{ touchAction: 'pinch-zoom' }}>
           <Image
             src={photo.url}
             alt={`${photo.phase} site photo`}
@@ -130,13 +130,13 @@ export function PhotoLightbox({
         </div>
 
         <div
-          className="flex shrink-0 justify-center gap-1.5 py-3"
+          className="flex shrink-0 justify-center gap-1.5 border-t border-border py-3"
           style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
         >
           {photos.map((_, i) => (
             <span
               key={i}
-              className={`h-1.5 w-1.5 rounded-full ${i === index ? 'bg-white' : 'bg-white/30'}`}
+              className={`h-1.5 w-1.5 rounded-full ${i === index ? 'bg-foreground' : 'bg-muted/40'}`}
             />
           ))}
         </div>

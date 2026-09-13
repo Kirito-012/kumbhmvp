@@ -1,6 +1,6 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import Panel from '@/components/map/Panel'
 import {
   ChartBarIcon,
@@ -9,6 +9,7 @@ import {
   TagIcon,
   TicketIcon,
   MapPinIcon,
+  SearchIcon,
 } from '@/components/map/icons'
 import type { MapMode } from '@/components/map/insights/ModeSwitcher'
 import {
@@ -53,12 +54,14 @@ function Section({
   icon,
   theme,
   count,
+  action,
   children,
 }: {
   title: string
   icon: ReactNode
   theme: keyof typeof SECTION_THEMES
   count?: number
+  action?: ReactNode
   children: ReactNode
 }) {
   const t = SECTION_THEMES[theme]
@@ -77,12 +80,17 @@ function Section({
         >
           {title}
         </h3>
-        {count !== undefined && (
-          <span
-            className="ml-auto rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums"
-            style={{ background: t.bg, color: t.text }}
-          >
-            {count}
+        {(action || count !== undefined) && (
+          <span className="ml-auto flex items-center gap-1.5">
+            {action}
+            {count !== undefined && (
+              <span
+                className="rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums"
+                style={{ background: t.bg, color: t.text }}
+              >
+                {count}
+              </span>
+            )}
           </span>
         )}
       </div>
@@ -119,6 +127,9 @@ export default function InsightsPanel({
   filters,
   sectors,
   onFilterClassGroup,
+  onClearClassGroups,
+  onFilterPriority,
+  onFilterStatusBucket,
   onClearFilters,
   onLocate,
   onWidthChange,
@@ -132,6 +143,9 @@ export default function InsightsPanel({
   filters: InsightsFilters
   sectors: SectorSummary[]
   onFilterClassGroup: (classGroup: string) => void
+  onClearClassGroups: () => void
+  onFilterPriority: (prioritySlug: string) => void
+  onFilterStatusBucket: (bucket: StatusBucket) => void
   onClearFilters: () => void
   onLocate: (lng: number, lat: number) => void
   onWidthChange?: (width: number) => void
@@ -227,19 +241,21 @@ export default function InsightsPanel({
                 insightsData={insightsData}
                 filters={filters}
                 theme={theme}
-                detail={detail}
+                onFilterStatusBucket={onFilterStatusBucket}
               />
               <Categories
                 sector={sector}
                 insightsData={insightsData}
                 filters={filters}
                 onFilterClassGroup={onFilterClassGroup}
+                onClearClassGroups={onClearClassGroups}
               />
               <PriorityTrend
                 sector={sector}
                 insightsData={insightsData}
                 filters={filters}
                 detail={detail}
+                onFilterPriority={onFilterPriority}
               />
             </>
           )}
@@ -358,21 +374,27 @@ function StatusProgress({
   insightsData,
   filters,
   theme,
-  detail,
+  onFilterStatusBucket,
 }: {
   sector: number | 'peripheral' | null
   insightsData: InsightsTicketData
   filters: InsightsFilters
   theme: ReturnType<typeof useInsightTheme>
-  detail: ReturnType<typeof useSectorInsights>['data']
+  onFilterStatusBucket: (bucket: StatusBucket) => void
 }) {
+  // Deliberately ignores the statusSlugs filter itself (though not the other
+  // filter types, or sector scope) when building this section's own counts --
+  // same "always show all rows, highlight the active one" reasoning as
+  // Categories ignoring classGroups, so clicking one bucket doesn't make the
+  // other three disappear.
+  const filtersIgnoringStatus: InsightsFilters = { ...filters, statusSlugs: undefined }
   const filtered = scopeTuples(insightsData.tickets, sector).filter((t) =>
     matchesFilters(
       t,
       insightsData.statuses,
       insightsData.priorities,
       insightsData.classGroups,
-      filters,
+      filtersIgnoringStatus,
     ),
   )
   const totals = bucketTotals(filtered, insightsData.statuses)
@@ -388,19 +410,37 @@ function StatusProgress({
         {BUCKET_ORDER.map((bucket) => {
           const count = totals[bucket]
           const pct = total > 0 ? Math.round((count / total) * 100) : 0
+          const bucketSlugs = insightsData.statuses
+            .filter((s) => s.bucket === bucket)
+            .map((s) => s.slug)
+          const active =
+            bucketSlugs.length > 0 &&
+            bucketSlugs.every((slug) => filters.statusSlugs?.includes(slug))
+          const color = bucketColor(bucket, theme)
+          const tint = `color-mix(in srgb, ${color} var(--map-row-tint-pct), transparent)`
           return (
-            <div
+            <button
               key={bucket}
-              className="rounded-lg border px-2 py-1.5"
-              style={{ borderColor: 'var(--map-border)' }}
+              type="button"
+              onClick={() => onFilterStatusBucket(bucket)}
+              aria-pressed={active}
+              title={`${active ? 'Clear' : 'Filter to'} ${BUCKET_LABELS[bucket]}`}
+              className="relative cursor-pointer rounded-lg border px-2 py-1.5 text-left transition-colors"
+              style={{
+                borderColor: active ? color : 'var(--map-border)',
+                background: active ? tint : 'transparent',
+              }}
             >
               <div className="flex items-center gap-1.5">
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ background: bucketColor(bucket, theme) }}
+                  style={{ background: color }}
                   aria-hidden
                 />
-                <span className="truncate text-[10.5px]" style={{ color: 'var(--map-fg-faint)' }}>
+                <span
+                  className={`truncate text-[10.5px] ${active ? 'font-semibold' : ''}`}
+                  style={{ color: active ? 'var(--map-fg)' : 'var(--map-fg-faint)' }}
+                >
                   {BUCKET_LABELS[bucket]}
                 </span>
               </div>
@@ -416,40 +456,9 @@ function StatusProgress({
                   {pct}%
                 </span>
               </p>
-            </div>
+            </button>
           )
         })}
-      </div>
-
-      <div
-        className="mt-2.5 flex flex-col gap-1.5 text-[11.5px]"
-        style={{ color: 'var(--map-fg-muted)' }}
-      >
-        <div className="flex items-center justify-between">
-          <span>Median time to resolve</span>
-          <span className="font-semibold tabular-nums" style={{ color: 'var(--map-fg)' }}>
-            {detail?.medianResolveHours != null
-              ? detail.medianResolveHours < 24
-                ? `${Math.round(detail.medianResolveHours)}h`
-                : `${(detail.medianResolveHours / 24).toFixed(1)}d`
-              : '—'}
-          </span>
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="shrink-0">Oldest open</span>
-          {detail?.oldestOpen ? (
-            <a
-              href={`/tickets/${detail.oldestOpen.number}`}
-              className="truncate font-semibold underline-offset-2 hover:underline"
-              style={{ color: 'var(--map-accent)' }}
-              title={detail.oldestOpen.subject}
-            >
-              #{detail.oldestOpen.number} · {detail.oldestOpen.ageDays}d old
-            </a>
-          ) : (
-            <span style={{ color: 'var(--map-fg-faint)' }}>None</span>
-          )}
-        </div>
       </div>
     </Section>
   )
@@ -460,19 +469,27 @@ function Categories({
   insightsData,
   filters,
   onFilterClassGroup,
+  onClearClassGroups,
 }: {
   sector: number | 'peripheral' | null
   insightsData: InsightsTicketData
   filters: InsightsFilters
   onFilterClassGroup: (classGroup: string) => void
+  onClearClassGroups: () => void
 }) {
+  // Deliberately ignores the classGroups filter itself (though not the other
+  // filter types, or sector scope) when building the row list -- so
+  // selecting a category highlights it without making every other category
+  // disappear from the list, matching the "always show all rows, highlight
+  // the active one" pattern in the plain-map Stats panel's ClassAreaTable.
+  const filtersIgnoringClassGroups: InsightsFilters = { ...filters, classGroups: undefined }
   const filtered = scopeTuples(insightsData.tickets, sector).filter((t) =>
     matchesFilters(
       t,
       insightsData.statuses,
       insightsData.priorities,
       insightsData.classGroups,
-      filters,
+      filtersIgnoringClassGroups,
     ),
   )
 
@@ -498,34 +515,57 @@ function Categories({
     )
   }
 
+  const selectedCount = filters.classGroups?.length ?? 0
+
   return (
     <Section
       title="Categories"
       icon={<GridIcon className="h-full w-full" />}
       theme="teal"
       count={rows.length}
+      action={
+        selectedCount > 1 ? (
+          <button
+            type="button"
+            onClick={onClearClassGroups}
+            className="cursor-pointer text-[10.5px] font-semibold underline-offset-2 hover:underline"
+            style={{ color: 'var(--map-accent)' }}
+          >
+            Clear
+          </button>
+        ) : undefined
+      }
     >
       <div className="flex flex-col gap-1.5">
         {rows.map((row) => {
           const color = CLASS_GROUP_COLORS[row.name] ?? CLASS_GROUP_COLORS.Other
           const active = filters.classGroups?.includes(row.name) ?? false
+          const rowTint = `color-mix(in srgb, ${color} var(--map-row-tint-pct), transparent)`
           return (
             <button
               key={row.name}
               type="button"
               onClick={() => onFilterClassGroup(row.name)}
               aria-pressed={active}
-              className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors"
-              style={{ background: active ? 'var(--map-accent-bg)' : 'transparent' }}
+              title={`${active ? 'Clear' : 'Filter to'} ${row.name}`}
+              className="relative flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors"
+              style={{ background: active ? rowTint : 'transparent' }}
             >
+              {active && (
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-y-1 left-0 w-[3px] rounded-full"
+                  style={{ background: color }}
+                />
+              )}
               <span
                 className="h-2.5 w-2.5 shrink-0 rounded-full"
                 style={{ background: color }}
                 aria-hidden
               />
               <span
-                className="min-w-0 flex-1 truncate text-[11.5px]"
-                style={{ color: 'var(--map-fg-muted)' }}
+                className={`min-w-0 flex-1 truncate text-[11.5px] ${active ? 'font-semibold' : ''}`}
+                style={{ color: active ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
               >
                 {row.name}
               </span>
@@ -560,11 +600,13 @@ function PriorityTrend({
   insightsData,
   filters,
   detail,
+  onFilterPriority,
 }: {
   sector: number | 'peripheral' | null
   insightsData: InsightsTicketData
   filters: InsightsFilters
   detail: ReturnType<typeof useSectorInsights>['data']
+  onFilterPriority: (prioritySlug: string) => void
 }) {
   const filtered = scopeTuples(insightsData.tickets, sector).filter(
     (t) =>
@@ -594,8 +636,16 @@ function PriorityTrend({
       <div className="flex flex-col gap-1">
         {rows.map((p) => {
           const count = byPriority.get(p.slug) ?? 0
+          const active = filters.prioritySlugs?.includes(p.slug) ?? false
           return (
-            <div key={p.slug} className="flex items-center gap-2">
+            <button
+              key={p.slug}
+              type="button"
+              onClick={() => onFilterPriority(p.slug)}
+              aria-pressed={active}
+              className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors"
+              style={{ background: active ? 'var(--map-accent-bg)' : 'transparent' }}
+            >
               <span
                 className="w-14 shrink-0 truncate text-[10.5px]"
                 style={{ color: 'var(--map-fg-faint)' }}
@@ -617,7 +667,7 @@ function PriorityTrend({
               >
                 {count}
               </span>
-            </div>
+            </button>
           )
         })}
       </div>
@@ -716,10 +766,19 @@ function TicketListBlock({
   priorities: InsightsTicketData['priorities']
   onLocate: (lng: number, lat: number) => void
 }) {
+  const [query, setQuery] = useState('')
+
   if (!detail) return null
 
   const listHref =
     typeof sector === 'number' ? `/tickets?sector=${sector}&status=open` : '/tickets?status=open'
+
+  const q = query.trim().toLowerCase()
+  const filteredTickets = q
+    ? detail.tickets.filter(
+        (t) => String(t.number).includes(q) || t.subject.toLowerCase().includes(q),
+      )
+    : detail.tickets
 
   return (
     <Section
@@ -728,13 +787,29 @@ function TicketListBlock({
       theme="blue"
       count={detail.totalCount}
     >
-      {detail.tickets.length === 0 ? (
+      <div className="relative mb-2">
+        <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--map-fg-faint)]" />
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by ID or title…"
+          aria-label="Search tickets by ID or title"
+          className="w-full rounded-lg border py-1.5 pl-8 pr-2.5 text-[11.5px] outline-none transition-shadow placeholder:text-[var(--map-fg-faint)] focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
+          style={{
+            borderColor: 'var(--map-border)',
+            background: 'var(--map-input-bg)',
+            color: 'var(--map-fg)',
+          }}
+        />
+      </div>
+      {filteredTickets.length === 0 ? (
         <p className="text-[11.5px]" style={{ color: 'var(--map-fg-faint)' }}>
-          No tickets in this scope.
+          {q ? 'No tickets match your search.' : 'No tickets in this scope.'}
         </p>
       ) : (
         <div className="flex flex-col gap-1">
-          {detail.tickets.map((t) => {
+          {filteredTickets.map((t) => {
             const status = statuses.find((s) => s.slug === t.statusSlug)
             const priority = priorities.find((p) => p.slug === t.prioritySlug)
             return (
@@ -800,7 +875,7 @@ function TicketListBlock({
           })}
         </div>
       )}
-      {detail.truncated && (
+      {!q && detail.truncated && (
         <a
           href={listHref}
           className="mt-2 block text-[11px] font-semibold underline-offset-2 hover:underline"

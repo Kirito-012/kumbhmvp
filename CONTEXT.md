@@ -432,13 +432,35 @@ override table for DB colours sitting right at the contrast threshold.
 ### Insights (Heatmap/Ticket mode) — admin & manager only, see `PLAN-heatmap.md`
 
 `ModeSwitcher` (top-left control strip, gated on `canUseInsights`) swaps `MapView` between three modes:
-Map (the default subsystem above), Heatmap (sectors shaded by a quantile-break scale over a chosen
-`HeatMetric`) and Tickets (sectors coloured by status-bucket feature-state). It's a `role="radiogroup"` of
-`role="radio"` buttons with a roving tabindex — arrow keys/Home/End move focus **and** selection between
+Map (the default subsystem above), Heatmap, and Tickets (sectors coloured by status-bucket feature-state).
+It's an icon-only `role="radiogroup"` of three equal-width `role="radio"` squares (no text labels, just
+`aria-label`/`title`) with a roving tabindex — arrow keys/Home/End move focus **and** selection between
 segments, Enter/Space activates the focused one; only the checked segment is a tab stop. Keyboard
 shortcuts `1`/`2`/`3` jump straight to Map/Heatmap/Tickets and `Esc` clears `insightSector` and returns to
 Map, all registered on `document.keydown` and skipped while an input/textarea/select has focus or while
 measure mode is active (measure mode owns `Esc` for exiting itself).
+
+**Heatmap mode (Phase 7 revision, `PLAN-heatmap.md` §11)** shows only sector boundaries plus an actual
+MapLibre `heatmap`-type layer (`insight-heat` in `insightLayers.ts`) — a translucent, non-polygon glow
+concentrated on ticket density, not a flat per-sector fill. Sector fill/labels, POIs, and other Map-mode
+layers are hidden by default; basemap place-name labels are dimmed to ~50% opacity (not hidden) via
+`setBasemapLabelsDimmed`, so the map stays legible under the glow. `HeatMetric` is just
+`'total' | 'pctOpen'` (`src/lib/insights/aggregate.ts`) — Total glows/ranks every ticket, % open re-uses
+the same open-tickets-only glow but ranks the sector list by percentage; there's no per-sector-polygon
+metric anymore. Above z15.5 individual ticket dots (`insight-heat-points`) fade in and become clickable —
+the click handler resolves `class_group_idx`/`status_idx`/`priority_idx` off the clicked GeoJSON feature
+(via an `insightsDataRef` mirror, since the map's one-time `load` handler closure can't see fresh React
+state) and shows a popup styled like the plain-map parcel popup (icon header + labelled property rows for
+a single ticket, or a compact per-ticket block for a cluster). The colour ramp is a fixed 5-stop
+green→red (`HEAT_PALETTE` in `src/lib/insights/heatScale.ts`, same ramp for both themes) surfaced as a
+single CSS gradient bar (`heatGradientCss`) in both `InsightsModePanel`'s legend and `FloatingLegend`.
+`computeQuantileBreaks`/`colorForValue` (same file) are Ticket mode's, not Heatmap's, colouring logic now.
+
+**Known gotcha:** loading the map directly via a `?mode=heatmap` deep link (rather than clicking the mode
+switch after the map has already loaded) can leave the heat layers stuck at `visibility: 'none'` — the
+mode-visibility effect is gated on `map.isStyleLoaded()` and doesn't re-run once the style finishes
+loading if `mode` was already `'heatmap'` on mount. A real in-app mode transition (click, or `1`/`2`/`3`)
+always works. Flagged but not yet fixed as of the Phase 7 branch.
 
 Data contract is a client-side split (`PLAN-heatmap.md §3.3`): a bulk ticket-tuple array
 (`useTicketInsights`) fetched once per `active` transition and filtered/rolled-up locally
@@ -668,8 +690,10 @@ To add a layer: add an entry to the appropriate spec with a `map_fn`, following 
 
 ## 16. Current state
 
-Branch `main`. Recent work (this may be stale — check `git log`):
+Branch `feat/heatmap` (not yet merged to `main`). Recent work (this may be stale — check `git log`):
 
+- Heatmap/Ticket mode (`PLAN-heatmap.md`), Phases 1–6 committed; Phase 7 (density-heatmap revision,
+  see §9) implemented on the branch but not yet committed as of this writing
 - Ticket auth and route guards
 - Mobile-responsive UI pass
 - The Azure/Oryx deploy fixes described in §11

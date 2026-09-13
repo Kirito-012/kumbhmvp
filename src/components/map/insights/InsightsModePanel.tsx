@@ -1,8 +1,8 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import Panel from '@/components/map/Panel'
-import { FlameIcon, TicketIcon } from '@/components/map/icons'
+import { FlameIcon, TicketIcon, SearchIcon } from '@/components/map/icons'
 import type { MapMode } from '@/components/map/insights/ModeSwitcher'
 import { useInsightTheme } from '@/components/map/insights/charts'
 import {
@@ -57,7 +57,6 @@ export default function InsightsModePanel({
   heatMetric,
   onHeatMetricChange,
   filters,
-  onFiltersChange,
   selectedSector,
   onSelectSector,
   forceCollapsed,
@@ -74,7 +73,6 @@ export default function InsightsModePanel({
   heatMetric: HeatMetric
   onHeatMetricChange: (metric: HeatMetric) => void
   filters: InsightsFilters
-  onFiltersChange: (updater: InsightsFilters | ((f: InsightsFilters) => InsightsFilters)) => void
   selectedSector: number | 'peripheral' | null
   onSelectSector: (sector: number | 'peripheral') => void
   forceCollapsed?: boolean
@@ -84,26 +82,6 @@ export default function InsightsModePanel({
 }) {
   const isHeatmap = mode === 'heatmap'
   const theme = useInsightTheme()
-
-  const hasActiveFilters =
-    (filters.statusSlugs?.length ?? 0) > 0 ||
-    (filters.prioritySlugs?.length ?? 0) > 0 ||
-    (filters.classGroups?.length ?? 0) > 0 ||
-    filters.createdWithinMs !== undefined
-
-  function toggleArrayFilter(key: 'statusSlugs' | 'prioritySlugs' | 'classGroups', value: string) {
-    onFiltersChange((f) => {
-      const current = f[key] ?? []
-      const next = current.includes(value)
-        ? current.filter((v) => v !== value)
-        : [...current, value]
-      return { ...f, [key]: next.length > 0 ? next : undefined }
-    })
-  }
-
-  function setCreatedWithin(ms: number | undefined) {
-    onFiltersChange((f) => ({ ...f, createdWithinMs: ms }))
-  }
 
   return (
     <Panel
@@ -115,7 +93,6 @@ export default function InsightsModePanel({
         )
       }
       title={isHeatmap ? 'Heatmap' : 'Ticket status'}
-      subtitle="Admin & manager view"
       side="left"
       forceCollapsed={forceCollapsed}
       onExpand={onExpand}
@@ -163,10 +140,6 @@ export default function InsightsModePanel({
           heatMetric={heatMetric}
           onHeatMetricChange={onHeatMetricChange}
           filters={filters}
-          hasActiveFilters={hasActiveFilters}
-          onClearFilters={() => onFiltersChange({})}
-          toggleArrayFilter={toggleArrayFilter}
-          setCreatedWithin={setCreatedWithin}
           selectedSector={selectedSector}
           onSelectSector={onSelectSector}
           theme={theme}
@@ -204,6 +177,7 @@ function InsightsModeBody({
   onRefresh: () => void
 }) {
   const isHeatmap = mode === 'heatmap'
+  const [sectorQuery, setSectorQuery] = useState('')
 
   const rollups = rollupBySector(
     insightsData.tickets,
@@ -254,6 +228,11 @@ function InsightsModeBody({
 
   const metricValueLabel = (value: number) =>
     isHeatmap && heatMetric === 'pctOpen' ? `${Math.round(value)}%` : String(Math.round(value))
+
+  const sectorQ = sectorQuery.trim().toLowerCase()
+  const visibleRanked = sectorQ
+    ? ranked.filter((row) => row.label.toLowerCase().includes(sectorQ))
+    : ranked
 
   return (
     <div className="flex flex-col gap-4">
@@ -335,8 +314,29 @@ function InsightsModeBody({
 
       <div>
         <SectionLabel>Sectors</SectionLabel>
+        <div className="relative mb-1.5">
+          <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--map-fg-faint)]" />
+          <input
+            type="text"
+            value={sectorQuery}
+            onChange={(e) => setSectorQuery(e.target.value)}
+            placeholder="Search sectors…"
+            aria-label="Search sectors"
+            className="w-full rounded-lg border py-1.5 pl-8 pr-2.5 text-[11.5px] outline-none transition-shadow placeholder:text-[var(--map-fg-faint)] focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
+            style={{
+              borderColor: 'var(--map-border)',
+              background: 'var(--map-input-bg)',
+              color: 'var(--map-fg)',
+            }}
+          />
+        </div>
+        {visibleRanked.length === 0 && (
+          <p className="px-1.5 py-1 text-[11.5px]" style={{ color: 'var(--map-fg-faint)' }}>
+            No sectors match your search.
+          </p>
+        )}
         <div className="flex flex-col gap-0.5">
-          {ranked.map((row) => {
+          {visibleRanked.map((row) => {
             const isSelected =
               row.key === 'peripheral'
                 ? selectedSector === 'peripheral'
@@ -361,11 +361,6 @@ function InsightsModeBody({
                   if (!isSelected) e.currentTarget.style.background = 'transparent'
                 }}
               >
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                  style={{ background: color }}
-                  aria-hidden
-                />
                 <span
                   className="min-w-0 flex-1 truncate text-[11.5px]"
                   style={{

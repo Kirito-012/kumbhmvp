@@ -3623,18 +3623,23 @@ export default function MapView({
     // class filter narrows things down, force the fill (and its matching
     // hit-target) visible regardless of the toggle; with no filter active
     // this falls back to the toggle exactly as before.
+    // Heatmap/Ticket mode always hide the class-group wash + its hairline,
+    // even if a class filter would otherwise force them on -- Heatmap's own
+    // density glow and Ticket mode's insight-ticket-fill/-outline (status
+    // colour) are each the only area colour their mode should show, per user
+    // request. Only plain Map mode lets a class filter force the wash back on
+    // over the toggle. sector-plan-hit-target stays governed by the
+    // toggle/emphasis as before since it's invisible either way (fill-opacity
+    // 0) and clicks still need it queryable.
+    const showClassWash = mode === 'map' && (emphasisActive || visibility.sector_plan)
     if (map.getLayer('sector-plan-fill')) {
-      map.setLayoutProperty(
-        'sector-plan-fill',
-        'visibility',
-        emphasisActive || visibility.sector_plan ? 'visible' : 'none',
-      )
+      map.setLayoutProperty('sector-plan-fill', 'visibility', showClassWash ? 'visible' : 'none')
     }
     if (map.getLayer('sector-plan-class-outline')) {
       map.setLayoutProperty(
         'sector-plan-class-outline',
         'visibility',
-        emphasisActive || visibility.sector_plan ? 'visible' : 'none',
+        showClassWash ? 'visible' : 'none',
       )
     }
     if (map.getLayer('sector-plan-hit-target')) {
@@ -3704,7 +3709,7 @@ export default function MapView({
         )
       }
     }
-  }, [selectedSector, classFilter, subclassFilter, sectors, visibility])
+  }, [selectedSector, classFilter, subclassFilter, sectors, visibility, mode])
 
   // POI sub-class filter -- narrows individual POI layers to a subset of
   // their subclass values, for the 4 layers that have one (see
@@ -5415,7 +5420,6 @@ export default function MapView({
           heatMetric={heatMetric}
           onHeatMetricChange={setHeatMetric}
           filters={insightFilters}
-          onFiltersChange={setInsightFilters}
           selectedSector={insightSector}
           onSelectSector={selectInsightSectorFromPanel}
           forceCollapsed={expandedDockedPanel === 'stats'}
@@ -5489,6 +5493,23 @@ export default function MapView({
                 ? f.prioritySlugs.filter((p) => p !== prioritySlug)
                 : [...(f.prioritySlugs ?? []), prioritySlug],
             }))
+          }
+          onFilterStatusBucket={(bucket: StatusBucket) =>
+            setInsightFilters((f) => {
+              const bucketSlugs = (insightsData?.statuses ?? [])
+                .filter((s) => s.bucket === bucket)
+                .map((s) => s.slug)
+              const isActive =
+                bucketSlugs.length > 0 && bucketSlugs.every((slug) => f.statusSlugs?.includes(slug))
+              if (isActive) {
+                const next = f.statusSlugs?.filter((slug) => !bucketSlugs.includes(slug))
+                return { ...f, statusSlugs: next && next.length > 0 ? next : undefined }
+              }
+              return {
+                ...f,
+                statusSlugs: Array.from(new Set([...(f.statusSlugs ?? []), ...bucketSlugs])),
+              }
+            })
           }
           onClearFilters={() => setInsightFilters({})}
           onLocate={flyToLocateFeature}
