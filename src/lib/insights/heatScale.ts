@@ -1,11 +1,21 @@
 export type Theme = 'light' | 'dark'
 
-/** 5-stop ramp, cool -> hot. Dark-theme stops run the opposite luminance direction (brighter =
- *  hotter) since a dark basemap needs light colours to read as "hot", not the light-theme's dark
- *  reds -- see PLAN-heatmap.md §5.1. */
+/** 5-stop green -> red ramp for the sector-list dots/bars, matching the map glow's hue family
+ *  (HEAT_GLOW_COLOR in insightLayers.ts) as opaque hex instead of translucent rgba -- so the list
+ *  and the map read as the same scale (PLAN-heatmap.md §11.8). Same stops in both themes now (the
+ *  glow itself is theme-independent); kept as a Record<Theme, ...> since colorForValue/callers are
+ *  still theme-parameterised for NO_DATA_COLOR's sake. */
+const GREEN_TO_RED_RAMP = ['#22c55e', '#a3e635', '#facc15', '#f97316', '#dc2626']
 export const HEAT_PALETTE: Record<Theme, string[]> = {
-  light: ['#fef3c7', '#fdba74', '#f97316', '#dc2626', '#991b1b'],
-  dark: ['#78350f', '#c2410c', '#ea580c', '#f87171', '#fecaca'],
+  light: GREEN_TO_RED_RAMP,
+  dark: GREEN_TO_RED_RAMP,
+}
+
+/** CSS `linear-gradient()` stop list built from the same ramp, for the single-bar legend
+ *  (PLAN-heatmap.md §11.8) -- one gradient bar replaces the old stepped swatch rows. */
+export function heatGradientCss(theme: Theme): string {
+  const palette = HEAT_PALETTE[theme]
+  return `linear-gradient(to right, ${palette.join(', ')})`
 }
 
 /** Sectors/parcels with zero for the active metric (e.g. no open tickets) get a neutral swatch
@@ -71,28 +81,4 @@ export function darkenHex(hex: string, factor: number): string {
       .toString(16)
       .padStart(2, '0')
   return `#${scale(m[1])}${scale(m[2])}${scale(m[3])}`
-}
-
-export type LegendEntry = { color: string; label: string }
-
-/** Human-readable legend rows for the Heatmap panel (Phase 5), low -> high, with a leading
- *  "no data" row. Ranges are inclusive of their upper break, matching colorForValue(). */
-export function buildLegend(breaks: number[], theme: Theme): LegendEntry[] {
-  const palette = HEAT_PALETTE[theme]
-  const entries: LegendEntry[] = [{ color: NO_DATA_COLOR[theme], label: 'No open tickets' }]
-  if (breaks.length === 0) return entries
-
-  let lower = 0
-  breaks.forEach((upper, i) => {
-    const paletteIndex = palette.length - breaks.length + i
-    const color = palette[Math.max(0, Math.min(palette.length - 1, paletteIndex))]
-    const roundedLower = Math.ceil(lower) + (i === 0 ? 1 : 0)
-    const label =
-      i === breaks.length - 1 && roundedLower >= Math.floor(upper)
-        ? `${Math.floor(upper)}+`
-        : `${roundedLower}–${Math.floor(upper)}`
-    entries.push({ color, label })
-    lower = upper
-  })
-  return entries
 }

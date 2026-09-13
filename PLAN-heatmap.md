@@ -1,15 +1,15 @@
 # PLAN — Heatmap & Ticket modes on the map
 
 Branch: `feat/heatmap` (cut from `main` @ `37769dc`).
-Status: **Phases 1-6 complete.**
+Status: **Phases 1-7 complete.**
 
 Two new map modes for Admins and Managers, switched from a segmented pill in the top-left control strip:
 
-| Mode        | What the map shows                                                                                                                      |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| **Map**     | Today's map, unchanged. Default mode, and the only mode surveyors ever see.                                                             |
-| **Heatmap** | Where the open work is. Sectors are shaded light → deep red at region zoom; zoom in and it becomes a soft glow heatmap of open tickets. |
-| **Tickets** | Every parcel coloured by its ticket's status: New blue, Open/Pending amber, Resolved green, Closed slate.                               |
+| Mode        | What the map shows                                                                                                                                                                                   |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Map**     | Today's map, unchanged. Default mode, and the only mode surveyors ever see.                                                                                                                          |
+| **Heatmap** | Where the open work is. A free-flowing, translucent green → red density glow over the exact spots with many open tickets, at every zoom, over thin sector boundaries only (revised in Phase 7, §11). |
+| **Tickets** | Every parcel coloured by its ticket's status: New blue, Open/Pending amber, Resolved green, Closed slate.                                                                                            |
 
 Both modes share one **Insights panel** (right) and one **mode panel** (left).
 
@@ -323,14 +323,15 @@ everything, _"No tickets match these filters"_ plus a Clear button.
 
 Each phase ends in a working, committable state.
 
-| Phase             | Scope                                                                                                                | Done when                                                                                                         |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| ✅ **1. Data**    | `statusBuckets`, `insights.service`, both API routes with the 401/403 checks, unit tests                             | `curl` as a manager returns data; as a surveyor returns 403; tests pass                                           |
-| ✅ **2. Shell**   | `canUseInsights` prop, `ModeSwitcher`, mode/URL state, panel swap with placeholder panels, visibility override       | Switching modes swaps panels and hides POIs; Map mode returns to exactly its prior state; surveyor sees no switch |
-| ✅ **3. Heatmap** | `heatScale`, `aggregate`, sector fill/outline/labels, glow + points, zoom crossfade, click/hover, theme registration | Heat reads correctly in both themes at z10 and z15; theme toggle mid-mode recolours without a reload              |
-| ✅ **4. Tickets** | Feature-state fill/outline, muted parcels, labels, parcel click → sector + popup                                     | Every parcel is coloured; filter changes recolour in under 100 ms; theme toggle works                             |
-| ✅ **5. Panels**  | `InsightsModePanel`, `InsightsPanel`, charts, the sector detail fetch, all states; ui-ux-pro-max review              | All four content blocks are real; loading, empty and error states verified                                        |
-| ✅ **6. Polish**  | Phone layout + width budget, keyboard shortcuts, a11y pass, `CONTEXT.md` §9 update                                   | Verified at 375 / 768 / 1440 px in both themes; no console errors                                                 |
+| Phase                     | Scope                                                                                                                                                                                                             | Done when                                                                                                                                                               |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ✅ **1. Data**            | `statusBuckets`, `insights.service`, both API routes with the 401/403 checks, unit tests                                                                                                                          | `curl` as a manager returns data; as a surveyor returns 403; tests pass                                                                                                 |
+| ✅ **2. Shell**           | `canUseInsights` prop, `ModeSwitcher`, mode/URL state, panel swap with placeholder panels, visibility override                                                                                                    | Switching modes swaps panels and hides POIs; Map mode returns to exactly its prior state; surveyor sees no switch                                                       |
+| ✅ **3. Heatmap**         | `heatScale`, `aggregate`, sector fill/outline/labels, glow + points, zoom crossfade, click/hover, theme registration                                                                                              | Heat reads correctly in both themes at z10 and z15; theme toggle mid-mode recolours without a reload                                                                    |
+| ✅ **4. Tickets**         | Feature-state fill/outline, muted parcels, labels, parcel click → sector + popup                                                                                                                                  | Every parcel is coloured; filter changes recolour in under 100 ms; theme toggle works                                                                                   |
+| ✅ **5. Panels**          | `InsightsModePanel`, `InsightsPanel`, charts, the sector detail fetch, all states; ui-ux-pro-max review                                                                                                           | All four content blocks are real; loading, empty and error states verified                                                                                              |
+| ✅ **6. Polish**          | Phone layout + width budget, keyboard shortcuts, a11y pass, `CONTEXT.md` §9 update                                                                                                                                | Verified at 375 / 768 / 1440 px in both themes; no console errors                                                                                                       |
+| ✅ **7. Density heatmap** | Icon-only mode switch; drop sector shading/labels for a true all-zoom density glow; dimmed basemap labels; Open/All/% open metric; gradient legend; ticket dots + popup; theme-swap source fix (full spec in §11) | Glow sits on the actual ticket clusters at z10, z13 and z16 in both themes, map names stay readable through it, theme toggle keeps the glow, Map/Ticket modes unchanged |
 
 ## 8. Testing
 
@@ -366,3 +367,123 @@ Each phase ends in a working, committable state.
 - Priority-weighted or SLA-overdue heat metrics. Add them once `slaDueAt` is actually populated.
 - A read-only, scoped version for surveyors. Explicitly declined for now.
 - Exporting a sector's insights as PDF or CSV.
+
+---
+
+## 11. Phase 7 — Density heatmap revision (agreed 2026-09-13)
+
+Feedback after Phases 1-6: the Heatmap painted whole sectors as flat colour blocks (and at region zoom
+they were stuck on the grey "no data" swatch), the glow was invisible below z13, and too much else was
+on the map. **Supersedes §5.1, §5.2 and the Heatmap half of §5.4 and §6.1's legend.** Ticket mode is
+untouched.
+
+### 11.1 Decisions
+
+| #   | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Mode switch shows **icons only** (Map / Heatmap / Tickets), with tooltip and `aria-label` kept.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 2   | Heatmap shows **only** thin sector boundaries + the density glow (+ the selected-sector outline). No sector fill, no sector labels, no POIs/roads/parcels.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 3   | The glow is a real **point-density heatmap** at every zoom: soft, flowing, no polygon edges, hottest exactly where open tickets cluster. Green → yellow → orange → red, like Maptive.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 4   | Everything stays **translucent**: the basemap, its roads and place names must remain readable through the hottest red.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 5   | **Basemap labels and icons dim to 50%** while in Heatmap mode (kept, not hidden); restored on exit.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 6   | ~~Metric switch becomes Open / All / % open~~ — **revised 2026-09-13: switch is just Total / % open** (two buttons, no separate "Open" button). `HeatMetric = 'total' \| 'pctOpen'`. **% open is sector-wise only**: it ranks/colours the sector list exactly as today, it can't be drawn as a density — selecting it leaves the glow on open-ticket density (reusing `buildHeatFeatureCollection`'s existing `metric !== 'total'` → open-tickets-only filter, so no new glow-filtering logic is needed). Selecting Total switches both the glow and the list to every ticket. Default `heatMetric` state becomes `'total'`. **Per ha is removed.** |
+| 7   | At street zoom (z ≥ 16) individual **ticket dots** fade in; clicking one opens a small popup listing the tickets there with links to `/tickets/{number}`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 8   | The purple (light) / orange (dark) **selected-sector outline stays**.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+
+### 11.2 Mode switch — `ModeSwitcher.tsx`
+
+- Remove the `<span className="hidden lg:inline">{label}</span>`.
+- Buttons become fixed equal squares (`h-8 w-8`, no horizontal padding) so the sliding indicator's
+  `100 / SEGMENTS.length %` width lines up exactly. Keep `aria-label`, `title`, roving tabindex and arrow keys.
+- Re-measure the top control strip at 375 px (§9 "top strip width") — it only gets narrower, but check.
+
+### 11.3 Map layers — `insightLayers.ts`
+
+**Remove:** `updateInsightSectorPaint`, `sectorColorExpr` (Heatmap use), `INSIGHT_HEAT_ZOOM_CROSSOVER`, the
+per-sector `fill-color`/`line-color` match expressions and every zoom fade-to-0 on sector layers.
+
+| Layer                     | New behaviour                                                                                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `insight-sector-fill`     | Kept only as an **invisible hit target** (`fill-opacity: 0`, still queryable) for sector click + hover cursor.                                            |
+| `insight-sector-outline`  | One neutral hairline at every zoom: light `rgba(71,85,105,0.55)`, dark `rgba(203,213,225,0.45)`, ~1.2 px. Theme-swapped in `applyInsightTheme`.           |
+| `insight-sector-label`    | Hidden in Heatmap (`setInsightLabelVisible` only for Ticket mode).                                                                                        |
+| `insight-sector-selected` | Unchanged.                                                                                                                                                |
+| `insight-heat`            | Visible at **all** zooms (see 11.4). Moved **below the first basemap symbol layer** so place names paint on top of the glow.                              |
+| `insight-heat-points`     | `minzoom` 15.5, fading in 15.5 → 16, radius 4, red with white/dark stroke. Features gain `number`, `status_idx`, `priority_idx` properties for the popup. |
+
+### 11.4 Glow tuning (starting values — tune live against real data)
+
+- `heatmap-weight`: existing priority weight (0.6 / 1 / 1.6 / 2.4).
+- `heatmap-radius`: exponential with zoom so a hotspot covers roughly the same ground area at every zoom,
+  e.g. `['interpolate', ['exponential', 2], ['zoom'], 10, 8, 13, 28, 16, 90]`.
+- `heatmap-intensity`: low zoomed out so sectors 7/5/11/12 (600-740 tickets each) don't fuse into one red
+  blob, higher zoomed in so a single busy parcel still reads: e.g. `10 → 0.15, 13 → 0.5, 16 → 1.2`.
+- `heatmap-color` (alpha baked into each stop, so the red core is still see-through):
+  `0 transparent · 0.15 green α≈0.30 · 0.35 lime α≈0.45 · 0.55 yellow α≈0.55 · 0.75 orange α≈0.65 · 1 red α≈0.72`.
+- `heatmap-opacity`: ~0.85 overall, easing to ~0.6 at z16 once ticket dots take over.
+- Same ramp in both themes to start; `applyInsightTheme` stays the single place to diverge if dark needs it.
+- **Acceptance:** at z10 the busiest sectors show distinct red cores, not a single merged blob; at z13
+  individual clusters inside a sector separate; at z16 the glow sits under the dots; place names are
+  legible over the reddest spot in both themes.
+
+### 11.5 Basemap label dimming — new helper in `insightLayers.ts`
+
+`setBasemapLabelsDimmed(map, dimmed, isAppSource)`:
+
+- Targets every `symbol` layer whose source is **not** an app source (same `APP_SOURCE_IDS` test
+  `syncBasemap` already uses — no hardcoded MapTiler/CARTO ids).
+- On dim, caches each layer's original `text-opacity` / `icon-opacity`, then sets 50% of it:
+  a number (or unset = 1) → `× 0.5`; a zoom `interpolate`/`step` → halve each numeric stop output (a
+  zoom expression can't be wrapped in `['*', …]`); anything else → `0.5`.
+- On restore, writes the cached originals back.
+- Called from the mode-visibility effect, **and again at the end of `syncBasemap`** (cache cleared first,
+  since the theme swap replaces every basemap layer) — the §9 theme-swap gotcha applies here too.
+
+### 11.6 Theme-swap bug to fix in this phase
+
+`APP_SOURCE_IDS` (MapView.tsx) doesn't include `insight-tickets`, so `syncBasemap` treats the heat source
+as a basemap source and **deletes it and both heat layers on every theme toggle** — invisible until now
+only because the glow was hidden below z13. Add `INSIGHT_HEAT_SOURCE` to the set, and re-run the
+`insight-heat` "move below basemap labels" step after the swap re-adds the basemap.
+
+### 11.7 MapView wiring
+
+- **Paint effect** (`[insightsData, mode, insightFilters, heatMetric]`): drop rollups/breaks/`updateInsightSectorPaint`
+  and `insightPaintRef`; it only rebuilds the heat GeoJSON (`metric === 'total'` → all tickets, else open).
+  Remove the `insightPaintRef` re-apply from `syncBasemap`.
+- **Click (Heatmap branch)**, no crossover any more:
+  1. ticket-dot hit → `setInsightSector(sector)` + ticket popup (reuse `popupRef`; up to 5 tickets under
+     the cursor, "+N more"; each row = status dot, `#number`, status, priority, link to `/tickets/{number}`);
+  2. else `insight-sector-fill` hit → select that sector, and `fitBounds` only when current zoom < 13
+     (clicking while already zoomed in shouldn't jump the camera);
+  3. else → `setInsightSector(null)`.
+- Close the ticket popup on leaving Heatmap mode.
+- Visibility effect: `setInsightLabelVisible(map, mode === 'tickets')`; `setBasemapLabelsDimmed(map, mode === 'heatmap', …)`.
+
+### 11.8 Metric + legend — `aggregate.ts`, `heatScale.ts`, `InsightsModePanel.tsx`, `FloatingLegend`
+
+- `HeatMetric = 'total' | 'pctOpen'` (revised decision #6 above — no separate `'open'` value at all,
+  `'perHectare'` removed too); remove the `open`/`perHectare` cases from `heatValueForSector` and its tests.
+  `buildHeatFeatureCollection`'s existing `metric !== 'total'` check already means "open tickets only" for
+  whatever isn't `'total'`, so `pctOpen` gets open-ticket density on the map for free.
+- Switch: `Total · % open` (2-column grid, was 4). Default `heatMetric` state changes from `'open'` to
+  `'total'`. The sector list ranking/bars keep using `heatValueForSector` exactly as now, so % open stays
+  sector-wise.
+- `HEAT_PALETTE` (list dots/bars only) becomes solid green → red stops matching the glow ramp, so list and
+  map agree. `colorForValue` / quantile breaks unchanged.
+- Legend (panel + floating): replace the stepped `buildLegend` rows with one gradient bar built from the
+  glow ramp, labelled "Fewer" … "More tickets" (map is showing all tickets when Total is selected). Under
+  % open add a one-line note: "Map shows open-ticket density · list ranked by % open". Delete `buildLegend`
+  if nothing else uses it.
+- `FloatingLegend`'s heatmap branch no longer needs rollups/sectors.
+
+### 11.9 Verification + commit
+
+- `npx tsc --noEmit`, `npx eslint`, `npx vitest run --pool=threads`.
+- Browser (Admin): Heatmap at z10 / z13 / z16 in light and dark; only boundaries + glow (+ dimmed basemap
+  names) visible; names readable over the hottest spot; each metric and filter updates the glow instantly;
+  sector click selects (and flies only when zoomed out); dot click popup + link; **theme toggle mid-mode
+  keeps the glow**; leave Heatmap → basemap labels back to full strength, Map-mode layers exactly as before;
+  Ticket mode unchanged; icon switch keyboard-operable; 375 px strip fits. Surveyor still sees no switch.
+- One commit: `feat(insights): replace sector shading with a density heatmap (phase 7)`. Update this
+  plan's Status line and mark row 7 ✅.

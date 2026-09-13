@@ -53,32 +53,31 @@ import {
   addInsightLayers,
   addTicketLayers,
   buildHeatFeatureCollection,
+  clearBasemapLabelDimCache,
+  INSIGHT_HEAT_LAYER,
+  INSIGHT_HEAT_SOURCE,
   INSIGHT_SECTOR_FILL_LAYER,
   INSIGHT_HEAT_POINTS_LAYER,
-  INSIGHT_HEAT_ZOOM_CROSSOVER,
   INSIGHT_TICKET_FILL_LAYER,
   applyInsightTheme,
   applyTicketFeatureState,
   applyTicketTheme,
+  setBasemapLabelsDimmed,
   setInsightHeatData,
   setInsightLabelVisible,
   setInsightLayersVisible,
   setInsightSelectedFilter,
   setTicketLayersVisible,
-  updateInsightSectorPaint,
   updateTicketSectorLabels,
-  type SectorHeatValues,
 } from '@/components/map/insights/insightLayers'
 import {
   rollupBySector,
-  heatValueForSector,
   bucketBySectorPlanId,
-  type SectorRollup,
   type SectorPlanBucket,
   type InsightsFilters,
   type HeatMetric,
 } from '@/lib/insights/aggregate'
-import { computeQuantileBreaks, colorForValue, buildLegend } from '@/lib/insights/heatScale'
+import { heatGradientCss } from '@/lib/insights/heatScale'
 import {
   BUCKET_ORDER,
   BUCKET_LABELS,
@@ -791,6 +790,11 @@ const APP_SOURCE_IDS = new Set([
   'measure-label',
   'measure-preview',
   'measure-preview-label',
+  // Heatmap's ticket point source (see insightLayers.ts's addInsightLayers) -- missing from this
+  // set meant syncBasemap treated it as a basemap source and deleted it (and both heat layers)
+  // on every theme toggle, invisible until now only because the glow was hidden below z13
+  // (PLAN-heatmap.md §11.6).
+  INSIGHT_HEAT_SOURCE,
   ...POI_LAYER_DEFS.map((d) => d.key),
 ])
 
@@ -1034,25 +1038,51 @@ function loadStoredVisibility(): Record<string, boolean> {
 }
 
 // PLAN-heatmap.md §6.3: "A compact floating legend ... appears whenever the left panel is
-// collapsed, on any viewport, so the colours always have a key." Deliberately recomputes its own
-// small rollup/legend data from insightsData/filters/heatMetric rather than reaching into
-// insightPaintRef/ticketBucketRef (which hold richer per-sector state built for the map paint
-// effects) -- those refs aren't meant to be read from render, and duplicating the ~10 lines of
-// aggregation here is cheaper and safer than threading a new render-safe copy of that state out.
+// collapsed, on any viewport, so the colours always have a key." Heatmap's branch just mirrors
+// the panel's single gradient bar (§11.8) -- unlike Ticket mode below it, it needs no per-sector
+// rollup/breaks of its own anymore, so it doesn't take `sectors` and only reads `heatMetric` for
+// the end-label wording. Ticket mode still recomputes its own small rollup from
+// insightsData/filters rather than reaching into ticketBucketRef (which holds richer per-sector
+// state built for the map paint effects) -- that ref isn't meant to be read from render, and
+// duplicating the ~10 lines of aggregation here is cheaper and safer than threading a new
+// render-safe copy of that state out.
 function FloatingLegend({
   mode,
   insightsData,
   filters,
   heatMetric,
-  sectors,
 }: {
   mode: Exclude<MapMode, 'map'>
   insightsData: InsightsTicketData
   filters: InsightsFilters
   heatMetric: HeatMetric
-  sectors: Sector[]
 }) {
   const theme = useInsightTheme()
+  const wrapperBaseClass =
+    'pointer-events-none absolute bottom-8 left-3 z-10 rounded-lg border px-2.5 py-1.5 text-[10.5px] backdrop-blur-md shadow-lg'
+  const wrapperStyle = {
+    background: 'var(--map-panel-bg)',
+    borderColor: 'var(--map-panel-border)',
+    color: 'var(--map-fg-muted)',
+  }
+  if (mode === 'heatmap') {
+    return (
+      <div
+        className={`${wrapperBaseClass} flex flex-col gap-1`}
+        style={{ ...wrapperStyle, width: 148 }}
+      >
+        <div
+          className="h-2 w-full shrink-0 rounded-full"
+          style={{ background: heatGradientCss(theme) }}
+          aria-hidden
+        />
+        <div className="flex items-center justify-between whitespace-nowrap">
+          <span>Fewer</span>
+          <span>{heatMetric === 'pctOpen' ? 'More open' : 'More tickets'}</span>
+        </div>
+      </div>
+    )
+  }
   const rollups = rollupBySector(
     insightsData.tickets,
     insightsData.statuses,
@@ -1060,37 +1090,6 @@ function FloatingLegend({
     insightsData.classGroups,
     filters,
   )
-  const wrapperClass =
-    'pointer-events-none absolute bottom-8 left-3 z-10 flex flex-wrap gap-x-2.5 gap-y-1 rounded-lg border px-2.5 py-1.5 text-[10.5px] backdrop-blur-md shadow-lg'
-  const wrapperStyle = {
-    background: 'var(--map-panel-bg)',
-    borderColor: 'var(--map-panel-border)',
-    color: 'var(--map-fg-muted)',
-  }
-  if (mode === 'heatmap') {
-    const sectorAreaByNo = new Map(sectors.map((s) => [s.sector_no, s.area_hac]))
-    const values: number[] = []
-    for (const [sectorNo, rollup] of rollups) {
-      if (sectorNo === null) continue
-      values.push(heatValueForSector(rollup, heatMetric, sectorAreaByNo.get(sectorNo) ?? 0))
-    }
-    const breaks = computeQuantileBreaks(values)
-    const entries = buildLegend(breaks, theme)
-    return (
-      <div className={wrapperClass} style={wrapperStyle}>
-        {entries.map((entry) => (
-          <span key={entry.label} className="flex items-center gap-1 whitespace-nowrap">
-            <span
-              className="h-2 w-2 shrink-0 rounded-sm"
-              style={{ background: entry.color }}
-              aria-hidden
-            />
-            {entry.label}
-          </span>
-        ))}
-      </div>
-    )
-  }
   const counts: Record<StatusBucket, number> = { new: 0, progress: 0, resolved: 0, closed: 0 }
   for (const rollup of rollups.values()) {
     counts.new += rollup.newCount
@@ -1099,7 +1098,7 @@ function FloatingLegend({
     counts.closed += rollup.closed
   }
   return (
-    <div className={wrapperClass} style={wrapperStyle}>
+    <div className={`${wrapperBaseClass} flex flex-wrap gap-x-2.5 gap-y-1`} style={wrapperStyle}>
       {BUCKET_ORDER.map((bucket) => (
         <span key={bucket} className="flex items-center gap-1 whitespace-nowrap">
           <span
@@ -1132,6 +1131,13 @@ export default function MapView({
   const searchParams = useSearchParams()
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MLMap | null>(null)
+  /** Flips true once the map's 'load' event has fired (style + our own layers/sources are in
+   *  place). Effects below that call isStyleLoaded()-guarded map APIs depend on this so they get
+   *  a second chance to run once the style actually finishes loading -- without it, an effect
+   *  whose other deps (e.g. `mode` from a `?mode=heatmap` URL) are already at their target value
+   *  on mount never re-runs, and its mount-time isStyleLoaded() check (false while the vendored
+   *  basemap style JSON is still being fetched) becomes the only attempt, silently dropped. */
+  const [mapReady, setMapReady] = useState(false)
   const popupRef = useRef<Popup | null>(null)
   const hoveredSectorRef = useRef<number | null>(null)
   /** sectorPlanId of the parcel the currently-open popup belongs to — lets the async ticket
@@ -1514,6 +1520,23 @@ export default function MapView({
       // new pale basemap.
       if (basemap.sprite) map.setSprite(basemap.sprite)
 
+      // insight-heat must repaint below the (new) basemap's own place-name/road-label symbol
+      // layers, same "labels on top of the glow" positioning addInsightLayers already gives it at
+      // initial load (see its firstSymbolLayerId lookup) -- otherwise every layer just re-added
+      // above lands BELOW insight-heat (insight-heat ended up as the app's lowest layer at initial
+      // load, i.e. exactly `firstNonBasemapLayerId`, so the whole new basemap -- including its own
+      // symbol layers -- gets spliced in underneath it), putting the new basemap's labels back
+      // under the glow on every theme toggle (PLAN-heatmap.md §11.6). Searches the freshly loaded
+      // `basemap.layers` array itself, not map.getStyle().layers -- the style at this point would
+      // just find insight-heat again (still the lowest app layer until this moveLayer runs).
+      // Guarded on getLayer: a Surveyor/non-insights session never creates this layer at all.
+      if (map.getLayer(INSIGHT_HEAT_LAYER)) {
+        const newBasemapSymbolId = (basemap.layers as { id: string; type: string }[]).find(
+          (l) => l.type === 'symbol',
+        )?.id
+        if (newBasemapSymbolId) map.moveLayer(INSIGHT_HEAT_LAYER, newBasemapSymbolId)
+      }
+
       // Sector hover/selected/boundary colors are plain static paint values
       // (not CSS var()s), so they don't follow the theme for free the way
       // the map's popups/controls do -- re-applied here alongside the
@@ -1604,18 +1627,18 @@ export default function MapView({
       }
 
       // Heatmap's colour ramp/label/circle colours are theme-aware plain paint values same as
-      // everything else in this effect. Sector fill/outline additionally depend on the live heat
-      // values/breaks (not just theme), which don't live in React state -- insightPaintRef mirrors
-      // the last computed values so a theme toggle mid-Heatmap-mode recolours immediately instead
-      // of waiting for insightsData to change (it won't; it's the same fetch).
+      // everything else in this effect -- the glow itself no longer depends on live heat
+      // values/breaks (sector shading was removed in Phase 7, see PLAN-heatmap.md §11).
       applyInsightTheme(map, theme)
-      if (insightPaintRef.current) {
-        const { values, rollups, breaks } = insightPaintRef.current
-        updateInsightSectorPaint(map, values, rollups, breaks, theme, colorForValue)
-      }
       // Ticket mode's fill/outline colours (Phase 4) are plain theme-dependent paint values same
       // as everything above -- no data recompute needed, feature-state itself doesn't change.
       applyTicketTheme(map, theme)
+      // The theme swap just destroyed and recreated every basemap layer object above, so any
+      // cached "original opacity" from the OLD basemap's same-id layers is meaningless for the
+      // NEW one -- clear it, then re-dim from the new layers' own defaults if Heatmap is active
+      // (PLAN-heatmap.md §11.5/§11.6).
+      clearBasemapLabelDimCache()
+      setBasemapLabelsDimmed(map, modeRef.current === 'heatmap', (id) => APP_SOURCE_IDS.has(id))
     }
 
     const observer = new MutationObserver(() => void syncBasemap())
@@ -1674,6 +1697,8 @@ export default function MapView({
     parcel:
       '<path d="M4 8.5L12 4l8 4.5v7L12 20l-8-4.5v-7z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M4 8.5L12 13l8-4.5M12 13v7" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
     poi: '<path d="M12 21s7-6.1 7-11.5S16.4 3 12 3 5 5.6 5 9.5 12 21 12 21z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="9.5" r="2.4" stroke="currentColor" stroke-width="1.6"/>',
+    ticket:
+      '<path d="M4 8a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 000 4v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2a2 2 0 000-4V8z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M10 7v10" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2.2 2.2"/>',
   }
 
   // POI feature properties vary per layer/table (see LAYERS in the tiles
@@ -2823,25 +2848,134 @@ export default function MapView({
           return
         }
 
-        // Heatmap mode's own click handling (see PLAN-heatmap.md §5.4) -- takes over entirely
+        // Heatmap mode's own click handling (revised PLAN-heatmap.md §11.7) -- takes over entirely
         // while active, before any of the plain-map hit-testing below (which would find nothing
         // useful anyway, since sector_plan/sector_boundary are hidden in this mode). Ticket mode
         // has its own branch just below this one, since it needs the real sector_plan/-hit-target
-        // layers (kept visible in Ticket mode, see visibilityForMode) rather than Heatmap's.
+        // layers (kept visible in Ticket mode, see visibilityForMode) rather than Heatmap's. There
+        // is no more zoom-crossover split -- the density glow is visible at every zoom now, so
+        // ticket dots (available from z15.5) are always checked first regardless of zoom.
         if (modeRef.current === 'heatmap') {
-          const zoomedOut = map.getZoom() < INSIGHT_HEAT_ZOOM_CROSSOVER
-          if (zoomedOut) {
-            // Sector shading is what's visible at this zoom -- hit-test the fill itself and
-            // fly to the clicked sector's real extent (from `sectors`, fetched separately from
-            // the tile source and read via a ref since this closure is created once on mount).
-            const hits = map.queryRenderedFeatures(e.point, { layers: [INSIGHT_SECTOR_FILL_LAYER] })
-            if (hits.length === 0) {
-              setInsightSector(null)
-              return
+          const bbox: [[number, number], [number, number]] = [
+            [e.point.x - 4, e.point.y - 4],
+            [e.point.x + 4, e.point.y + 4],
+          ]
+          const pointHits = map.queryRenderedFeatures(bbox, { layers: [INSIGHT_HEAT_POINTS_LAYER] })
+          if (pointHits.length > 0) {
+            const data = insightsDataRef.current
+            const seen = new Set<number>()
+            const rows: {
+              number: number
+              statusName: string
+              statusColor: string
+              priorityName: string
+              classGroupName: string | null
+            }[] = []
+            for (const hit of pointHits) {
+              const num = hit.properties?.number
+              if (typeof num !== 'number' || seen.has(num)) continue
+              seen.add(num)
+              const statusIdx = hit.properties?.status_idx
+              const priorityIdx = hit.properties?.priority_idx
+              const classGroupIdx = hit.properties?.class_group_idx
+              const status =
+                data && typeof statusIdx === 'number' ? data.statuses[statusIdx] : undefined
+              const priority =
+                data && typeof priorityIdx === 'number' ? data.priorities[priorityIdx] : undefined
+              const classGroupName =
+                data && typeof classGroupIdx === 'number'
+                  ? (data.classGroups[classGroupIdx] ?? null)
+                  : null
+              rows.push({
+                number: num,
+                statusName: status?.name ?? 'Unknown',
+                statusColor: status ? BUCKET_COLORS[status.bucket][readMapTheme()] : '#94a3b8',
+                priorityName: priority?.name ?? 'Unknown',
+                classGroupName,
+              })
             }
-            const raw = hits[0].properties?.sector_no
-            const sectorNo = typeof raw === 'number' ? raw : null
-            setInsightSector(sectorNo)
+            const raw = pointHits[0].properties?.sector_no
+            setInsightSector(typeof raw === 'number' ? raw : 'peripheral')
+
+            popupRef.current?.remove()
+            const shown = rows.slice(0, 5)
+            const extra = rows.length - shown.length
+            const single = rows.length === 1 ? rows[0] : null
+            const headerTitle = single
+              ? (single.classGroupName ?? 'Ticket')
+              : `${rows.length} tickets here`
+            const headerSubtitle = single ? `Ticket #${single.number}` : null
+            const headerHtml = `
+              <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 16px 12px;border-bottom:1px solid var(--map-popup-row-border)">
+                <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;background:color-mix(in srgb, var(--map-accent) 9%, transparent);color:var(--map-accent)">
+                  <svg viewBox="0 0 24 24" fill="none" width="17" height="17">${POPUP_ICON_PATHS.ticket}</svg>
+                </span>
+                <div style="min-width:0">
+                  <div style="font-size:13.5px;font-weight:700;color:var(--map-popup-heading);line-height:1.3;overflow-wrap:anywhere">${escapeHtml(headerTitle)}</div>
+                  ${headerSubtitle ? `<div style="margin-top:1px;font-size:11.5px;color:var(--map-popup-subtle)">${escapeHtml(headerSubtitle)}</div>` : ''}
+                </div>
+              </div>`
+            // Label:value rows (propertyRowsHtml's convention) for a single ticket -- for a
+            // cluster of several, each ticket instead gets its own compact block (number/category
+            // header line + the same two rows) so all N stay scannable in one 240px-wide card.
+            const propertyRow = (label: string, value: string, first: boolean) =>
+              `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:5px 0;${first ? '' : 'border-top:1px solid var(--map-popup-row-border)'}">
+                <span style="font-size:11.5px;color:var(--map-popup-faint)">${escapeHtml(label)}</span>
+                <span style="font-size:12.5px;font-weight:600;color:var(--map-popup-heading);text-align:right;overflow-wrap:anywhere">${escapeHtml(value)}</span>
+              </div>`
+            const bodyHtml = single
+              ? `<div style="padding:10px 16px 4px;display:flex;flex-direction:column">
+                  ${propertyRow('Status', single.statusName, true)}
+                  ${propertyRow('Priority', single.priorityName, false)}
+                </div>
+                <div style="padding:10px 16px 14px">
+                  <a href="/tickets/${single.number}" style="display:inline-flex;align-items:center;gap:4px;color:var(--map-accent);font-weight:700;text-decoration:none;font-size:12px">Show the ticket <span style="font-size:13px">→</span></a>
+                </div>`
+              : `<div style="padding:2px 16px 12px;display:flex;flex-direction:column">
+                  ${shown
+                    .map(
+                      (
+                        t,
+                        i,
+                      ) => `<div style="padding:9px 0;${i > 0 ? 'border-top:1px solid var(--map-popup-row-border)' : ''}">
+                        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
+                          <a href="/tickets/${t.number}" style="font-size:12.5px;font-weight:700;color:var(--map-popup-heading);text-decoration:none">#${t.number}</a>
+                          ${t.classGroupName ? `<span style="font-size:11px;color:var(--map-popup-faint);text-align:right;overflow-wrap:anywhere">${escapeHtml(t.classGroupName)}</span>` : ''}
+                        </div>
+                        <div style="display:flex;justify-content:space-between;gap:10px;margin-top:3px">
+                          <span style="font-size:11.5px;color:var(--map-popup-subtle)">${escapeHtml(t.statusName)}</span>
+                          <span style="font-size:11.5px;color:var(--map-popup-subtle)">${escapeHtml(t.priorityName)}</span>
+                        </div>
+                      </div>`,
+                    )
+                    .join('')}
+                  ${extra > 0 ? `<div style="font-size:11.5px;color:var(--map-popup-subtle);padding-top:6px">+${extra} more</div>` : ''}
+                </div>`
+            const html = `<div style="font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;width:240px">
+              ${headerHtml}
+              ${bodyHtml}
+            </div>`
+            popupRef.current = new Popup({ closeButton: true, maxWidth: '260px' })
+              .setLngLat(e.lngLat)
+              .setHTML(html)
+              .addTo(map)
+            return
+          }
+
+          // No ticket dot under the cursor -- fall back to the (invisible) sector hit-target so
+          // bare sector area still selects that sector for the Insights panel. Only recenters the
+          // camera when zoomed out; a click while already close in shouldn't jump the view.
+          const sectorHits = map.queryRenderedFeatures(e.point, {
+            layers: [INSIGHT_SECTOR_FILL_LAYER],
+          })
+          if (sectorHits.length === 0) {
+            setInsightSector(null)
+            return
+          }
+          const raw = sectorHits[0].properties?.sector_no
+          const sectorNo = typeof raw === 'number' ? raw : null
+          setInsightSector(sectorNo)
+          if (map.getZoom() < 13) {
             const sector =
               sectorNo === null
                 ? undefined
@@ -2855,23 +2989,7 @@ export default function MapView({
                 { padding: mapFlyPadding(), duration: 600 },
               )
             }
-            return
           }
-          // Zoomed in far enough for the heat glow + individual ticket points to show instead --
-          // a point hit selects its sector for the Insights panel; empty area (or a hit with no
-          // numbered sector, i.e. a peripheral ticket) falls back to sector-hit-target so bare
-          // sector area still selects that sector even with no ticket directly under the cursor.
-          const pointHits = map.queryRenderedFeatures(e.point, {
-            layers: [INSIGHT_HEAT_POINTS_LAYER],
-          })
-          if (pointHits.length > 0) {
-            const raw = pointHits[0].properties?.sector_no
-            setInsightSector(typeof raw === 'number' ? raw : 'peripheral')
-            return
-          }
-          const sectorHits = map.queryRenderedFeatures(e.point, { layers: ['sector-hit-target'] })
-          const raw = sectorHits[0]?.properties?.sector_no
-          setInsightSector(typeof raw === 'number' ? raw : null)
           return
         }
 
@@ -3045,6 +3163,8 @@ export default function MapView({
       map.on('mouseout', () => {
         if (measuringRef.current) clearPreview()
       })
+
+      setMapReady(true)
     })
 
     mapCleanupRef.current = () => {
@@ -3237,27 +3357,39 @@ export default function MapView({
   // catches the one-time swap from SSR-safe defaults to the
   // localStorage-restored value performed by the mount effect above (which
   // changes `visibility` identity, so this effect re-runs and reconciles the
-  // map to match).
+  // map to match). Gated on `mapReady`, not isStyleLoaded(): the layers this
+  // touches are only created once initMap's 'load' handler runs, so mapReady
+  // (set at the end of that handler) is the real precondition, and
+  // setLayoutProperty is safe on an already-created layer regardless of
+  // whether tiles are still streaming in. isStyleLoaded() looked like the
+  // right guard but isn't -- like the POI subclass-filter effect below found,
+  // it can read false right as 'load' fires (freshly-added vector sources
+  // haven't loaded their first tiles yet) and then never flip back to true,
+  // so a mode that's already at its target value on mount (from a `?mode=`
+  // URL) got exactly one isStyleLoaded()-gated attempt and silently lost it.
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !map.isStyleLoaded()) return
+    if (!map || !mapReady) return
     applyLayerVisibility(map, visibilityForMode(visibility, mode))
     setInsightLayersVisible(map, mode === 'heatmap')
     setTicketLayersVisible(map, mode === 'tickets')
-    setInsightLabelVisible(map, mode === 'heatmap' || mode === 'tickets')
-  }, [visibility, mode])
+    setInsightLabelVisible(map, mode === 'tickets')
+    setBasemapLabelsDimmed(map, mode === 'heatmap', (id) => APP_SOURCE_IDS.has(id))
+    if (mode !== 'heatmap') popupRef.current?.remove()
+  }, [visibility, mode, mapReady])
 
   // Keeps the double-stroke selected-sector highlight in sync with insightSector while Heatmap is
   // active -- filtered to -1 (matches nothing) the rest of the time via setInsightSelectedFilter's
   // own null handling, so it never lingers visible after leaving the mode or clicking empty area.
+  // Gated on mapReady for the same isStyleLoaded()-is-unreliable reason as the visibility effect.
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !map.isStyleLoaded()) return
+    if (!map || !mapReady) return
     setInsightSelectedFilter(
       map,
       mode === 'heatmap' && typeof insightSector === 'number' ? insightSector : null,
     )
-  }, [mode, insightSector])
+  }, [mode, insightSector, mapReady])
 
   const insightsActive = canUseInsights && (mode === 'heatmap' || mode === 'tickets')
   // Tracks InsightsModePanel's actual collapsed state (via Panel's onRenderedWidthChange, which
@@ -3271,6 +3403,13 @@ export default function MapView({
     error: insightsError,
     refetch: refetchInsights,
   } = useTicketInsights(insightsActive)
+  /** Mirrors `insightsData` for the map's one-time 'load' handler (the Heatmap click handler's
+   *  ticket-dot popup needs status/priority names by index) -- same staleness reason as
+   *  sectorsRef/modeRef: insightsData loads asynchronously well after that closure was created. */
+  const insightsDataRef = useRef<InsightsTicketData | null>(null)
+  useEffect(() => {
+    insightsDataRef.current = insightsData ?? null
+  }, [insightsData])
   /** Status/priority/category/created filters shared by both modes -- lifted here (not local to
    *  InsightsModePanel) because the panel's own chip UI, the Heatmap paint effect and Ticket
    *  mode's feature-state recolouring effect below all need the same value. Empty filters (the
@@ -3280,38 +3419,19 @@ export default function MapView({
   /** Heatmap's metric switch (Open / % open / Total / Per ha) -- Ticket mode has no metric of its
    *  own (its ranked list and legend are always by open count), so this only drives the Heatmap
    *  paint effect and InsightsModePanel's segmented control while mode === 'heatmap'. */
-  const [heatMetric, setHeatMetric] = useState<HeatMetric>('open')
-  /** Latest computed heat values/rollups/breaks, read by the theme-swap effect (syncBasemap) to
-   *  recolour insight layers on a theme toggle without waiting for insightsData to change --
-   *  same ref-mirror reasoning as visibilityRef/modeRef, just for derived data instead of state. */
-  const insightPaintRef = useRef<{
-    values: SectorHeatValues
-    rollups: Map<number | null, SectorRollup>
-    breaks: number[]
-  } | null>(null)
+  const [heatMetric, setHeatMetric] = useState<HeatMetric>('total')
 
+  // Rebuilds the heat glow's point data on data/filter/metric change -- sector shading is gone
+  // (Phase 7, PLAN-heatmap.md §11), so this no longer computes rollups/breaks/colours, just the
+  // GeoJSON the density heatmap layer renders from. Gated on `mapReady`, not isStyleLoaded(): the
+  // 'insight-tickets' source this writes into only exists once initMap's 'load' handler has run,
+  // and setData is safe on it regardless of whether other sources are still streaming tiles --
+  // isStyleLoaded() can (and on a fresh `?mode=heatmap` deep link, reliably does) read false right
+  // as 'load' fires and never recover, same flakiness documented at the POI subclass-filter effect
+  // below, which is why that one dropped isStyleLoaded() entirely rather than retry on it.
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !map.isStyleLoaded() || mode !== 'heatmap' || !insightsData) return
-
-    const rollups = rollupBySector(
-      insightsData.tickets,
-      insightsData.statuses,
-      insightsData.priorities,
-      insightsData.classGroups,
-      insightFilters,
-    )
-    const values: SectorHeatValues = new Map()
-    for (const [sectorNo, rollup] of rollups) {
-      if (sectorNo === null) continue // peripheral tickets have no sector polygon to colour
-      const area = sectorsRef.current.find((s) => s.sector_no === sectorNo)?.area_hac ?? 0
-      values.set(sectorNo, heatValueForSector(rollup, heatMetric, area))
-    }
-    const breaks = computeQuantileBreaks(Array.from(values.values()))
-    insightPaintRef.current = { values, rollups, breaks }
-
-    const theme = readMapTheme()
-    updateInsightSectorPaint(map, values, rollups, breaks, theme, colorForValue)
+    if (!map || !mapReady || mode !== 'heatmap' || !insightsData) return
     setInsightHeatData(
       map,
       buildHeatFeatureCollection(
@@ -3323,7 +3443,7 @@ export default function MapView({
         heatMetric,
       ),
     )
-  }, [insightsData, mode, insightFilters, heatMetric])
+  }, [insightsData, mode, insightFilters, heatMetric, mapReady])
 
   /** Last sectorPlanId->bucket map actually applied to feature-state, so the effect below only
    *  touches parcels whose bucket changed (PLAN-heatmap.md §9's "diff against the previous bucket
@@ -3339,9 +3459,13 @@ export default function MapView({
    *  decision, not something the pure diff function itself should own). */
   const ticketFeatureStateRafRef = useRef<number | null>(null)
 
+  // Gated on mapReady, not isStyleLoaded(), for the same reason as the heat-data paint effect
+  // above -- the parcel layers this writes feature-state onto already exist by the time mapReady
+  // is true, and a fresh `?mode=tickets` deep link is exactly the case where isStyleLoaded()
+  // can't be trusted to ever read true again after 'load' fires.
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !map.isStyleLoaded() || mode !== 'tickets' || !insightsData) return
+    if (!map || !mapReady || mode !== 'tickets' || !insightsData) return
 
     // Sector labels ("S7 · 52% resolved") describe the sector's real, unfiltered progress --
     // a filter chip narrows which parcels are highlighted, it doesn't redefine what "resolved"
@@ -3375,7 +3499,7 @@ export default function MapView({
         ticketFeatureStateRafRef.current = null
       }
     }
-  }, [insightsData, mode, insightFilters])
+  }, [insightsData, mode, insightFilters, mapReady])
 
   /** Selects a sector from InsightsModePanel's ranked list (as opposed to a map click, which the
    *  `load` handler's own click branches already handle) -- flies to the sector's real extent the
@@ -5357,6 +5481,15 @@ export default function MapView({
                 : [...(f.classGroups ?? []), classGroup],
             }))
           }
+          onClearClassGroups={() => setInsightFilters((f) => ({ ...f, classGroups: undefined }))}
+          onFilterPriority={(prioritySlug) =>
+            setInsightFilters((f) => ({
+              ...f,
+              prioritySlugs: f.prioritySlugs?.includes(prioritySlug)
+                ? f.prioritySlugs.filter((p) => p !== prioritySlug)
+                : [...(f.prioritySlugs ?? []), prioritySlug],
+            }))
+          }
           onClearFilters={() => setInsightFilters({})}
           onLocate={flyToLocateFeature}
           onWidthChange={(w) => {
@@ -5385,7 +5518,6 @@ export default function MapView({
           insightsData={insightsData}
           filters={insightFilters}
           heatMetric={heatMetric}
-          sectors={sectors}
         />
       )}
     </div>

@@ -1,7 +1,7 @@
 import { isOpenBucket, type StatusBucket } from './statusBuckets'
 import { TicketField, type InsightsStatusRow, type InsightsTicketTuple } from './types'
 
-export type HeatMetric = 'open' | 'pctOpen' | 'total' | 'perHectare'
+export type HeatMetric = 'total' | 'pctOpen'
 
 export type InsightsFilters = {
   statusSlugs?: string[]
@@ -142,22 +142,13 @@ export function bucketBySectorPlanId(
   return result
 }
 
-/** Reduces a sector's rollup to the single number the active heat metric colours it by.
- *  `areaHectares` is required for 'perHectare' and ignored otherwise (pass 0 if unknown). */
-export function heatValueForSector(
-  rollup: SectorRollup | undefined,
-  metric: HeatMetric,
-  areaHectares: number,
-): number {
+/** Reduces a sector's rollup to the single number the active heat metric colours it by. */
+export function heatValueForSector(rollup: SectorRollup | undefined, metric: HeatMetric): number {
   if (!rollup || rollup.total === 0) return 0
   switch (metric) {
-    case 'open':
-      return rollup.open
     case 'pctOpen':
       return (rollup.open / rollup.total) * 100
     case 'total':
       return rollup.total
-    case 'perHectare':
-      return areaHectares > 0 ? rollup.total / areaHectares : 0
   }
 }

@@ -209,19 +209,13 @@ describe('heatValueForSector', () => {
   }
 
   it('returns 0 for an undefined rollup or zero-total rollup', () => {
-    expect(heatValueForSector(undefined, 'open', 0)).toBe(0)
-    expect(heatValueForSector({ ...rollup, total: 0 }, 'open', 0)).toBe(0)
+    expect(heatValueForSector(undefined, 'total')).toBe(0)
+    expect(heatValueForSector({ ...rollup, total: 0 }, 'total')).toBe(0)
   })
 
   it('computes each metric correctly', () => {
-    expect(heatValueForSector(rollup, 'open', 0)).toBe(4)
-    expect(heatValueForSector(rollup, 'total', 0)).toBe(10)
-    expect(heatValueForSector(rollup, 'pctOpen', 0)).toBe(40)
-    expect(heatValueForSector(rollup, 'perHectare', 5)).toBe(2)
-  })
-
-  it('returns 0 for perHectare when area is unknown (0)', () => {
-    expect(heatValueForSector(rollup, 'perHectare', 0)).toBe(0)
+    expect(heatValueForSector(rollup, 'total')).toBe(10)
+    expect(heatValueForSector(rollup, 'pctOpen')).toBe(40)
   })
 })
 

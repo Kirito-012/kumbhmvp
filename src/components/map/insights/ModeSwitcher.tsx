@@ -73,11 +73,14 @@ export default function ModeSwitcher({
       <div
         aria-hidden="true"
         style={{
-          width: `${100 / SEGMENTS.length}%`,
-          transform: `translateX(${activeIndex * 100}%)`,
+          // Fixed 2rem (matches each button's w-8) rather than a percentage of the container --
+          // a percentage here resolves against the *padded* box (this div's positioned ancestor
+          // includes the p-1 padding), not the 32px buttons themselves, so it was a few px wider
+          // than each icon and drifted further off-center at every step (worse toward Tickets).
+          transform: `translateX(${activeIndex * 2}rem)`,
           background: INDICATOR_VAR[mode],
         }}
-        className="absolute inset-y-1 left-1 rounded-md transition-transform duration-200 ease-out"
+        className="absolute inset-y-1 left-1 w-8 rounded-md transition-transform duration-200 ease-out"
       />
       {SEGMENTS.map(({ mode: segMode, label, icon: Icon }, index) => {
         const active = segMode === mode
@@ -96,10 +99,9 @@ export default function ModeSwitcher({
             onClick={() => onChange(segMode)}
             onKeyDown={(e) => onKeyDown(e, index)}
             style={{ color: active ? '#fff' : 'var(--map-fg-muted)' }}
-            className="relative z-10 inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-md px-2 text-[12.5px] font-semibold transition-colors"
+            className="relative z-10 inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors"
           >
             <Icon className="h-4 w-4 shrink-0" />
-            <span className="hidden lg:inline">{label}</span>
           </button>
         )
       })}

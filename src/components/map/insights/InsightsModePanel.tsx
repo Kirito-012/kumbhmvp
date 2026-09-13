@@ -10,15 +10,15 @@ import {
   heatValueForSector,
   type HeatMetric,
   type InsightsFilters,
+  type SectorRollup,
 } from '@/lib/insights/aggregate'
-import { computeQuantileBreaks, colorForValue, buildLegend } from '@/lib/insights/heatScale'
+import { computeQuantileBreaks, colorForValue, heatGradientCss } from '@/lib/insights/heatScale'
 import {
   BUCKET_ORDER,
   BUCKET_LABELS,
   BUCKET_COLORS,
   type StatusBucket,
 } from '@/lib/insights/statusBuckets'
-import { CLASS_GROUP_COLORS } from '@/lib/classColors'
 import type { InsightsTicketData } from '@/lib/insights/types'
 import { timeAgo } from '@/lib/utils'
 
@@ -32,58 +32,9 @@ function formatSectorLabel(sector: Pick<SectorSummary, 'sector_no' | 'name'>): s
 }
 
 const METRIC_OPTIONS: { value: HeatMetric; label: string }[] = [
-  { value: 'open', label: 'Open' },
-  { value: 'pctOpen', label: '% open' },
   { value: 'total', label: 'Total' },
-  { value: 'perHectare', label: 'Per ha' },
+  { value: 'pctOpen', label: '% open' },
 ]
-
-const CREATED_OPTIONS: { value: number | undefined; label: string }[] = [
-  { value: undefined, label: 'Any' },
-  { value: 24 * 3_600_000, label: '24h' },
-  { value: 7 * 86_400_000, label: '7d' },
-  { value: 30 * 86_400_000, label: '30d' },
-]
-
-function Chip({
-  active,
-  color,
-  onClick,
-  children,
-}: {
-  active: boolean
-  color?: string
-  onClick: () => void
-  children: ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium transition-colors"
-      style={
-        active
-          ? {
-              borderColor: color ?? 'var(--map-accent)',
-              background: color
-                ? `color-mix(in srgb, ${color} 18%, transparent)`
-                : 'var(--map-accent-bg)',
-              color: 'var(--map-fg)',
-            }
-          : {
-              borderColor: 'var(--map-border)',
-              color: 'var(--map-fg-muted)',
-            }
-      }
-    >
-      {color && (
-        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
-      )}
-      {children}
-    </button>
-  )
-}
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
@@ -234,10 +185,6 @@ function InsightsModeBody({
   heatMetric,
   onHeatMetricChange,
   filters,
-  hasActiveFilters,
-  onClearFilters,
-  toggleArrayFilter,
-  setCreatedWithin,
   selectedSector,
   onSelectSector,
   theme,
@@ -250,10 +197,6 @@ function InsightsModeBody({
   heatMetric: HeatMetric
   onHeatMetricChange: (metric: HeatMetric) => void
   filters: InsightsFilters
-  hasActiveFilters: boolean
-  onClearFilters: () => void
-  toggleArrayFilter: (key: 'statusSlugs' | 'prioritySlugs' | 'classGroups', value: string) => void
-  setCreatedWithin: (ms: number | undefined) => void
   selectedSector: number | 'peripheral' | null
   onSelectSector: (sector: number | 'peripheral') => void
   theme: ReturnType<typeof useInsightTheme>
@@ -261,7 +204,6 @@ function InsightsModeBody({
   onRefresh: () => void
 }) {
   const isHeatmap = mode === 'heatmap'
-  const metric: HeatMetric = isHeatmap ? heatMetric : 'open'
 
   const rollups = rollupBySector(
     insightsData.tickets,
@@ -284,11 +226,15 @@ function InsightsModeBody({
     bucketCounts.closed += rollup.closed
   }
 
-  const sectorAreaByNo = new Map(sectors.map((s) => [s.sector_no, s.area_hac]))
+  // Ticket mode has no metric switch of its own -- it always ranks/colours the list by open-ticket
+  // count, same as Heatmap's old 'open' default before §11.8 dropped that as a HeatMetric value.
+  const rankValue = (rollup: SectorRollup | undefined) =>
+    isHeatmap ? heatValueForSector(rollup, heatMetric) : (rollup?.open ?? 0)
+
   const values = new Map<number, number>()
   for (const [sectorNo, rollup] of rollups) {
     if (sectorNo === null) continue
-    values.set(sectorNo, heatValueForSector(rollup, metric, sectorAreaByNo.get(sectorNo) ?? 0))
+    values.set(sectorNo, rankValue(rollup))
   }
   const breaks = computeQuantileBreaks(Array.from(values.values()))
 
@@ -299,8 +245,7 @@ function InsightsModeBody({
       value: values.get(s.sector_no) ?? 0,
     }))
     .sort((a, b) => b.value - a.value)
-  const peripheralRollup = rollups.get(null)
-  const peripheralValue = peripheralRollup ? heatValueForSector(peripheralRollup, metric, 0) : 0
+  const peripheralValue = rankValue(rollups.get(null))
   const ranked = [
     ...rankedNamed,
     { key: 'peripheral' as const, label: 'Peripheral', value: peripheralValue },
@@ -308,11 +253,7 @@ function InsightsModeBody({
   const maxValue = Math.max(1, ...ranked.map((r) => r.value))
 
   const metricValueLabel = (value: number) =>
-    metric === 'pctOpen'
-      ? `${Math.round(value)}%`
-      : metric === 'perHectare'
-        ? value.toFixed(1)
-        : String(Math.round(value))
+    isHeatmap && heatMetric === 'pctOpen' ? `${Math.round(value)}%` : String(Math.round(value))
 
   return (
     <div className="flex flex-col gap-4">
@@ -320,7 +261,7 @@ function InsightsModeBody({
         <div>
           <SectionLabel>Metric</SectionLabel>
           <div
-            className="grid grid-cols-4 gap-1 rounded-lg border p-0.5"
+            className="grid grid-cols-2 gap-1 rounded-lg border p-0.5"
             style={{ borderColor: 'var(--map-border)' }}
           >
             {METRIC_OPTIONS.map((opt) => (
@@ -346,21 +287,24 @@ function InsightsModeBody({
       <div>
         <SectionLabel>Legend</SectionLabel>
         {isHeatmap ? (
-          <div className="flex flex-col gap-1">
-            {buildLegend(breaks, theme).map((entry) => (
-              <div
-                key={entry.label}
-                className="flex items-center gap-2 text-[11.5px]"
-                style={{ color: 'var(--map-fg-muted)' }}
-              >
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                  style={{ background: entry.color }}
-                  aria-hidden
-                />
-                {entry.label}
-              </div>
-            ))}
+          <div className="flex flex-col gap-1.5">
+            <div
+              className="h-2.5 w-full shrink-0 rounded-full"
+              style={{ background: heatGradientCss(theme) }}
+              aria-hidden
+            />
+            <div
+              className="flex items-center justify-between text-[11.5px]"
+              style={{ color: 'var(--map-fg-muted)' }}
+            >
+              <span>Fewer</span>
+              <span>{heatMetric === 'pctOpen' ? 'More open tickets' : 'More tickets'}</span>
+            </div>
+            {heatMetric === 'pctOpen' && (
+              <p className="text-[10.5px]" style={{ color: 'var(--map-fg-faint)' }}>
+                Map shows open-ticket density · list ranked by % open
+              </p>
+            )}
           </div>
         ) : (
           <div className="flex flex-col gap-1">
@@ -387,73 +331,6 @@ function InsightsModeBody({
             })}
           </div>
         )}
-      </div>
-
-      <div>
-        <div className="mb-1.5 flex items-center justify-between">
-          <SectionLabel>Filters</SectionLabel>
-          {hasActiveFilters && (
-            <button
-              type="button"
-              onClick={onClearFilters}
-              className="cursor-pointer text-[10.5px] font-semibold underline-offset-2 hover:underline"
-              style={{ color: 'var(--map-accent)' }}
-            >
-              Clear
-            </button>
-          )}
-        </div>
-        <div className="flex flex-col gap-2">
-          <div className="flex flex-wrap gap-1.5">
-            {insightsData.statuses.map((s) => (
-              <Chip
-                key={s.slug}
-                active={filters.statusSlugs?.includes(s.slug) ?? false}
-                color={s.color}
-                onClick={() => toggleArrayFilter('statusSlugs', s.slug)}
-              >
-                {s.name}
-              </Chip>
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {[...insightsData.priorities]
-              .sort((a, b) => a.order - b.order)
-              .map((p) => (
-                <Chip
-                  key={p.slug}
-                  active={filters.prioritySlugs?.includes(p.slug) ?? false}
-                  color={p.color}
-                  onClick={() => toggleArrayFilter('prioritySlugs', p.slug)}
-                >
-                  {p.name}
-                </Chip>
-              ))}
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {insightsData.classGroups.map((cls) => (
-              <Chip
-                key={cls}
-                active={filters.classGroups?.includes(cls) ?? false}
-                color={CLASS_GROUP_COLORS[cls] ?? CLASS_GROUP_COLORS.Other}
-                onClick={() => toggleArrayFilter('classGroups', cls)}
-              >
-                {cls}
-              </Chip>
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {CREATED_OPTIONS.map((opt) => (
-              <Chip
-                key={opt.label}
-                active={filters.createdWithinMs === opt.value}
-                onClick={() => setCreatedWithin(opt.value)}
-              >
-                {opt.label}
-              </Chip>
-            ))}
-          </div>
-        </div>
       </div>
 
       <div>
