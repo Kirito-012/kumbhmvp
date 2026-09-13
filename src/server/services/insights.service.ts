@@ -11,6 +11,10 @@ import type {
   InsightsPriorityRow,
   InsightsTicketTuple,
   InsightsTicketData,
+  SectorTrendDay,
+  SectorAssignee,
+  SectorTicketRow,
+  SectorInsights,
 } from '@/lib/insights/types'
 
 // Every ticket carries a location snapshot in practice (bulk-imported one-per-parcel — see
@@ -21,7 +25,16 @@ const HAS_LOCATION = { location: { $ne: null } }
 // Re-exported so existing importers of these types from this module keep working -- the
 // canonical definitions now live in lib/insights/types.ts (a plain, client-safe module) since
 // aggregate.ts/useTicketInsights.ts need them too and this file is 'server-only'.
-export type { InsightsStatusRow, InsightsPriorityRow, InsightsTicketTuple, InsightsTicketData }
+export type {
+  InsightsStatusRow,
+  InsightsPriorityRow,
+  InsightsTicketTuple,
+  InsightsTicketData,
+  SectorTrendDay,
+  SectorAssignee,
+  SectorTicketRow,
+  SectorInsights,
+}
 
 /**
  * Everything Heatmap/Ticket mode need to render and filter client-side, in one payload: every
@@ -125,43 +138,32 @@ function toLocalISODate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-export type SectorTrendDay = { day: string; created: number; resolved: number }
-export type SectorAssignee = { id: string; name: string; open: number }
-export type SectorTicketRow = {
-  number: number
-  subject: string
-  statusSlug: string
-  prioritySlug: string
-  classGroup: string
-  sectorPlanId: number
-  lng: number
-  lat: number
-  lastActivityAt: string
-}
-
-export type SectorInsights = {
-  sectorNo: number | null // null for the "peripheral" bucket
-  totalCount: number
-  trend7d: SectorTrendDay[]
-  assignees: SectorAssignee[]
-  oldestOpen: { number: number; subject: string; ageDays: number } | null
-  medianResolveHours: number | null
-  tickets: SectorTicketRow[]
-  truncated: boolean
-}
-
 const SECTOR_TICKET_LIST_CAP = 200
 
 /**
  * Per-sector detail for the Insights panel — everything that ISN'T already derivable client-side
  * from the bulk tuple array in getInsightsTicketData() (trend, assignees, oldest-open, median
- * resolve time, and the actual ticket rows for the list). Pass `sectorNo: null` for the
- * "Peripheral" bucket (parcels with no numbered sector — see location.sectorNo).
+ * resolve time, and the actual ticket rows for the list).
+ *
+ * `target` is an integer sector number, `'peripheral'` for parcels with no numbered sector (see
+ * location.sectorNo), or `'all'` for the unfiltered workspace overview the Insights panel shows
+ * with no sector selected (PLAN-heatmap.md §6.2) — added in Phase 5 alongside the panel that
+ * actually needs it; the bulk tuple array covers the overview's status/category/priority
+ * breakdowns client-side already, but trend/assignees/oldest-open/median-resolve/the ticket list
+ * all require a DB round-trip regardless of scope, so "all" just runs the same aggregation with
+ * no sectorNo match clause rather than needing a second, parallel code path.
  */
-export async function getSectorInsights(sectorNo: number | null): Promise<SectorInsights> {
+export async function getSectorInsights(
+  target: number | 'peripheral' | 'all',
+): Promise<SectorInsights> {
   await dbConnect()
 
-  const baseMatch = { deletedAt: null, ...HAS_LOCATION, 'location.sectorNo': sectorNo }
+  const sectorNo = target === 'peripheral' ? null : target === 'all' ? undefined : target
+  const baseMatch = {
+    deletedAt: null,
+    ...HAS_LOCATION,
+    ...(sectorNo === undefined ? {} : { 'location.sectorNo': sectorNo }),
+  }
 
   const resolvedStatusDocs = await TicketStatusModel.find({ isResolved: true }).select('_id').lean()
   const resolvedIds = resolvedStatusDocs.map((s) => s._id)
@@ -306,7 +308,7 @@ export async function getSectorInsights(sectorNo: number | null): Promise<Sector
   }))
 
   return {
-    sectorNo,
+    sectorNo: sectorNo ?? null,
     totalCount,
     trend7d,
     assignees,

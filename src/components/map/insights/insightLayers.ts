@@ -1,8 +1,13 @@
 import type { Map as MLMap, ExpressionSpecification, GeoJSONSource } from 'maplibre-gl'
 import type { Feature, FeatureCollection, Point } from 'geojson'
 import { HEAT_PALETTE, NO_DATA_COLOR, darkenHex, type Theme } from '@/lib/insights/heatScale'
-import type { SectorRollup, SectorPlanBucket } from '@/lib/insights/aggregate'
-import { isOpenTicket } from '@/lib/insights/aggregate'
+import type {
+  SectorRollup,
+  SectorPlanBucket,
+  InsightsFilters,
+  HeatMetric,
+} from '@/lib/insights/aggregate'
+import { isOpenTicket, matchesFilters } from '@/lib/insights/aggregate'
 import { BUCKET_COLORS, BUCKET_ORDER } from '@/lib/insights/statusBuckets'
 import {
   TicketField,
@@ -494,16 +499,23 @@ function priorityWeight(priorityRow: InsightsPriorityRow | undefined): number {
   }
 }
 
-/** Builds the GeoJSON feature collection for the heat glow + heat points layers -- open tickets
- *  only (heat metric 'open', the Phase 3 default), weighted by priority per PLAN-heatmap.md §5.2. */
+/** Builds the GeoJSON feature collection for the heat glow + heat points layers, weighted by
+ *  priority per PLAN-heatmap.md §5.2. Respects the active filters the same way the sector-shading
+ *  values do, and includes every ticket (not just open ones) when the metric is 'total' -- "Open
+ *  tickets only, unless the metric is total" per §5.2. */
 export function buildHeatFeatureCollection(
   tickets: InsightsTicketTuple[],
   statuses: InsightsStatusRow[],
   priorities: InsightsPriorityRow[],
+  classGroups: string[],
+  filters: InsightsFilters,
+  metric: HeatMetric,
+  now: number = Date.now(),
 ): FeatureCollection<Point, { sector_no: number | null; weight: number }> {
   const features: Feature<Point, { sector_no: number | null; weight: number }>[] = []
   for (const t of tickets) {
-    if (!isOpenTicket(t, statuses)) continue
+    if (!matchesFilters(t, statuses, priorities, classGroups, filters, now)) continue
+    if (metric !== 'total' && !isOpenTicket(t, statuses)) continue
     features.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [t[TicketField.Lng], t[TicketField.Lat]] },

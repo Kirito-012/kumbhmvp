@@ -76,6 +76,7 @@ import {
   type SectorRollup,
   type SectorPlanBucket,
   type InsightsFilters,
+  type HeatMetric,
 } from '@/lib/insights/aggregate'
 import { computeQuantileBreaks, colorForValue } from '@/lib/insights/heatScale'
 import {
@@ -3146,13 +3147,22 @@ export default function MapView({
   }, [mode, insightSector])
 
   const insightsActive = canUseInsights && (mode === 'heatmap' || mode === 'tickets')
-  const { data: insightsData } = useTicketInsights(insightsActive)
-  /** Ticket-mode status/priority/category/created filters -- lifted here (not local to
-   *  InsightsModePanel) because both the panel's own chip UI (Phase 5) and this file's
-   *  feature-state recolouring effect below need the same value. Empty filters (the default,
-   *  and all Phase 4 ever produces on its own before Phase 5 wires up the chip UI) match every
-   *  ticket, so every parcel paints its real bucket with nothing muted. */
+  const {
+    data: insightsData,
+    loading: insightsLoading,
+    error: insightsError,
+    refetch: refetchInsights,
+  } = useTicketInsights(insightsActive)
+  /** Status/priority/category/created filters shared by both modes -- lifted here (not local to
+   *  InsightsModePanel) because the panel's own chip UI, the Heatmap paint effect and Ticket
+   *  mode's feature-state recolouring effect below all need the same value. Empty filters (the
+   *  default) match every ticket, so every sector/parcel paints its real value with nothing
+   *  muted or excluded. */
   const [insightFilters, setInsightFilters] = useState<InsightsFilters>({})
+  /** Heatmap's metric switch (Open / % open / Total / Per ha) -- Ticket mode has no metric of its
+   *  own (its ranked list and legend are always by open count), so this only drives the Heatmap
+   *  paint effect and InsightsModePanel's segmented control while mode === 'heatmap'. */
+  const [heatMetric, setHeatMetric] = useState<HeatMetric>('open')
   /** Latest computed heat values/rollups/breaks, read by the theme-swap effect (syncBasemap) to
    *  recolour insight layers on a theme toggle without waiting for insightsData to change --
    *  same ref-mirror reasoning as visibilityRef/modeRef, just for derived data instead of state. */
@@ -3171,11 +3181,13 @@ export default function MapView({
       insightsData.statuses,
       insightsData.priorities,
       insightsData.classGroups,
+      insightFilters,
     )
     const values: SectorHeatValues = new Map()
     for (const [sectorNo, rollup] of rollups) {
       if (sectorNo === null) continue // peripheral tickets have no sector polygon to colour
-      values.set(sectorNo, heatValueForSector(rollup, 'open', 0))
+      const area = sectorsRef.current.find((s) => s.sector_no === sectorNo)?.area_hac ?? 0
+      values.set(sectorNo, heatValueForSector(rollup, heatMetric, area))
     }
     const breaks = computeQuantileBreaks(Array.from(values.values()))
     insightPaintRef.current = { values, rollups, breaks }
@@ -3188,9 +3200,12 @@ export default function MapView({
         insightsData.tickets,
         insightsData.statuses,
         insightsData.priorities,
+        insightsData.classGroups,
+        insightFilters,
+        heatMetric,
       ),
     )
-  }, [insightsData, mode])
+  }, [insightsData, mode, insightFilters, heatMetric])
 
   /** Last sectorPlanId->bucket map actually applied to feature-state, so the effect below only
    *  touches parcels whose bucket changed (PLAN-heatmap.md §9's "diff against the previous bucket
@@ -3243,6 +3258,26 @@ export default function MapView({
       }
     }
   }, [insightsData, mode, insightFilters])
+
+  /** Selects a sector from InsightsModePanel's ranked list (as opposed to a map click, which the
+   *  `load` handler's own click branches already handle) -- flies to the sector's real extent the
+   *  same way the Heatmap click branch does, using the always-current `sectors` state directly
+   *  rather than a ref, since this runs from a normal render-scope callback, not the once-
+   *  registered `load` handler those refs exist to work around. */
+  function selectInsightSectorFromPanel(sector: number | 'peripheral') {
+    setInsightSector(sector)
+    const map = mapRef.current
+    if (!map || typeof sector !== 'number') return
+    const s = sectors.find((x) => x.sector_no === sector)
+    if (!s) return
+    map.fitBounds(
+      [
+        [s.xmin, s.ymin],
+        [s.xmax, s.ymax],
+      ],
+      { padding: mapFlyPadding(), duration: 600 },
+    )
+  }
 
   // Mirrors mode/insightSector into the URL (?mode=&isector=) so a view can be shared or
   // reloaded -- see PLAN-heatmap.md §4.1. router.replace (not push) so switching modes doesn't
@@ -5130,6 +5165,17 @@ export default function MapView({
       ) : (
         <InsightsModePanel
           mode={mode}
+          insightsData={insightsData}
+          loading={insightsLoading}
+          error={insightsError}
+          onRefresh={refetchInsights}
+          sectors={sectors}
+          heatMetric={heatMetric}
+          onHeatMetricChange={setHeatMetric}
+          filters={insightFilters}
+          onFiltersChange={setInsightFilters}
+          selectedSector={insightSector}
+          onSelectSector={selectInsightSectorFromPanel}
           forceCollapsed={expandedDockedPanel === 'stats'}
           onExpand={() => setExpandedDockedPanel('search')}
           onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'search' ? null : cur))}
@@ -5181,6 +5227,19 @@ export default function MapView({
         <InsightsPanel
           mode={mode}
           sector={insightSector}
+          insightsData={insightsData}
+          filters={insightFilters}
+          sectors={sectors}
+          onFilterClassGroup={(classGroup) =>
+            setInsightFilters((f) => ({
+              ...f,
+              classGroups: f.classGroups?.includes(classGroup)
+                ? f.classGroups.filter((c) => c !== classGroup)
+                : [...(f.classGroups ?? []), classGroup],
+            }))
+          }
+          onClearFilters={() => setInsightFilters({})}
+          onLocate={flyToLocateFeature}
           onWidthChange={(w) => {
             statsPanelWidthRef.current = w
           }}

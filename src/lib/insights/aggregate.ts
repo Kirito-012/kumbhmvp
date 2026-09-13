@@ -38,7 +38,7 @@ export function matchesFilters(
   priorities: { slug: string }[],
   classGroups: string[],
   filters: InsightsFilters,
-  now: number,
+  now: number = Date.now(),
 ): boolean {
   if (filters.statusSlugs && filters.statusSlugs.length > 0) {
     const status = statuses[tuple[TicketField.StatusIdx]]

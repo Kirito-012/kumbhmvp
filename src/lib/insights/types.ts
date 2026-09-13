@@ -43,3 +43,34 @@ export const enum TicketField {
   CreatedAt = 8,
   ResolvedAt = 9,
 }
+
+// Per-sector Insights panel detail (Phase 5) -- shapes returned by getSectorInsights and consumed
+// by useSectorInsights.ts. Kept here rather than in insights.service.ts (a 'server-only' module)
+// for the same reason as the tuple types above: useSectorInsights.ts is a client hook and needs
+// the same type identity, not a structurally-identical copy.
+export type SectorTrendDay = { day: string; created: number; resolved: number }
+export type SectorAssignee = { id: string; name: string; open: number }
+export type SectorTicketRow = {
+  number: number
+  subject: string
+  statusSlug: string
+  prioritySlug: string
+  classGroup: string
+  sectorPlanId: number
+  lng: number
+  lat: number
+  lastActivityAt: string
+}
+
+export type SectorInsights = {
+  // null covers both the "peripheral" bucket and the unfiltered all-sectors overview -- callers
+  // already know which of the two they asked for, so the response doesn't need to disambiguate.
+  sectorNo: number | null
+  totalCount: number
+  trend7d: SectorTrendDay[]
+  assignees: SectorAssignee[]
+  oldestOpen: { number: number; subject: string; ageDays: number } | null
+  medianResolveHours: number | null
+  tickets: SectorTicketRow[]
+  truncated: boolean
+}
