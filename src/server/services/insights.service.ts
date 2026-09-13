@@ -6,43 +6,22 @@ import { TicketStatusModel } from '@/server/db/models/ticket-status.model'
 import { TicketPriorityModel } from '@/server/db/models/ticket-priority.model'
 import { UserModel } from '@/server/db/models/user.model'
 import { bucketForStatus } from '@/lib/insights/statusBuckets'
+import type {
+  InsightsStatusRow,
+  InsightsPriorityRow,
+  InsightsTicketTuple,
+  InsightsTicketData,
+} from '@/lib/insights/types'
 
 // Every ticket carries a location snapshot in practice (bulk-imported one-per-parcel — see
 // scripts/import-map-tickets.ts) but the schema allows a null location, so every query here
 // still filters it out explicitly rather than assuming it.
 const HAS_LOCATION = { location: { $ne: null } }
 
-/** One row per status/priority the client indexes into by position — keeps the per-ticket
- *  tuples in getInsightsTicketData() to small integers instead of repeating ids/strings
- *  ~3.6k times over the wire. */
-export type InsightsStatusRow = {
-  slug: string
-  name: string
-  bucket: ReturnType<typeof bucketForStatus>
-  color: string
-}
-export type InsightsPriorityRow = { slug: string; name: string; color: string; order: number }
-
-export type InsightsTicketTuple = [
-  number, // ticket number
-  number, // location.sectorPlanId
-  number | null, // location.sectorNo
-  number, // index into `statuses`
-  number, // index into `priorities`
-  number, // index into `classGroups`
-  number, // location.lng
-  number, // location.lat
-  number, // createdAt (ms since epoch)
-  number | null, // resolvedAt (ms since epoch), null if still unresolved
-]
-
-export type InsightsTicketData = {
-  generatedAt: string
-  statuses: InsightsStatusRow[]
-  priorities: InsightsPriorityRow[]
-  classGroups: string[]
-  tickets: InsightsTicketTuple[]
-}
+// Re-exported so existing importers of these types from this module keep working -- the
+// canonical definitions now live in lib/insights/types.ts (a plain, client-safe module) since
+// aggregate.ts/useTicketInsights.ts need them too and this file is 'server-only'.
+export type { InsightsStatusRow, InsightsPriorityRow, InsightsTicketTuple, InsightsTicketData }
 
 /**
  * Everything Heatmap/Ticket mode need to render and filter client-side, in one payload: every

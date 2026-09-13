@@ -48,6 +48,22 @@ import Panel from '@/components/map/Panel'
 import ModeSwitcher, { type MapMode } from '@/components/map/insights/ModeSwitcher'
 import InsightsModePanel from '@/components/map/insights/InsightsModePanel'
 import InsightsPanel from '@/components/map/insights/InsightsPanel'
+import { useTicketInsights } from '@/components/map/insights/useTicketInsights'
+import {
+  addInsightLayers,
+  buildHeatFeatureCollection,
+  INSIGHT_SECTOR_FILL_LAYER,
+  INSIGHT_HEAT_POINTS_LAYER,
+  INSIGHT_HEAT_ZOOM_CROSSOVER,
+  applyInsightTheme,
+  setInsightHeatData,
+  setInsightLayersVisible,
+  setInsightSelectedFilter,
+  updateInsightSectorPaint,
+  type SectorHeatValues,
+} from '@/components/map/insights/insightLayers'
+import { rollupBySector, heatValueForSector, type SectorRollup } from '@/lib/insights/aggregate'
+import { computeQuantileBreaks, colorForValue } from '@/lib/insights/heatScale'
 import {
   ChartBarIcon,
   ChevronDownIcon,
@@ -941,8 +957,10 @@ function applyLayerVisibility(map: MLMap, visibility: Record<string, boolean>) {
 // Heatmap/Ticket mode hide every POI and road layer via a *temporary* override on top of the
 // user's own visibility state -- never through setVisibility/localStorage, or the override would
 // get persisted and the user's Map-mode layers would be gone the next time they turn a mode off
-// (see PLAN-heatmap.md §9 "Visibility override vs stored visibility"). sector_plan/sector_boundary
-// are left alone here since Heatmap/Ticket's own fill layers (Phase 3/4) replace them in place.
+// (see PLAN-heatmap.md §9 "Visibility override vs stored visibility"). Heatmap additionally hides
+// sector_plan/sector_boundary themselves -- its own insight-sector-* layers (Phase 3) replace them
+// in place. Ticket mode leaves both alone: Phase 4 recolours sector_plan's own parcels via
+// setFeatureState rather than swapping in a separate layer, so it needs the real layer visible.
 function visibilityForMode(
   visibility: Record<string, boolean>,
   mode: MapMode,
@@ -951,6 +969,10 @@ function visibilityForMode(
   const override = { ...visibility }
   for (const d of ROAD_TYPE_DEFS) override[d.key] = false
   for (const d of POI_LAYER_DEFS) override[d.key] = false
+  if (mode === 'heatmap') {
+    override.sector_plan = false
+    override.sector_boundary = false
+  }
   return override
 }
 
@@ -1058,6 +1080,13 @@ export default function MapView({
   }
 
   const [sectors, setSectors] = useState<Sector[]>([])
+  /** Mirrors `sectors` for the map's one-time 'load' handler (click handler included) -- same
+   *  staleness reason as visibilityRef/modeRef: `sectors` loads asynchronously after mount, well
+   *  after the closure that reads it (e.g. Heatmap's click-to-fitBounds) was created. */
+  const sectorsRef = useRef(sectors)
+  useEffect(() => {
+    sectorsRef.current = sectors
+  }, [sectors])
   // Sub-class names + counts per class_group, for the left panel's search
   // tree -- fetched independently of StatsPanel's own /api/stats call (same
   // self-fetching pattern as `sectors` above) rather than threading it down.
@@ -1144,10 +1173,8 @@ export default function MapView({
     modeRef.current = mode
   }, [mode])
   // Which sector's detail the Insights panel shows -- 'peripheral' covers parcels with no
-  // numbered sector, null means the all-sector overview. setInsightSector has no caller yet --
-  // it's wired up by the mode-aware click handler (sector-fill / parcel / heat-point hits) added
-  // in Phase 3/4, see PLAN-heatmap.md §5.4.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // numbered sector, null means the all-sector overview. Set by the mode-aware click handler
+  // (sector-fill / heat-point hits) in initMap's 'load' handler below, see PLAN-heatmap.md §5.4.
   const [insightSector, setInsightSector] = useState<number | 'peripheral' | null>(() => {
     if (!canUseInsights) return null
     const raw = searchParams.get('isector')
@@ -1470,6 +1497,17 @@ export default function MapView({
         if (map.getLayer(id)) {
           map.setPaintProperty(id, 'text-color', theme === 'dark' ? '#0b0d11' : '#ffffff')
         }
+      }
+
+      // Heatmap's colour ramp/label/circle colours are theme-aware plain paint values same as
+      // everything else in this effect. Sector fill/outline additionally depend on the live heat
+      // values/breaks (not just theme), which don't live in React state -- insightPaintRef mirrors
+      // the last computed values so a theme toggle mid-Heatmap-mode recolours immediately instead
+      // of waiting for insightsData to change (it won't; it's the same fetch).
+      applyInsightTheme(map, theme)
+      if (insightPaintRef.current) {
+        const { values, rollups, breaks } = insightPaintRef.current
+        updateInsightSectorPaint(map, values, rollups, breaks, theme, colorForValue)
       }
     }
 
@@ -1805,6 +1843,14 @@ export default function MapView({
         tiles: [`${location.origin}/api/tiles/sector_boundary/{z}/{x}/{y}`],
         promoteId: 'id',
       })
+
+      // Heatmap's sector fill/outline/label/selected + heat glow layers -- created hidden
+      // (visibility: 'none') up front regardless of the current mode, same "always present, just
+      // toggled" approach as every other app layer here, so entering Heatmap mode is a pure
+      // visibility flip with no layer-creation latency. Gated on canUseInsights (a prop, stable
+      // for the component's lifetime) so a Surveyor's map never even creates these -- ModeSwitcher
+      // already hides the toggle for them, but this keeps the layer list itself minimal too.
+      if (canUseInsights) addInsightLayers(map, readMapTheme())
 
       // Full-viewport dark scrim over the vendored vector basemap, used to
       // dim it when a class/sub-class filter is active (see the sector/class
@@ -2607,6 +2653,19 @@ export default function MapView({
         })
       }
 
+      // Same pointer-cursor affordance for Heatmap's own clickable layers -- sector shading
+      // zoomed out, individual ticket points zoomed in.
+      for (const layerId of [INSIGHT_SECTOR_FILL_LAYER, INSIGHT_HEAT_POINTS_LAYER]) {
+        map.on('mouseenter', layerId, () => {
+          if (measuringRef.current || modeRef.current !== 'heatmap') return
+          map.getCanvas().style.cursor = 'pointer'
+        })
+        map.on('mouseleave', layerId, () => {
+          if (measuringRef.current || modeRef.current !== 'heatmap') return
+          map.getCanvas().style.cursor = ''
+        })
+      }
+
       // Single map-wide click handler: clicking bare sector area (only
       // sector-hit-target matches, no parcel/road underneath) selects that
       // sector everywhere -- the dropdown, the map filter/fly-to, the Stats
@@ -2638,6 +2697,58 @@ export default function MapView({
         if (measuringRef.current) {
           addMeasurePoint([e.lngLat.lng, e.lngLat.lat])
           clearPreview()
+          return
+        }
+
+        // Heatmap mode's own click handling (see PLAN-heatmap.md §5.4) -- takes over entirely
+        // while active, before any of the plain-map hit-testing below (which would find nothing
+        // useful anyway, since sector_plan/sector_boundary are hidden in this mode). Ticket mode
+        // isn't handled here yet -- it still falls through to the plain-map logic below until
+        // Phase 4 adds its own parcel layers.
+        if (modeRef.current === 'heatmap') {
+          const zoomedOut = map.getZoom() < INSIGHT_HEAT_ZOOM_CROSSOVER
+          if (zoomedOut) {
+            // Sector shading is what's visible at this zoom -- hit-test the fill itself and
+            // fly to the clicked sector's real extent (from `sectors`, fetched separately from
+            // the tile source and read via a ref since this closure is created once on mount).
+            const hits = map.queryRenderedFeatures(e.point, { layers: [INSIGHT_SECTOR_FILL_LAYER] })
+            if (hits.length === 0) {
+              setInsightSector(null)
+              return
+            }
+            const raw = hits[0].properties?.sector_no
+            const sectorNo = typeof raw === 'number' ? raw : null
+            setInsightSector(sectorNo)
+            const sector =
+              sectorNo === null
+                ? undefined
+                : sectorsRef.current.find((s) => s.sector_no === sectorNo)
+            if (sector) {
+              map.fitBounds(
+                [
+                  [sector.xmin, sector.ymin],
+                  [sector.xmax, sector.ymax],
+                ],
+                { padding: mapFlyPadding(), duration: 600 },
+              )
+            }
+            return
+          }
+          // Zoomed in far enough for the heat glow + individual ticket points to show instead --
+          // a point hit selects its sector for the Insights panel; empty area (or a hit with no
+          // numbered sector, i.e. a peripheral ticket) falls back to sector-hit-target so bare
+          // sector area still selects that sector even with no ticket directly under the cursor.
+          const pointHits = map.queryRenderedFeatures(e.point, {
+            layers: [INSIGHT_HEAT_POINTS_LAYER],
+          })
+          if (pointHits.length > 0) {
+            const raw = pointHits[0].properties?.sector_no
+            setInsightSector(typeof raw === 'number' ? raw : 'peripheral')
+            return
+          }
+          const sectorHits = map.queryRenderedFeatures(e.point, { layers: ['sector-hit-target'] })
+          const raw = sectorHits[0]?.properties?.sector_no
+          setInsightSector(typeof raw === 'number' ? raw : null)
           return
         }
 
@@ -2952,7 +3063,61 @@ export default function MapView({
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
     applyLayerVisibility(map, visibilityForMode(visibility, mode))
+    setInsightLayersVisible(map, mode === 'heatmap')
   }, [visibility, mode])
+
+  // Keeps the double-stroke selected-sector highlight in sync with insightSector while Heatmap is
+  // active -- filtered to -1 (matches nothing) the rest of the time via setInsightSelectedFilter's
+  // own null handling, so it never lingers visible after leaving the mode or clicking empty area.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) return
+    setInsightSelectedFilter(
+      map,
+      mode === 'heatmap' && typeof insightSector === 'number' ? insightSector : null,
+    )
+  }, [mode, insightSector])
+
+  const insightsActive = canUseInsights && mode === 'heatmap'
+  const { data: insightsData } = useTicketInsights(insightsActive)
+  /** Latest computed heat values/rollups/breaks, read by the theme-swap effect (syncBasemap) to
+   *  recolour insight layers on a theme toggle without waiting for insightsData to change --
+   *  same ref-mirror reasoning as visibilityRef/modeRef, just for derived data instead of state. */
+  const insightPaintRef = useRef<{
+    values: SectorHeatValues
+    rollups: Map<number | null, SectorRollup>
+    breaks: number[]
+  } | null>(null)
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded() || mode !== 'heatmap' || !insightsData) return
+
+    const rollups = rollupBySector(
+      insightsData.tickets,
+      insightsData.statuses,
+      insightsData.priorities,
+      insightsData.classGroups,
+    )
+    const values: SectorHeatValues = new Map()
+    for (const [sectorNo, rollup] of rollups) {
+      if (sectorNo === null) continue // peripheral tickets have no sector polygon to colour
+      values.set(sectorNo, heatValueForSector(rollup, 'open', 0))
+    }
+    const breaks = computeQuantileBreaks(Array.from(values.values()))
+    insightPaintRef.current = { values, rollups, breaks }
+
+    const theme = readMapTheme()
+    updateInsightSectorPaint(map, values, rollups, breaks, theme, colorForValue)
+    setInsightHeatData(
+      map,
+      buildHeatFeatureCollection(
+        insightsData.tickets,
+        insightsData.statuses,
+        insightsData.priorities,
+      ),
+    )
+  }, [insightsData, mode])
 
   // Mirrors mode/insightSector into the URL (?mode=&isector=) so a view can be shared or
   // reloaded -- see PLAN-heatmap.md §4.1. router.replace (not push) so switching modes doesn't
