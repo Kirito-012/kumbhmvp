@@ -238,3 +238,31 @@ export function RedoIcon({ className }: IconProps) {
     </svg>
   )
 }
+
+export function FlameIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M12 21c4.4 0 7-2.7 7-6.4 0-3.1-2-5-3.4-7.4-.3 1.7-1.2 2.9-2.3 3.3.4-2.6-.5-5.5-3-7.5.4 2.7-.8 4.6-2.4 6.3C6.5 10.7 5 12.6 5 15c0 3.4 2.8 6 7 6z"
+        className={base}
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+export function TicketIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M3.5 9.5c1.1 0 2 .9 2 2s-.9 2-2 2v2c0 1.1.9 2 2 2h13c1.1 0 2-.9 2-2v-2c-1.1 0-2-.9-2-2s.9-2 2-2v-2c0-1.1-.9-2-2-2h-13c-1.1 0-2 .9-2 2v2z"
+        className={base}
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+      />
+      <path d="M14.5 6.5v11" className={base} strokeWidth={1.5} strokeDasharray="2 2" />
+    </svg>
+  )
+}

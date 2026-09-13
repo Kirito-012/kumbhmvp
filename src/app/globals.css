@@ -119,6 +119,11 @@
      with no color customization hook -- inverting them is the only way to keep them visible
      against the now-dark control background above. */
   --map-ctrl-icon-filter: invert(1) brightness(1.5);
+
+  /* ModeSwitcher's sliding indicator (Map reuses --map-accent above) -- dark: brighter, since a
+     saturated red/emerald at light-mode intensity reads muddy against the dark glass panel. */
+  --map-mode-heatmap: #f87171;
+  --map-mode-tickets: #34d399;
 }
 
 [data-theme='light'] {
@@ -224,6 +229,10 @@
   --map-section-violet-fg: #6d28d9;
 
   --map-ctrl-icon-filter: none;
+
+  /* ModeSwitcher's sliding indicator (Map reuses --map-accent above). */
+  --map-mode-heatmap: #dc2626;
+  --map-mode-tickets: #059669;
 }
 
 @theme inline {
