@@ -1,5 +1,6 @@
 'use client'
 
+import { useRef } from 'react'
 import { FlameIcon, LayersIcon, TicketIcon } from '@/components/map/icons'
 
 export type MapMode = 'map' | 'heatmap' | 'tickets'
@@ -30,6 +31,34 @@ export default function ModeSwitcher({
   onChange: (mode: MapMode) => void
 }) {
   const activeIndex = SEGMENTS.findIndex((s) => s.mode === mode)
+  // Roving tabindex (WAI-ARIA APG radiogroup pattern): only the checked segment is a tab stop,
+  // and arrow keys move both focus and the selection between the other segments. Without this,
+  // role="radio"/aria-checked describe a radiogroup that Tab still walks button-by-button and
+  // that has no arrow-key behaviour at all -- the roles would be present but not actually
+  // keyboard-operable the way a screen reader user expects a radiogroup to be.
+  const buttonRefs = useRef<(HTMLButtonElement | null)[]>([])
+
+  function moveTo(index: number) {
+    const next = SEGMENTS[(index + SEGMENTS.length) % SEGMENTS.length]
+    onChange(next.mode)
+    buttonRefs.current[(index + SEGMENTS.length) % SEGMENTS.length]?.focus()
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      e.preventDefault()
+      moveTo(index + 1)
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      moveTo(index - 1)
+    } else if (e.key === 'Home') {
+      e.preventDefault()
+      moveTo(0)
+    } else if (e.key === 'End') {
+      e.preventDefault()
+      moveTo(SEGMENTS.length - 1)
+    }
+  }
 
   return (
     <div
@@ -50,17 +79,22 @@ export default function ModeSwitcher({
         }}
         className="absolute inset-y-1 left-1 rounded-md transition-transform duration-200 ease-out"
       />
-      {SEGMENTS.map(({ mode: segMode, label, icon: Icon }) => {
+      {SEGMENTS.map(({ mode: segMode, label, icon: Icon }, index) => {
         const active = segMode === mode
         return (
           <button
             key={segMode}
+            ref={(el) => {
+              buttonRefs.current[index] = el
+            }}
             type="button"
             role="radio"
             aria-checked={active}
             aria-label={label}
             title={label}
+            tabIndex={active ? 0 : -1}
             onClick={() => onChange(segMode)}
+            onKeyDown={(e) => onKeyDown(e, index)}
             style={{ color: active ? '#fff' : 'var(--map-fg-muted)' }}
             className="relative z-10 inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-md px-2 text-[12.5px] font-semibold transition-colors"
           >

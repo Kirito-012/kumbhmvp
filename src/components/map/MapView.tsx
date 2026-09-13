@@ -78,7 +78,15 @@ import {
   type InsightsFilters,
   type HeatMetric,
 } from '@/lib/insights/aggregate'
-import { computeQuantileBreaks, colorForValue } from '@/lib/insights/heatScale'
+import { computeQuantileBreaks, colorForValue, buildLegend } from '@/lib/insights/heatScale'
+import {
+  BUCKET_ORDER,
+  BUCKET_LABELS,
+  BUCKET_COLORS,
+  type StatusBucket,
+} from '@/lib/insights/statusBuckets'
+import { useInsightTheme } from '@/components/map/insights/charts'
+import type { InsightsTicketData } from '@/lib/insights/types'
 import {
   ChartBarIcon,
   ChevronDownIcon,
@@ -1023,6 +1031,87 @@ function loadStoredVisibility(): Record<string, boolean> {
   } catch {
     return defaults
   }
+}
+
+// PLAN-heatmap.md §6.3: "A compact floating legend ... appears whenever the left panel is
+// collapsed, on any viewport, so the colours always have a key." Deliberately recomputes its own
+// small rollup/legend data from insightsData/filters/heatMetric rather than reaching into
+// insightPaintRef/ticketBucketRef (which hold richer per-sector state built for the map paint
+// effects) -- those refs aren't meant to be read from render, and duplicating the ~10 lines of
+// aggregation here is cheaper and safer than threading a new render-safe copy of that state out.
+function FloatingLegend({
+  mode,
+  insightsData,
+  filters,
+  heatMetric,
+  sectors,
+}: {
+  mode: Exclude<MapMode, 'map'>
+  insightsData: InsightsTicketData
+  filters: InsightsFilters
+  heatMetric: HeatMetric
+  sectors: Sector[]
+}) {
+  const theme = useInsightTheme()
+  const rollups = rollupBySector(
+    insightsData.tickets,
+    insightsData.statuses,
+    insightsData.priorities,
+    insightsData.classGroups,
+    filters,
+  )
+  const wrapperClass =
+    'pointer-events-none absolute bottom-8 left-3 z-10 flex flex-wrap gap-x-2.5 gap-y-1 rounded-lg border px-2.5 py-1.5 text-[10.5px] backdrop-blur-md shadow-lg'
+  const wrapperStyle = {
+    background: 'var(--map-panel-bg)',
+    borderColor: 'var(--map-panel-border)',
+    color: 'var(--map-fg-muted)',
+  }
+  if (mode === 'heatmap') {
+    const sectorAreaByNo = new Map(sectors.map((s) => [s.sector_no, s.area_hac]))
+    const values: number[] = []
+    for (const [sectorNo, rollup] of rollups) {
+      if (sectorNo === null) continue
+      values.push(heatValueForSector(rollup, heatMetric, sectorAreaByNo.get(sectorNo) ?? 0))
+    }
+    const breaks = computeQuantileBreaks(values)
+    const entries = buildLegend(breaks, theme)
+    return (
+      <div className={wrapperClass} style={wrapperStyle}>
+        {entries.map((entry) => (
+          <span key={entry.label} className="flex items-center gap-1 whitespace-nowrap">
+            <span
+              className="h-2 w-2 shrink-0 rounded-sm"
+              style={{ background: entry.color }}
+              aria-hidden
+            />
+            {entry.label}
+          </span>
+        ))}
+      </div>
+    )
+  }
+  const counts: Record<StatusBucket, number> = { new: 0, progress: 0, resolved: 0, closed: 0 }
+  for (const rollup of rollups.values()) {
+    counts.new += rollup.newCount
+    counts.progress += rollup.progressCount
+    counts.resolved += rollup.resolved
+    counts.closed += rollup.closed
+  }
+  return (
+    <div className={wrapperClass} style={wrapperStyle}>
+      {BUCKET_ORDER.map((bucket) => (
+        <span key={bucket} className="flex items-center gap-1 whitespace-nowrap">
+          <span
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{ background: BUCKET_COLORS[bucket][theme] }}
+            aria-hidden
+          />
+          {BUCKET_LABELS[bucket]} {counts[bucket]}
+        </span>
+      ))}
+    </div>
+  )
 }
 
 export default function MapView({
@@ -3120,6 +3209,30 @@ export default function MapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mutators close over stable setMeasure/setMeasuring identities
   }, [measuring])
 
+  // Mode-switcher keyboard shortcuts (PLAN-heatmap.md §4.1): 1/2/3 pick Map/Heatmap/Tickets, Esc
+  // clears insightSector and returns to Map. Skipped while a text input has focus (so it doesn't
+  // hijack the search box) or while measuring (which already owns Escape for exiting itself,
+  // just above -- checked via the ref rather than `measuring` state so this effect doesn't need
+  // to re-register every time measuring toggles). Never registered for a surveyor: canUseInsights
+  // false means there's no switcher to drive and no insightSector to clear.
+  useEffect(() => {
+    if (!canUseInsights) return
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      if (measuringRef.current) return
+      if (e.key === '1') setMode('map')
+      else if (e.key === '2') setMode('heatmap')
+      else if (e.key === '3') setMode('tickets')
+      else if (e.key === 'Escape') {
+        setInsightSector(null)
+        setMode('map')
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [canUseInsights])
+
   // Layer visibility -- reacts to toggling the sidebar's switches, and also
   // catches the one-time swap from SSR-safe defaults to the
   // localStorage-restored value performed by the mount effect above (which
@@ -3147,6 +3260,11 @@ export default function MapView({
   }, [mode, insightSector])
 
   const insightsActive = canUseInsights && (mode === 'heatmap' || mode === 'tickets')
+  // Tracks InsightsModePanel's actual collapsed state (via Panel's onRenderedWidthChange, which
+  // fires on mount/collapse/expand/resize and reports 0 when collapsed) so the floating legend
+  // (PLAN-heatmap.md §6.3) can appear whenever the panel holding the "real" legend isn't visible,
+  // on any viewport -- not just phones, since the panel can also be user-collapsed on desktop.
+  const [insightsModeCollapsed, setInsightsModeCollapsed] = useState(false)
   const {
     data: insightsData,
     loading: insightsLoading,
@@ -5179,6 +5297,7 @@ export default function MapView({
           forceCollapsed={expandedDockedPanel === 'stats'}
           onExpand={() => setExpandedDockedPanel('search')}
           onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'search' ? null : cur))}
+          onWidthChange={(w) => setInsightsModeCollapsed(w === 0)}
         />
       )}
 
@@ -5257,6 +5376,16 @@ export default function MapView({
             return s ? formatSectorLabel(s) : `Sector ${selectedSector}`
           })()}
           onClose={() => setSelectedSector('all')}
+        />
+      )}
+
+      {insightsActive && insightsModeCollapsed && insightsData && (
+        <FloatingLegend
+          mode={mode as Exclude<MapMode, 'map'>}
+          insightsData={insightsData}
+          filters={insightFilters}
+          heatMetric={heatMetric}
+          sectors={sectors}
         />
       )}
     </div>

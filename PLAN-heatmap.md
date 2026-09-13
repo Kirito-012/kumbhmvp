@@ -1,7 +1,7 @@
 # PLAN — Heatmap & Ticket modes on the map
 
 Branch: `feat/heatmap` (cut from `main` @ `37769dc`).
-Status: **Phases 1-5 complete.**
+Status: **Phases 1-6 complete.**
 
 Two new map modes for Admins and Managers, switched from a segmented pill in the top-left control strip:
 
@@ -330,7 +330,7 @@ Each phase ends in a working, committable state.
 | ✅ **3. Heatmap** | `heatScale`, `aggregate`, sector fill/outline/labels, glow + points, zoom crossfade, click/hover, theme registration | Heat reads correctly in both themes at z10 and z15; theme toggle mid-mode recolours without a reload              |
 | ✅ **4. Tickets** | Feature-state fill/outline, muted parcels, labels, parcel click → sector + popup                                     | Every parcel is coloured; filter changes recolour in under 100 ms; theme toggle works                             |
 | ✅ **5. Panels**  | `InsightsModePanel`, `InsightsPanel`, charts, the sector detail fetch, all states; ui-ux-pro-max review              | All four content blocks are real; loading, empty and error states verified                                        |
-| **6. Polish**     | Phone layout + width budget, keyboard shortcuts, a11y pass, `CONTEXT.md` §9 update                                   | Verified at 375 / 768 / 1440 px in both themes; no console errors                                                 |
+| ✅ **6. Polish**  | Phone layout + width budget, keyboard shortcuts, a11y pass, `CONTEXT.md` §9 update                                   | Verified at 375 / 768 / 1440 px in both themes; no console errors                                                 |
 
 ## 8. Testing
 

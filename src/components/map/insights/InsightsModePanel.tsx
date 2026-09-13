@@ -112,6 +112,7 @@ export default function InsightsModePanel({
   forceCollapsed,
   onExpand,
   onCollapse,
+  onWidthChange,
 }: {
   mode: Exclude<MapMode, 'map'>
   insightsData: InsightsTicketData | null
@@ -128,6 +129,7 @@ export default function InsightsModePanel({
   forceCollapsed?: boolean
   onExpand?: () => void
   onCollapse?: () => void
+  onWidthChange?: (width: number) => void
 }) {
   const isHeatmap = mode === 'heatmap'
   const theme = useInsightTheme()
@@ -167,6 +169,7 @@ export default function InsightsModePanel({
       forceCollapsed={forceCollapsed}
       onExpand={onExpand}
       onCollapse={onCollapse}
+      onRenderedWidthChange={onWidthChange}
     >
       {loading && !insightsData && (
         <div

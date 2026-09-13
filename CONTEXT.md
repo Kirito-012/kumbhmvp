@@ -429,6 +429,33 @@ override table for DB colours sitting right at the contrast threshold.
 - **Layer visibility** — seeded to SSR-safe defaults, then hydrated from `localStorage` post-mount to
   avoid hydration mismatch, and mirrored into a ref for the once-registered `load` handler.
 
+### Insights (Heatmap/Ticket mode) — admin & manager only, see `PLAN-heatmap.md`
+
+`ModeSwitcher` (top-left control strip, gated on `canUseInsights`) swaps `MapView` between three modes:
+Map (the default subsystem above), Heatmap (sectors shaded by a quantile-break scale over a chosen
+`HeatMetric`) and Tickets (sectors coloured by status-bucket feature-state). It's a `role="radiogroup"` of
+`role="radio"` buttons with a roving tabindex — arrow keys/Home/End move focus **and** selection between
+segments, Enter/Space activates the focused one; only the checked segment is a tab stop. Keyboard
+shortcuts `1`/`2`/`3` jump straight to Map/Heatmap/Tickets and `Esc` clears `insightSector` and returns to
+Map, all registered on `document.keydown` and skipped while an input/textarea/select has focus or while
+measure mode is active (measure mode owns `Esc` for exiting itself).
+
+Data contract is a client-side split (`PLAN-heatmap.md §3.3`): a bulk ticket-tuple array
+(`useTicketInsights`) fetched once per `active` transition and filtered/rolled-up locally
+(`rollupBySector`/`matchesFilters` in `src/lib/insights/aggregate.ts`) drives the sector list, legend and
+map paint; a separate on-demand fetch (`useSectorInsights`, keyed on `sector:nonce` to dedupe redundant
+re-fetches) hits `/api/insights/sectors/:sectorNo` (`:sectorNo` is `all`/`peripheral`/a number) for the
+richer per-sector detail (trend, assignees, oldest-open, median-resolve-time, ticket rows) shown in
+`InsightsPanel`. `InsightsModePanel` (left, metric/legend/filters/ranked sectors) and `InsightsPanel`
+(right, hero/status/categories/priority+trend/assignees/tickets) are both `Panel`s and both auto-collapse
+below `sm` like every other docked panel.
+
+A compact **floating legend** (`FloatingLegend`, module-private to `MapView.tsx`) appears bottom-left,
+on any viewport, whenever `InsightsModePanel` is collapsed (tracked via its `onWidthChange` →
+`Panel`'s `onRenderedWidthChange`, which reports 0 when collapsed) so the map's colours always have a key
+even with the panel tucked away. It deliberately recomputes its own small rollup from
+`insightsData`/`filters`/`heatMetric` rather than reaching into the paint effects' internal refs.
+
 ---
 
 ## 10. The geospatial data
