@@ -1,4 +1,4 @@
-import { isOpenBucket } from './statusBuckets'
+import { isOpenBucket, type StatusBucket } from './statusBuckets'
 import { TicketField, type InsightsStatusRow, type InsightsTicketTuple } from './types'
 
 export type HeatMetric = 'open' | 'pctOpen' | 'total' | 'perHectare'
@@ -108,6 +108,38 @@ export function rollupBySector(
   }
 
   return rollups
+}
+
+/** A parcel's ticket bucket, plus 'muted' for a ticket that exists but fails the active filters --
+ *  Ticket mode draws a muted parcel as a faint slate wash rather than dropping it back to
+ *  "no data", so the plan layout never breaks up when a filter is toggled (PLAN-heatmap.md §5.3). */
+export type SectorPlanBucket = StatusBucket | 'muted'
+
+/**
+ * Maps every located ticket's sectorPlanId to the bucket its feature-state fill should show.
+ * Pure and client-side, same "fetch once, filter locally" reasoning as rollupBySector -- Ticket
+ * mode's recolour-on-filter-change has to stay instant (PLAN-heatmap.md §9: ~3.6k parcels, must
+ * recolour in one frame), so this is the thing MapView diffs against the previous call's result
+ * before touching any feature-state.
+ */
+export function bucketBySectorPlanId(
+  tickets: InsightsTicketTuple[],
+  statuses: InsightsStatusRow[],
+  priorities: { slug: string }[],
+  classGroups: string[],
+  filters: InsightsFilters = {},
+  now: number = Date.now(),
+): Map<number, SectorPlanBucket> {
+  const result = new Map<number, SectorPlanBucket>()
+  for (const tuple of tickets) {
+    const status = statuses[tuple[TicketField.StatusIdx]]
+    const matches = matchesFilters(tuple, statuses, priorities, classGroups, filters, now)
+    result.set(
+      tuple[TicketField.SectorPlanId],
+      !status ? 'muted' : matches ? status.bucket : 'muted',
+    )
+  }
+  return result
 }
 
 /** Reduces a sector's rollup to the single number the active heat metric colours it by.

@@ -51,18 +51,32 @@ import InsightsPanel from '@/components/map/insights/InsightsPanel'
 import { useTicketInsights } from '@/components/map/insights/useTicketInsights'
 import {
   addInsightLayers,
+  addTicketLayers,
   buildHeatFeatureCollection,
   INSIGHT_SECTOR_FILL_LAYER,
   INSIGHT_HEAT_POINTS_LAYER,
   INSIGHT_HEAT_ZOOM_CROSSOVER,
+  INSIGHT_TICKET_FILL_LAYER,
   applyInsightTheme,
+  applyTicketFeatureState,
+  applyTicketTheme,
   setInsightHeatData,
+  setInsightLabelVisible,
   setInsightLayersVisible,
   setInsightSelectedFilter,
+  setTicketLayersVisible,
   updateInsightSectorPaint,
+  updateTicketSectorLabels,
   type SectorHeatValues,
 } from '@/components/map/insights/insightLayers'
-import { rollupBySector, heatValueForSector, type SectorRollup } from '@/lib/insights/aggregate'
+import {
+  rollupBySector,
+  heatValueForSector,
+  bucketBySectorPlanId,
+  type SectorRollup,
+  type SectorPlanBucket,
+  type InsightsFilters,
+} from '@/lib/insights/aggregate'
 import { computeQuantileBreaks, colorForValue } from '@/lib/insights/heatScale'
 import {
   ChartBarIcon,
@@ -1509,6 +1523,9 @@ export default function MapView({
         const { values, rollups, breaks } = insightPaintRef.current
         updateInsightSectorPaint(map, values, rollups, breaks, theme, colorForValue)
       }
+      // Ticket mode's fill/outline colours (Phase 4) are plain theme-dependent paint values same
+      // as everything above -- no data recompute needed, feature-state itself doesn't change.
+      applyTicketTheme(map, theme)
     }
 
     const observer = new MutationObserver(() => void syncBasemap())
@@ -1942,6 +1959,12 @@ export default function MapView({
           },
         })
       }
+      // Ticket mode's parcel fill/outline (Phase 4) -- added here, right after the class-group
+      // wash/hairline it recolours on top of, and before the peripheral dashed outline and
+      // filter-emphasis layers below, so it paints ABOVE the wash but BELOW those (PLAN-heatmap.md
+      // §9: "ticket fill sits under [the peripheral outline], not over it"). Gated on
+      // canUseInsights like addInsightLayers -- a surveyor's map never creates these layers.
+      if (canUseInsights) addTicketLayers(map, readMapTheme())
       // Visual emphasis for an active class/sub-class filter -- everything
       // already NOT matching the filter is excluded by sector-plan-fill's
       // own setFilter (below), so this is purely about making the surviving
@@ -2665,6 +2688,16 @@ export default function MapView({
           map.getCanvas().style.cursor = ''
         })
       }
+      // Ticket mode's own clickable parcel fill (Phase 4) -- same affordance pattern as Heatmap's
+      // layers above, gated to Ticket mode only.
+      map.on('mouseenter', INSIGHT_TICKET_FILL_LAYER, () => {
+        if (measuringRef.current || modeRef.current !== 'tickets') return
+        map.getCanvas().style.cursor = 'pointer'
+      })
+      map.on('mouseleave', INSIGHT_TICKET_FILL_LAYER, () => {
+        if (measuringRef.current || modeRef.current !== 'tickets') return
+        map.getCanvas().style.cursor = ''
+      })
 
       // Single map-wide click handler: clicking bare sector area (only
       // sector-hit-target matches, no parcel/road underneath) selects that
@@ -2703,8 +2736,8 @@ export default function MapView({
         // Heatmap mode's own click handling (see PLAN-heatmap.md §5.4) -- takes over entirely
         // while active, before any of the plain-map hit-testing below (which would find nothing
         // useful anyway, since sector_plan/sector_boundary are hidden in this mode). Ticket mode
-        // isn't handled here yet -- it still falls through to the plain-map logic below until
-        // Phase 4 adds its own parcel layers.
+        // has its own branch just below this one, since it needs the real sector_plan/-hit-target
+        // layers (kept visible in Ticket mode, see visibilityForMode) rather than Heatmap's.
         if (modeRef.current === 'heatmap') {
           const zoomedOut = map.getZoom() < INSIGHT_HEAT_ZOOM_CROSSOVER
           if (zoomedOut) {
@@ -2744,6 +2777,38 @@ export default function MapView({
           if (pointHits.length > 0) {
             const raw = pointHits[0].properties?.sector_no
             setInsightSector(typeof raw === 'number' ? raw : 'peripheral')
+            return
+          }
+          const sectorHits = map.queryRenderedFeatures(e.point, { layers: ['sector-hit-target'] })
+          const raw = sectorHits[0]?.properties?.sector_no
+          setInsightSector(typeof raw === 'number' ? raw : null)
+          return
+        }
+
+        // Ticket mode's own click handling (PLAN-heatmap.md §5.4 item 2) -- a parcel hit selects
+        // that parcel's sector for the Insights panel AND opens the same popup Map mode uses
+        // (showPopup already renders "no ticket" gracefully via /api/tickets/by-parcel, so this
+        // works the same for a ticket-backed parcel and a plain Road/Parking one). Falls back to
+        // bare-sector selection with no popup when only sector-hit-target matches, mirroring the
+        // Heatmap branch's empty-area fallback just above.
+        if (modeRef.current === 'tickets') {
+          const hits = map.queryRenderedFeatures(e.point, {
+            layers: [INSIGHT_TICKET_FILL_LAYER, 'sector-plan-hit-target'],
+          })
+          if (hits.length > 0) {
+            const hit = hits[0]
+            const rawSectorNo = hit.properties?.sector_no
+            const sectorNo = typeof rawSectorNo === 'number' ? rawSectorNo : null
+            setInsightSector(sectorNo ?? 'peripheral')
+            const rawId = hit.id ?? hit.properties?.id
+            const sectorPlanId = typeof rawId === 'number' ? rawId : Number(rawId)
+            if (Number.isInteger(sectorPlanId)) {
+              showPopup(
+                map,
+                { ...hit, layer: { id: 'sector-plan-fill' } } as unknown as MapGEOJSONFeatureCompat,
+                e.lngLat,
+              )
+            }
             return
           }
           const sectorHits = map.queryRenderedFeatures(e.point, { layers: ['sector-hit-target'] })
@@ -3064,6 +3129,8 @@ export default function MapView({
     if (!map || !map.isStyleLoaded()) return
     applyLayerVisibility(map, visibilityForMode(visibility, mode))
     setInsightLayersVisible(map, mode === 'heatmap')
+    setTicketLayersVisible(map, mode === 'tickets')
+    setInsightLabelVisible(map, mode === 'heatmap' || mode === 'tickets')
   }, [visibility, mode])
 
   // Keeps the double-stroke selected-sector highlight in sync with insightSector while Heatmap is
@@ -3078,8 +3145,14 @@ export default function MapView({
     )
   }, [mode, insightSector])
 
-  const insightsActive = canUseInsights && mode === 'heatmap'
+  const insightsActive = canUseInsights && (mode === 'heatmap' || mode === 'tickets')
   const { data: insightsData } = useTicketInsights(insightsActive)
+  /** Ticket-mode status/priority/category/created filters -- lifted here (not local to
+   *  InsightsModePanel) because both the panel's own chip UI (Phase 5) and this file's
+   *  feature-state recolouring effect below need the same value. Empty filters (the default,
+   *  and all Phase 4 ever produces on its own before Phase 5 wires up the chip UI) match every
+   *  ticket, so every parcel paints its real bucket with nothing muted. */
+  const [insightFilters, setInsightFilters] = useState<InsightsFilters>({})
   /** Latest computed heat values/rollups/breaks, read by the theme-swap effect (syncBasemap) to
    *  recolour insight layers on a theme toggle without waiting for insightsData to change --
    *  same ref-mirror reasoning as visibilityRef/modeRef, just for derived data instead of state. */
@@ -3118,6 +3191,58 @@ export default function MapView({
       ),
     )
   }, [insightsData, mode])
+
+  /** Last sectorPlanId->bucket map actually applied to feature-state, so the effect below only
+   *  touches parcels whose bucket changed (PLAN-heatmap.md §9's "diff against the previous bucket
+   *  assignment" -- ~3.6k unconditional setFeatureState calls per keystroke-like filter change
+   *  would blow the <100ms budget in the "Done when" column, whereas a no-op filter change now
+   *  costs nothing). Not reset on leaving Ticket mode -- the map's actual feature-state doesn't
+   *  change just because the layer is hidden, so keeping it lets a same-data re-entry stay a
+   *  no-op diff too. */
+  const ticketBucketRef = useRef<Map<number, SectorPlanBucket> | null>(null)
+  /** Pending requestAnimationFrame id for the batched setFeatureState pass below -- see
+   *  applyTicketFeatureState's doc comment for why this batching lives in MapView rather than
+   *  insightLayers.ts (the "one frame" half of §9's batching requirement is a scheduling
+   *  decision, not something the pure diff function itself should own). */
+  const ticketFeatureStateRafRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded() || mode !== 'tickets' || !insightsData) return
+
+    // Sector labels ("S7 · 52% resolved") describe the sector's real, unfiltered progress --
+    // a filter chip narrows which parcels are highlighted, it doesn't redefine what "resolved"
+    // means for the sector as a whole, so this rollup deliberately ignores insightFilters.
+    const unfilteredRollups = rollupBySector(
+      insightsData.tickets,
+      insightsData.statuses,
+      insightsData.priorities,
+      insightsData.classGroups,
+    )
+    updateTicketSectorLabels(map, unfilteredRollups, readMapTheme())
+
+    const nextBuckets = bucketBySectorPlanId(
+      insightsData.tickets,
+      insightsData.statuses,
+      insightsData.priorities,
+      insightsData.classGroups,
+      insightFilters,
+    )
+    if (ticketFeatureStateRafRef.current !== null) {
+      cancelAnimationFrame(ticketFeatureStateRafRef.current)
+    }
+    ticketFeatureStateRafRef.current = requestAnimationFrame(() => {
+      applyTicketFeatureState(map, nextBuckets, ticketBucketRef.current)
+      ticketBucketRef.current = nextBuckets
+      ticketFeatureStateRafRef.current = null
+    })
+    return () => {
+      if (ticketFeatureStateRafRef.current !== null) {
+        cancelAnimationFrame(ticketFeatureStateRafRef.current)
+        ticketFeatureStateRafRef.current = null
+      }
+    }
+  }, [insightsData, mode, insightFilters])
 
   // Mirrors mode/insightSector into the URL (?mode=&isector=) so a view can be shared or
   // reloaded -- see PLAN-heatmap.md §4.1. router.replace (not push) so switching modes doesn't

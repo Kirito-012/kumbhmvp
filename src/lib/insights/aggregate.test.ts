@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { rollupBySector, heatValueForSector, isOpenTicket, matchesFilters } from './aggregate'
+import {
+  rollupBySector,
+  heatValueForSector,
+  isOpenTicket,
+  matchesFilters,
+  bucketBySectorPlanId,
+} from './aggregate'
 import type { InsightsStatusRow, InsightsTicketTuple } from './types'
 
 const statuses: InsightsStatusRow[] = [
@@ -216,5 +222,39 @@ describe('heatValueForSector', () => {
 
   it('returns 0 for perHectare when area is unknown (0)', () => {
     expect(heatValueForSector(rollup, 'perHectare', 0)).toBe(0)
+  })
+})
+
+describe('bucketBySectorPlanId', () => {
+  it('maps each sectorPlanId to its status bucket with no filters', () => {
+    const tickets = [
+      ticket({ sectorPlanId: 1, statusIdx: 0 }), // new
+      ticket({ sectorPlanId: 2, statusIdx: 2 }), // resolved
+    ]
+    const buckets = bucketBySectorPlanId(tickets, statuses, priorities, classGroups)
+    expect(buckets.get(1)).toBe('new')
+    expect(buckets.get(2)).toBe('resolved')
+  })
+
+  it('mutes a parcel whose ticket fails the active filters, rather than omitting it', () => {
+    const tickets = [
+      ticket({ sectorPlanId: 1, priorityIdx: 1 }), // normal -- filtered out below
+      ticket({ sectorPlanId: 2, priorityIdx: 3 }), // critical -- kept
+    ]
+    const buckets = bucketBySectorPlanId(tickets, statuses, priorities, classGroups, {
+      prioritySlugs: ['critical'],
+    })
+    expect(buckets.get(1)).toBe('muted')
+    expect(buckets.get(2)).toBe('new')
+  })
+
+  it('mutes a parcel whose status index is out of range', () => {
+    const tickets = [ticket({ sectorPlanId: 3, statusIdx: 99 })]
+    const buckets = bucketBySectorPlanId(tickets, statuses, priorities, classGroups)
+    expect(buckets.get(3)).toBe('muted')
+  })
+
+  it('returns an empty map for an empty ticket list', () => {
+    expect(bucketBySectorPlanId([], statuses, priorities, classGroups).size).toBe(0)
   })
 })
