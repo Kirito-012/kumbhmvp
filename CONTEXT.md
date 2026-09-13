@@ -42,16 +42,16 @@ Production domain: `kumbhdrishti.thecraftsync.com` (Azure App Service).
 ## 2. Quick start
 
 ```bash
-pnpm install
-pnpm dev
+npm ci
+npm run dev
 ```
 
 Then open `http://localhost:3000`.
 
 Seeded login accounts live in [`scripts/seed.ts`](scripts/seed.ts) — three named accounts (admin,
-manager, surveyor), each with a fixed plaintext password in that file. Run `pnpm seed` to create them.
+manager, surveyor), each with a fixed plaintext password in that file. Run `npm run seed` to create them.
 
-> ⚠️ `pnpm seed` **deletes all users** before re-seeding. Never run it against a database with real accounts.
+> ⚠️ `npm run seed` **deletes all users** before re-seeding. Never run it against a database with real accounts.
 
 **Gotcha:** editing `src/proxy.ts` tends to wedge the Next dev server — it keeps accepting connections on
 port 3000 but stops responding. If `localhost:3000` hangs after touching that file, kill the `next dev`
@@ -94,7 +94,7 @@ cross-database reference — do not treat it as one.
 - **Zod 4** for validation, `sanitize-html` for user HTML
 - **Cloudinary** for photo storage
 - **Recharts** (dashboard), **TanStack Table** (lists), **TipTap** (rich text)
-- **pnpm** with `node-linker=hoisted` (see §11 — this is load-bearing for deploys)
+- **npm** — a flat `node_modules` of real files is load-bearing for deploys (see §11)
 - Testing: **Vitest 4** (unit), **Playwright 1.62** (e2e)
 - Commits: **Conventional Commits**, enforced by commitlint + husky
 
@@ -487,25 +487,62 @@ this, because the `oryx-manifest.toml` driving it could linger in `wwwroot` from
 **The working approach — all six parts are load-bearing:**
 
 1. Deploy `.next/standalone` only, not the whole repo (traced paths and shipped files come from one build).
-2. Build with `pnpm install --node-linker=hoisted` so traced `.nft.json` paths are portable rather than
-   symlinks into `.pnpm`. (`.npmrc` sets this locally too, so local matches CI.)
-3. `pnpm prune --prod --ignore-scripts` — the `--ignore-scripts` avoids re-running husky's `prepare`
-   script that prune just deleted.
+2. Install with **`npm ci`**. npm produces a genuinely flat `node_modules` of real directories; a package
+   needing a different version of a transitive dep gets its own nested copy. Nothing is a symlink into a
+   content store, so the tree the build resolves against _is_ the tree that ships.
+
+   This replaced pnpm, which was the root cause of a long run of production crashes. Next bakes resolved
+   dependency paths into `.next/**/*.nft.json` at build time; under pnpm those pointed into
+   `.pnpm/<pkg>@<ver>/node_modules/<pkg>`, so the shipped tree had to be reshaped afterwards to match.
+   Every package the reshaping missed crashed the server at runtime — one at a time, in load order, which
+   is why fixing `@swc/helpers` just surfaced `bson` next. `node-linker=hoisted` was not enough: it
+   flattens the top level but keeps the `.pnpm` store, and the tracer still emitted stubs pointing into it.
+
+3. Dependencies are **pinned to exact versions** in `package.json`, with `overrides` pinning transitive
+   ones. This was how the migration kept behaviour identical — see §11.1.
 4. Ship node_modules as **`app-node-modules.tar.gz`** — deliberately _not_ `node_modules.tar.gz`, because
    Oryx special-cases that filename. A different name survives untouched.
-5. Archive with **`tar -h`** (dereference symlinks). Even under hoisted installs, Next's tracer emits
-   `node_modules/next` as a symlink with an absolute build-machine path; plain `tar` ships a dangling link
-   and the app dies with `Cannot find module 'next/dist/compiled/cookie'`. The workflow asserts
-   post-archive that no symlinks remain.
+5. Archive with **`tar -h`** (dereference symlinks). Next externalizes some server packages under
+   `.next/node_modules/<pkg>-<hash>` as symlinks with absolute build-machine paths; plain `tar` ships a
+   dangling link and the app dies with `Cannot find module`. The workflow asserts post-archive that no
+   symlinks remain and that no `.pnpm` path survived.
 6. `clean: true` on the deploy action wipes `wwwroot` so stale Oryx manifests can't persist.
 
 `startup.sh` then removes any symlink/stale dir Oryx left, unpacks the tarball, verifies `node_modules/next`
 exists, sets `HOSTNAME=0.0.0.0`, and execs **`node server.js`** — not `next start`, and not the `.bin/next`
 symlink, which zip round-trips mangle.
 
-> **If you change the build or packaging step, preserve the hoisted install, the `tar -h`, and the
+> **If you change the build or packaging step, preserve `npm ci`, the `tar -h`, and the
 > non-Oryx-recognized archive filename**, or the deploy silently regresses to the symlink-clobbering
 > failure mode.
+
+### 11.1 Why dependencies are pinned
+
+`package.json` pins every direct dependency to an exact version and carries a large `overrides` block
+pinning transitive ones. This is deliberate: the pins were chosen to reproduce exactly what pnpm had
+resolved, so the pnpm-to-npm migration could not change application behaviour. Resolution was verified
+package-by-package against the previous tree.
+
+Two cases need the `overrides` block and will break if it is trimmed:
+
+- **`@tiptap/*`** — all 28 packages are pinned to one version. Left alone, npm floats `starter-kit` to a
+  newer release that pulls a _second_ copy of `@tiptap/core`; the two copies' types are structurally
+  incompatible and the build fails typechecking.
+- **`mongoose > mongodb`** — pinned to the 7.x line mongoose expects. Do **not** also pin `bson`
+  globally: the top-level `mongodb@6` needs `bson@6` while mongoose's `mongodb@7` needs `bson@7`, and a
+  global pin collapses them into one wrong copy.
+
+When bumping a dependency, update the pin (and any related override) rather than loosening it to a range.
+
+### 11.2 The smoke test is the real gate
+
+The workflow boots the packaged artifact and asserts HTTP 200 before uploading it. Note that HTTP checks
+alone are **not** sufficient: there is no database in CI, so any route touching one fails on
+`ECONNREFUSED` _before_ it ever imports mongoose. That is precisely how a missing `bson` shipped green.
+
+So the step also runs [`scripts/verify-standalone-artifact.mjs`](scripts/verify-standalone-artifact.mjs),
+which `require()`s each externalized package in `.next/node_modules/` directly — no database needed — and
+fails on a missing transitive file. Keep that check if you touch the smoke test.
 
 ---
 
@@ -514,19 +551,19 @@ symlink, which zip round-trips mangle.
 **Unit — Vitest** (`vitest.config.mts`), scoped to `src/**/*.test.ts(x)`, excludes `e2e/`:
 
 ```bash
-pnpm test        # one-shot
-pnpm test:watch
+npm test         # one-shot
+npm run test:watch
 ```
 
 Current tests: `src/lib/questionnaire/general-camping.test.ts`, `src/lib/questionnaire/summarize.test.ts`,
 `src/lib/schemas/questionnaire.test.ts`, `src/lib/utils.test.ts`, `src/server/auth/ability.test.ts`.
 `mongodb-memory-server` is available for DB-backed tests.
 
-**E2E — Playwright** (`playwright.config.ts`), auto-starts `pnpm dev` on port 3000, chromium only,
+**E2E — Playwright** (`playwright.config.ts`), auto-starts `npm run dev` on port 3000, chromium only,
 2 retries in CI:
 
 ```bash
-pnpm e2e
+npm run e2e
 ```
 
 Only spec is `e2e/auth.spec.ts` (unauthenticated redirect, login form render, invalid-credentials error).
@@ -540,8 +577,8 @@ Coverage is thin — the map and ticket flows have no automated tests.
 | Script                          | What it does                                                                                                                              |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `copy-maplibre-worker.mjs`      | **postinstall hook.** Copies MapLibre's worker files into `public/` so Turbopack can resolve them. Runs on every install — don't skip it. |
-| `seed.ts` (`pnpm seed`)         | Roles, statuses, priorities, types, 3 named accounts, 2 service accounts. **Deletes all users first.**                                    |
-| `import-map-tickets.ts`         | One ticket per `kumbh.sector_plan` parcel. Idempotent (skips already-imported `sectorPlanId`). Requires `pnpm seed` first.                |
+| `seed.ts` (`npm run seed`)      | Roles, statuses, priorities, types, 3 named accounts, 2 service accounts. **Deletes all users first.**                                    |
+| `import-map-tickets.ts`         | One ticket per `kumbh.sector_plan` parcel. Idempotent (skips already-imported `sectorPlanId`). Requires `npm run seed` first.             |
 | `demo-distribute-priorities.ts` | Demo data — reshuffles priorities by weighted random (35/40/18/7%).                                                                       |
 | `demo-resolve-by-category.ts`   | Demo data — resolves 30–60% of each category's open tickets. Safe to re-run.                                                              |
 | `demo-spread-ticket-dates.ts`   | Demo data — spreads dates over 7 days with an upward trend. Uses `overwriteImmutable: true` to write `createdAt`.                         |

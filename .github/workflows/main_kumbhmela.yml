@@ -22,22 +22,23 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: '22.x'
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11
+          cache: npm
 
       - name: Install dependencies
-        # --node-linker=hoisted gives a flat node_modules with no .pnpm symlink farm.
-        # The build MUST run against the same layout that ships: Next bakes resolved
-        # dependency paths into .next/**/*.nft.json, so building against pnpm's default
-        # symlinked tree and then swapping in a flat one leaves the server chasing
-        # node_modules/.pnpm/... paths that no longer exist.
-        run: pnpm install --frozen-lockfile --node-linker=hoisted
+        # npm produces a genuinely flat node_modules: every package is a real directory
+        # of real files, and a package needing a different version of a transitive
+        # dependency gets its own nested copy. Nothing is a symlink into a content store.
+        #
+        # This matters because Next bakes the resolved dependency layout into
+        # .next/**/*.nft.json at build time. Under pnpm the build resolved packages
+        # through .pnpm/<pkg>@<ver>/node_modules/<pkg>, so the shipped tree had to be
+        # reshaped afterwards to match -- and every package that reshaping missed
+        # crashed the server at runtime, one at a time. With npm the tree built against
+        # is already the tree that ships, so there is nothing to reshape.
+        run: npm ci
 
       - name: Build
-        run: pnpm run build
+        run: npm run build
         env:
           NEXT_PUBLIC_MAPTILER_KEY: ${{ secrets.NEXT_PUBLIC_MAPTILER_KEY }}
 
@@ -56,65 +57,20 @@ jobs:
           cp -r .next/static .next/standalone/.next/static
           cp startup.sh .next/standalone/startup.sh
 
-          # Two separate pnpm-layout problems have to be fixed before this tree can
-          # run anywhere but the build machine.
-          #
-          # 1. SHADOWING STUBS. Next's tracer emits ~40 packages as a top-level stub
-          #    node_modules/<pkg>/ containing only package.json, leaving the real files
-          #    at .pnpm/<pkg>@<ver>/node_modules/<pkg>/. Node resolves a deep subpath
-          #    against the FIRST <pkg> it finds -- the stub -- and throws
-          #    MODULE_NOT_FOUND; it does not walk on to .pnpm/. This is what crashed
-          #    production with
-          #      Cannot find module '.../node_modules/@swc/helpers/cjs/_interop_require_default.cjs'
-          #    (An earlier comment here claimed Node had a "directory-walk resolution"
-          #    that found the real content at the intermediate .pnpm/node_modules path.
-          #    It does not; that belief is why the bug survived several fixes.)
-          #    The script below replaces each stub with the real directory, choosing it
-          #    by the exact version the stub's package.json pins, and fails the build if
-          #    any stub cannot be resolved unambiguously.
-          #
-          # 2. ABSOLUTE SYMLINKS. The tracer also emits entries pointing into the store
-          #    via symlinks to absolute build-machine paths, which resolve nowhere else.
-          #    `tar -h` dereferences them into real files.
-          #
-          # Flattening (1) first also removes the deploy's dependence on the fragile part
-          # of (2): the stubs used to be rescued only incidentally, by -h dereferencing
-          # .pnpm/node_modules/<pkg>, which is why excluding that path broke production
-          # and why the semver exclude below is safe.
-          bash scripts/flatten-standalone-node-modules.sh .next/standalone/node_modules
+          # The tracer emits a few entries as symlinks into the build workspace
+          # (Next externalizes some server packages under .next/node_modules/<pkg>-<hash>).
+          # Those absolute paths exist only on the runner, so -h dereferences them.
+          rm -f .next/standalone/app-node-modules.tar.gz
+          tar -czhf .next/standalone/app-node-modules.tar.gz -C .next/standalone node_modules
 
-          # tar -h occasionally races on this runner: GNU tar lstats a symlink, then
-          # finds the target gone when it opens it ("File removed before we read it"),
-          # aborting the step. Transient, not a real missing file -- retrying clears it.
-          #
-          # The exception is node_modules/.pnpm/node_modules/semver, which vanishes
-          # every attempt, every run. It is safe to drop: every traced reference
-          # (.next/**/*.nft.json) comes from devDependency-only tooling (eslint/babel/
-          # mongodb-memory-server) that never runs in the built server, and
-          # `grep -r 'require("semver"' .next/standalone` finds nothing. Excluding this
-          # one path leaves every other .pnpm/node_modules/* package untouched. Do NOT
-          # broaden it to .pnpm/node_modules/* -- that shipped a broken tree before.
-          for attempt in 1 2 3; do
-            rm -f .next/standalone/app-node-modules.tar.gz
-            if tar -czhf .next/standalone/app-node-modules.tar.gz -C .next/standalone \
-                 --exclude='node_modules/.pnpm/node_modules/semver' \
-                 node_modules; then
-              break
-            fi
-            echo "tar attempt $attempt failed" >&2
-            if [ "$attempt" -eq 3 ]; then
-              echo "FATAL: tar failed after 3 attempts." >&2
-              exit 1
-            fi
-            sleep 2
-          done
-
-          # Prove the archive is self-contained before shipping it: no symlinks left, and
-          # the two modules whose absence broke earlier deploys are really in there --
-          # as files, at the top-level path Node will actually look at.
+          # Prove the archive is self-contained before shipping it.
           if tar -tvzf .next/standalone/app-node-modules.tar.gz | grep -q '^l'; then
             echo "FATAL: app-node-modules.tar.gz still contains symlinks." >&2
             tar -tvzf .next/standalone/app-node-modules.tar.gz | grep '^l' | head >&2
+            exit 1
+          fi
+          if tar -tzf .next/standalone/app-node-modules.tar.gz | grep -q '/[.]pnpm/'; then
+            echo "FATAL: archive contains .pnpm paths; the tree is not flat." >&2
             exit 1
           fi
           for required in \
@@ -131,6 +87,82 @@ jobs:
         # Tar rather than upload-artifact's native zip: zip preserves neither symlinks
         # nor executable bits, which is what broke the original deploy.
         run: tar -czf /tmp/node-app.tar.gz -C .next/standalone .
+
+      - name: Smoke-test the packaged artifact
+        # Boot the artifact the way Azure will and prove it serves a real request.
+        #
+        # Every past production break -- @swc/helpers, then bson -- got through because
+        # the build was green and nothing here ever loaded the packaged tree. This runs
+        # in a directory with no node_modules above it, so anything the server resolves
+        # must come from the archive itself.
+        run: |
+          rm -rf /tmp/smoke && mkdir -p /tmp/smoke
+          tar -xzf /tmp/node-app.tar.gz -C /tmp/smoke
+          cd /tmp/smoke
+
+          # the same unpack startup.sh performs at boot
+          tar -xzf app-node-modules.tar.gz
+          test -d node_modules/next || { echo "FATAL: node_modules/next missing." >&2; exit 1; }
+
+          PORT=3987 HOSTNAME=127.0.0.1 AUTH_TRUST_HOST=true \
+            NEXTAUTH_SECRET=smoke NEXTAUTH_URL=http://127.0.0.1:3987 \
+            NEXT_PUBLIC_MAPTILER_KEY=smoke \
+            node server.js > /tmp/smoke-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill $server_pid 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 60); do
+            if curl -sf -o /dev/null -m 2 \
+                 -H 'Host: kumbhdrishti.thecraftsync.com' \
+                 -H 'x-forwarded-proto: https' \
+                 http://127.0.0.1:3987/login; then
+              break
+            fi
+            if ! kill -0 $server_pid 2>/dev/null; then
+              echo "FATAL: server exited during startup." >&2
+              cat /tmp/smoke-server.log >&2
+              exit 1
+            fi
+            sleep 1
+            if [ "$i" -eq 60 ]; then
+              echo "FATAL: server did not become ready within 60s." >&2
+              cat /tmp/smoke-server.log >&2
+              exit 1
+            fi
+          done
+
+          # The app 308-redirects anything that is not the canonical host, so send that
+          # Host header; otherwise nothing ever renders and the assertion is vacuous.
+          for route in /login /register; do
+            code=$(curl -s -o /tmp/smoke-body -w '%{http_code}' -m 30 \
+                     -H 'Host: kumbhdrishti.thecraftsync.com' \
+                     -H 'x-forwarded-proto: https' \
+                     "http://127.0.0.1:3987$route")
+            if [ "$code" != "200" ]; then
+              echo "FATAL: $route returned $code, expected 200." >&2
+              head -c 2000 /tmp/smoke-body >&2
+              echo >&2
+              cat /tmp/smoke-server.log >&2
+              exit 1
+            fi
+            echo "$route -> 200 ($(wc -c < /tmp/smoke-body) bytes)"
+          done
+
+          if grep -qiE "cannot find module|MODULE_NOT_FOUND" /tmp/smoke-server.log; then
+            echo "FATAL: module resolution errors while serving." >&2
+            cat /tmp/smoke-server.log >&2
+            exit 1
+          fi
+
+          # The requests above cannot prove the database packages resolve: there is no
+          # database in CI, so those routes fail on ECONNREFUSED *before* importing
+          # mongoose. That is exactly how the bson break shipped green. This loads the
+          # externalized server packages directly -- no database needed.
+          if ! node "$GITHUB_WORKSPACE/scripts/verify-standalone-artifact.mjs" /tmp/smoke; then
+            echo "FATAL: the packaged artifact cannot resolve its own modules." >&2
+            exit 1
+          fi
+          echo "Smoke test passed."
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4

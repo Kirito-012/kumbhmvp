@@ -50,9 +50,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# this project uses pnpm (pnpm-lock.yaml is the tracked lockfile) — an npm-generated
-# package-lock.json shouldn't be committed alongside it
-/package-lock.json
+# this project uses npm; package-lock.json is the tracked lockfile and must be
+# committed so CI installs the exact same tree that was built and tested
+/pnpm-lock.yaml
 /Pending.md
 
 Kumbh_Mela_JSON/

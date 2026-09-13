@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "tcs-ticket-dev",
-      "runtimeExecutable": "pnpm",
+      "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3000,
       "autoPort": false
