@@ -55,6 +55,8 @@ next-env.d.ts
 /pnpm-lock.yaml
 /Pending.md
 
+# raw GIS source data (loaded into PostGIS by scripts/load_kumbh_2027.py) -- never committed
+/Kumbh Data/
 Kumbh_Mela_JSON/
 Kumbh_Mela_Shape/
 Kumbh_Mela_2027_V1_07_07/

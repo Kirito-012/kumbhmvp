@@ -3,7 +3,7 @@
 `kumbh` Postgres/PostGIS schema.
 
 Usage:
-    python scripts/load_kumbh_2027.py [--dry-run] [--only table1,table2]
+    python scripts/load_kumbh_2027.py [--dry-run] [--only table1,table2] [--source-root PATH]
 
 Requires: fiona, pyproj, psycopg2-binary (pip install fiona pyproj psycopg2-binary)
 Reads POSTGRES_URL from .env.local at repo root.
@@ -17,6 +17,16 @@ Behaviour:
 - NEW tables: created fresh (id serial PK, GiST index on geom, btree index on
   any sector-like column) if they don't already exist, then populated.
 - Prints a per-table row-count summary at the end.
+
+Source of truth / exceptions (see PLAN-evacuation.md §1-§3): the 2027 geodatabase
+(Kumbh_Mela_2027_V1_07_07) is authoritative for everything. Three tables are
+sourced instead (or also) from the older 25 Aug 2026 shapefile drop
+(Kumbh_Mela_Shape/25_08_2026/), because the 2027 gdb dropped or never had this
+data: `emergency_exit` (SHP_TABLE_SPECS), `hfl_area`/`hfl_line` (flood risk,
+SHP_TABLE_SPECS), and 21 hospital rows appended to `public_service_facilities`
+(supplement_public_service_facilities). Every row sourced that way carries
+`source = 'shp_2026_08_25'` so the app can flag it as coming from older data;
+everything else carries `source = 'gdb_2027'` where the table has that column.
 """
 
 from __future__ import annotations
@@ -32,16 +42,63 @@ import fiona
 import psycopg2
 import psycopg2.extras
 from pyproj import Transformer
-from shapely.geometry import shape, mapping
+from shapely.geometry import MultiLineString, MultiPolygon, shape, mapping
 from shapely.ops import transform as shapely_transform
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GDB_PATH = REPO_ROOT / "Kumbh_Mela_2027_V1_07_07" / "Kumbh_Mela_2027_V1_07_07.gdb"
-ENTRY_EXIST_SHP = REPO_ROOT / "Kumbh_Mela_2027_V1_07_07" / "Entry_Exist_l.shp"
+
+# Default layout: the source data drop lives in "Kumbh Data/" at the repo root
+# (not committed -- see .gitignore). Older checkouts had the gdb directly at
+# the repo root instead; if "Kumbh Data" isn't present, resolve_source_root()
+# below falls back to that legacy layout so this script keeps working either
+# way. --source-root overrides both.
+DEFAULT_SOURCE_ROOT = REPO_ROOT / "Kumbh Data"
+LEGACY_SOURCE_ROOT = REPO_ROOT
+
+# Mutable module state -- resolved once in main() (or by callers of
+# resolve_source_root() in tests) before any loading happens. Every loader
+# function reads these at call time, never a value captured at import time.
+SOURCE_ROOT = DEFAULT_SOURCE_ROOT
+GDB_PATH = SOURCE_ROOT / "Kumbh_Mela_2027_V1_07_07" / "Kumbh_Mela_2027_V1_07_07.gdb"
+ENTRY_EXIST_SHP = SOURCE_ROOT / "Kumbh_Mela_2027_V1_07_07" / "Entry_Exist_l.shp"
+SHP_2026_08_25_DIR = SOURCE_ROOT / "Kumbh_Mela_Shape" / "25_08_2026"
+
+
+def resolve_source_root(explicit: str | None) -> Path:
+    """--source-root wins outright. Otherwise prefer DEFAULT_SOURCE_ROOT ("Kumbh Data/")
+    if its gdb is present, then fall back to the legacy repo-root layout -- see the
+    module docstring's comment on DEFAULT_SOURCE_ROOT/LEGACY_SOURCE_ROOT above."""
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    for candidate in (DEFAULT_SOURCE_ROOT, LEGACY_SOURCE_ROOT):
+        if (candidate / "Kumbh_Mela_2027_V1_07_07" / "Kumbh_Mela_2027_V1_07_07.gdb").exists():
+            return candidate
+    return DEFAULT_SOURCE_ROOT
+
+
+def set_source_root(root: Path) -> None:
+    """Repoints every path constant at `root` -- called once from main() after
+    argparse resolves --source-root, and by anything else that needs a non-default
+    root (e.g. a future test). Must run before any load_*/GDB_PATH.exists() call."""
+    global SOURCE_ROOT, GDB_PATH, ENTRY_EXIST_SHP, SHP_2026_08_25_DIR
+    SOURCE_ROOT = root
+    GDB_PATH = SOURCE_ROOT / "Kumbh_Mela_2027_V1_07_07" / "Kumbh_Mela_2027_V1_07_07.gdb"
+    ENTRY_EXIST_SHP = SOURCE_ROOT / "Kumbh_Mela_2027_V1_07_07" / "Entry_Exist_l.shp"
+    SHP_2026_08_25_DIR = SOURCE_ROOT / "Kumbh_Mela_Shape" / "25_08_2026"
+
 
 SOURCE_SRID = 32644
 TARGET_SRID = 4326
 BACKUP_SUFFIX = datetime.date.today().strftime("%Y%m%d")
+
+# Tags for the `source` column added to tables that mix 2027-gdb rows with
+# 25-Aug-shapefile rows (or are sourced from the shapefile entirely) -- see the
+# module docstring. Every REPLACE_SPECS/NEW_TABLE_SPECS row from the gdb gets
+# SOURCE_TAG_2027 where its table has a `source` column; every SHP_TABLE_SPECS
+# row, and the hospitals supplement_public_service_facilities appends, get
+# SOURCE_TAG_SHP.
+SOURCE_TAG_2027 = "gdb_2027"
+SOURCE_TAG_SHP = "shp_2026_08_25"
 
 _transformer = Transformer.from_crs(f"EPSG:{SOURCE_SRID}", f"EPSG:{TARGET_SRID}", always_xy=True)
 
@@ -49,6 +106,22 @@ _transformer = Transformer.from_crs(f"EPSG:{SOURCE_SRID}", f"EPSG:{TARGET_SRID}"
 def reproject(geom):
     """Reprojects a shapely geometry from EPSG:32644 to EPSG:4326."""
     return shapely_transform(lambda x, y, z=None: _transformer.transform(x, y), geom)
+
+
+def to_multi(geom):
+    """Promotes a bare Polygon/LineString to Multi* -- every `kumbh.*` geom column is
+    declared Multi (see load_new_table/load_shp_new_table's CREATE TABLE), but the 25 Aug
+    shapefile drop stores some of these layers (Sector_Plan_Road, Disastar_Management,
+    HFL_Line, Public_Service_Facilities) as plain Polygon/LineString rather than the
+    Multi variant the 2027 gdb happens to use for the same real-world layers. Inserting a
+    bare WKT into a Multi-typed column errors ("Geometry type ... does not match column
+    type"), so every SHP_TABLE_SPECS/supplement geometry is passed through this first.
+    A no-op on anything already Multi (or any other geometry type)."""
+    if geom.geom_type == "Polygon":
+        return MultiPolygon([geom])
+    if geom.geom_type == "LineString":
+        return MultiLineString([geom])
+    return geom
 
 
 def force_2d(geom):
@@ -246,6 +319,13 @@ def _bus_terminal_map(p, source_layer):
 
 
 def _public_service_facilities_map(p, source_layer):
+    # subclass/services/category/bed are always null straight from the 2027 gdb -- neither
+    # Public_Service_Facilities nor FSTP carries those columns there at all. The 25 Aug
+    # shapefile drop does have them for the same 57 facilities (plus 21 more,
+    # Hospital/Health Camping rows the gdb doesn't carry); see
+    # supplement_public_service_facilities, which fills them in and appends those extra
+    # rows as a post-load step, keyed by matching this table's rows to the shapefile's by
+    # centroid. `source` distinguishes a plain gdb row from a supplement-appended one.
     if source_layer == "FSTP":
         return {
             "name": clean(p.get("Name")),
@@ -256,6 +336,7 @@ def _public_service_facilities_map(p, source_layer):
             "bed": None,
             "shape_leng_src": p.get("SHAPE_Length"),
             "shape_area_src": p.get("SHAPE_Area"),
+            "source": SOURCE_TAG_2027,
         }
     return {
         "name": clean(p.get("Name")),
@@ -266,6 +347,7 @@ def _public_service_facilities_map(p, source_layer):
         "bed": None,
         "shape_leng_src": p.get("SHAPE_Length"),
         "shape_area_src": p.get("SHAPE_Area"),
+        "source": SOURCE_TAG_2027,
     }
 
 
@@ -338,6 +420,115 @@ def _trench_line_map(p, source_layer):
         "remark": clean(p.get("Remark")),
         "shape_leng_src": p.get("SHAPE_Length"),
     }
+
+
+# ---------------------------------------------------------------------------
+# 25 Aug 2026 shapefile exceptions (SHP_TABLE_SPECS below) -- see the module
+# docstring and PLAN-evacuation.md §2.3. Unlike REPLACE_SPECS/NEW_TABLE_SPECS,
+# these read a single standalone shapefile (not a gdb layer) via
+# load_shp_new_table, and every mapped row carries source=SOURCE_TAG_SHP.
+# ---------------------------------------------------------------------------
+
+
+def _emergency_exit_map(p, source_layer):
+    # Sector_Plan_Road's Type='Emergency Exit' rows (see SHP_TABLE_SPECS' filter) -- the
+    # 2027 gdb relabels 23 of these 24 paths as plain 'Proposed Road' in ROAD_IN_M (their
+    # vertices coincide almost exactly), so this is the only place emergency exits still
+    # exist as their own thing. sector_no is parsed the same way as every other free-text
+    # sector name; the 1 row this can't parse gets backfilled spatially (see main()).
+    sector_name = clean(p.get("Sector_Nam"))
+    return {
+        "road_name": clean(p.get("Road_Name")),
+        "row_width_m": p.get("ROW"),
+        "sector_name": sector_name,
+        "sector_no": _sector_no_from_name(sector_name),
+        "source": SOURCE_TAG_SHP,
+    }
+
+
+def _hfl_area_map(p, source_layer):
+    # Disastar_Management.shp -- 19 "HFL Area" polygons (area below the High Flood Level),
+    # one per sector. Remark carries the sector name (e.g. "KANKHAL-10"), which matches a
+    # 2027 sector_boundary.name exactly for every row, so sector_no parses the same way.
+    name = clean(p.get("Remark"))
+    return {
+        "type": clean(p.get("Type")),
+        "name": name,
+        "sector_no": _sector_no_from_name(name),
+        "area_m2": p.get("SHAPE_Area"),
+        "source": SOURCE_TAG_SHP,
+    }
+
+
+_HFL_LINE_NAME_RE = re.compile(r"(\d+)\s*Y\s*(LB|RB)?", re.IGNORECASE)
+
+
+def _parse_hfl_line_name(name):
+    """'25 Y RB' -> (25, 'RB'); '100 Y LB' -> (100, 'LB'); '25 Y' -> (25, None)."""
+    if not name:
+        return None, None
+    m = _HFL_LINE_NAME_RE.search(name)
+    if not m:
+        return None, None
+    return int(m.group(1)), (m.group(2).upper() if m.group(2) else None)
+
+
+def _hfl_line_map(p, source_layer):
+    # HFL_Line.shp -- 17 flood-extent lines for the 25/50/100-year return period, on the
+    # left ("LB") and right ("RB") bank. return_period_years/bank are parsed out of Name
+    # (e.g. "25 Y RB") rather than stored as their own source columns.
+    name = clean(p.get("Name"))
+    years, bank = _parse_hfl_line_name(name)
+    return {
+        "name": name,
+        "return_period_years": years,
+        "bank": bank,
+        "source": SOURCE_TAG_SHP,
+    }
+
+
+# (table, ddl_columns, geom_type, shp_filename, map_fn, feature_filter)
+# shp_filename is resolved against SHP_2026_08_25_DIR at call time (see load_shp_new_table),
+# not baked in here, since SOURCE_ROOT/SHP_2026_08_25_DIR are only known once main() has
+# parsed --source-root.
+SHP_TABLE_SPECS = [
+    (
+        "emergency_exit",
+        {
+            "road_name": "text",
+            "row_width_m": "double precision",
+            "sector_name": "text",
+            "sector_no": "integer",
+            "source": "text",
+        },
+        "MULTILINESTRING",
+        "Sector_Plan_Road.shp",
+        _emergency_exit_map,
+        lambda p: clean(p.get("Type")) == "Emergency Exit",
+    ),
+    (
+        "hfl_area",
+        {
+            "type": "text",
+            "name": "text",
+            "sector_no": "integer",
+            "area_m2": "double precision",
+            "source": "text",
+        },
+        "MULTIPOLYGON",
+        "Disastar_Management.shp",
+        _hfl_area_map,
+        None,
+    ),
+    (
+        "hfl_line",
+        {"name": "text", "return_period_years": "integer", "bank": "text", "source": "text"},
+        "MULTILINESTRING",
+        "HFL_Line.shp",
+        _hfl_line_map,
+        None,
+    ),
+]
 
 
 # `Road_Secondary` (109 features, see Pending.md / PLAN-deferred-roads.md Phase 4) is
@@ -469,6 +660,10 @@ REPLACE_SPECS = [
         "layers": ["SECTOR_BOUNDARY_UPDATED"],
         "map": _sector_boundary_map,
         "geom_type": "MULTIPOLYGON",
+        # The 2027 gdb's SECTOR_BOUNDARY_UPDATED has no Zone column -- backfill_sector_zone
+        # (below) fills this in by name from the 25 Aug shapefile's own SECTOR_BOUNDARY_UPDATED,
+        # which does carry one (all 32 sector names match exactly). See PLAN-evacuation.md §2.4.
+        "extra_columns": {"zone": "text"},
     },
     {
         "table": "road",
@@ -513,6 +708,10 @@ REPLACE_SPECS = [
         "layers": ["Public_Service_Facilities", "FSTP"],
         "map": _public_service_facilities_map,
         "geom_type": "MULTIPOLYGON",
+        # See supplement_public_service_facilities below -- a full reload of this table
+        # truncates it back to plain gdb rows (source='gdb_2027', subclass/services/
+        # category/bed all null), so main() re-runs the supplement immediately after.
+        "extra_columns": {"source": "text"},
     },
     {
         "table": "sanitation",
@@ -1305,23 +1504,281 @@ def load_new_table(conn, table, columns, geom_type, layers, map_fn, dry_run):
     return len(features)
 
 
+def load_shp_new_table(conn, table, columns, geom_type, shp_filename, map_fn, dry_run, feature_filter=None):
+    """Like load_new_table, but reads one standalone shapefile from SHP_2026_08_25_DIR
+    (the 25 Aug 2026 drop, kept only for the handful of layers the 2027 gdb dropped or
+    never had -- see the module docstring and SHP_TABLE_SPECS above) instead of a gdb
+    layer, and optionally filters raw features by their properties before mapping (e.g.
+    Sector_Plan_Road.shp's Type='Emergency Exit' rows only). Source geometry here is
+    often plain Polygon/LineString rather than the Multi* variant the target column is
+    declared as, so every geometry is passed through to_multi()."""
+    shp_path = SHP_2026_08_25_DIR / shp_filename
+    print(f"\n=== {table} (new, from {shp_filename}) ===")
+    if not shp_path.exists():
+        print(f"  shapefile not found at {shp_path} -- skipping")
+        return 0
+
+    features = []
+    with fiona.open(shp_path) as src:
+        for f in src:
+            if f["geometry"] is None:
+                continue
+            props = dict(f["properties"])
+            if feature_filter and not feature_filter(props):
+                continue
+            geom = force_2d(to_multi(reproject(shape(f["geometry"]))))
+            row = map_fn(props, shp_path.stem)
+            features.append((row, geom))
+    print(f"  read {len(features)} features from {shp_filename}")
+
+    if not features:
+        print("  0 features -- table not created")
+        return 0
+
+    if dry_run:
+        for row, _ in features[:5]:
+            print(f"    sample: {row}")
+        return len(features)
+
+    with conn.cursor() as cur:
+        col_ddl = ",\n            ".join(ddl_type_for(c, t) for c, t in columns.items())
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS kumbh.{table} (
+                id serial PRIMARY KEY,
+                {col_ddl},
+                geom geometry({geom_type}, {TARGET_SRID})
+            )
+            """
+        )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS {table}_geom_idx ON kumbh.{table} USING GIST (geom)"
+        )
+        if "sector_no" in columns:
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS {table}_sector_no_idx ON kumbh.{table} USING btree (sector_no)"
+            )
+        cur.execute(f"TRUNCATE kumbh.{table} RESTART IDENTITY")
+
+        cols = list(columns.keys())
+        col_list = ", ".join(cols)
+        placeholders = ", ".join(["%s"] * len(cols))
+        sql = (
+            f"INSERT INTO kumbh.{table} ({col_list}, geom) "
+            f"VALUES ({placeholders}, ST_SetSRID(ST_GeomFromText(%s), {TARGET_SRID}))"
+        )
+        batch = [tuple(row.get(c) for c in cols) + (geom.wkt,) for row, geom in features]
+        psycopg2.extras.execute_batch(cur, sql, batch, page_size=500)
+        conn.commit()
+
+    print(f"  inserted {len(features)} rows into kumbh.{table}")
+    return len(features)
+
+
+def supplement_public_service_facilities(conn, dry_run):
+    """The 2027 gdb's Public_Service_Facilities/FSTP layers carry no subclass/services/
+    category/bed data at all (every row null straight from _public_service_facilities_map)
+    -- the 25 Aug 2026 shapefile drop has those columns filled in for the same 57
+    facilities, matched here by nearest centroid (in the shared source CRS EPSG:32644, to
+    within MATCH_RADIUS_M) plus 21 more Hospital/Health Camping rows the 2027 gdb doesn't
+    carry at all (AIIMS 960-bed, Mela Hospital, Harmilap Mission 238-bed, ...). The
+    shapefile's 9 electrical substations are deliberately skipped -- out of scope for a
+    "public service facilities" evacuation layer; see PLAN-evacuation.md decision #11.
+
+    Idempotent: always deletes any previously-appended source=SOURCE_TAG_SHP rows before
+    re-matching/re-appending, so re-running never duplicates. Must be re-run after any
+    full reload of this table (a plain `--only public_service_facilities` gdb run wipes
+    every row back to null/57 via load_replace_table's TRUNCATE) -- main() does this
+    automatically."""
+    shp_path = SHP_2026_08_25_DIR / "Public_Service_Facilities.shp"
+    print("\n=== public_service_facilities (supplement from 25 Aug shapefile) ===")
+    if not shp_path.exists():
+        print(f"  {shp_path} not found -- skipping supplement")
+        return
+
+    MATCH_RADIUS_M = 20
+
+    with conn.cursor() as cur:
+        # In --dry-run mode this runs *without* load_replace_table having actually added
+        # the `source` column yet (dry-run returns before that ALTER) -- fall back to every
+        # row in that case, since a fresh table has nothing but plain 2027 rows anyway. A
+        # real run always reaches this after the ALTER has run for real, so the column is
+        # there.
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema='kumbh' AND table_name='public_service_facilities' AND column_name='source'"
+        )
+        has_source_col = cur.fetchone() is not None
+        if has_source_col:
+            cur.execute(
+                "SELECT id, ST_X(ST_Centroid(ST_Transform(geom, %s))), "
+                "ST_Y(ST_Centroid(ST_Transform(geom, %s))) "
+                "FROM kumbh.public_service_facilities WHERE source = %s",
+                (SOURCE_SRID, SOURCE_SRID, SOURCE_TAG_2027),
+            )
+        else:
+            cur.execute(
+                "SELECT id, ST_X(ST_Centroid(ST_Transform(geom, %s))), "
+                "ST_Y(ST_Centroid(ST_Transform(geom, %s))) "
+                "FROM kumbh.public_service_facilities",
+                (SOURCE_SRID, SOURCE_SRID),
+            )
+        gdb_rows = cur.fetchall()
+
+    matched_ids = set()
+    updates = []  # (id, subclass, services, category, bed)
+    extra_features = []  # (row_dict, shapely_geom) for shapefile-only Hospital/Health Camping rows
+
+    with fiona.open(shp_path) as src:
+        for f in src:
+            if f["geometry"] is None:
+                continue
+            p = dict(f["properties"])
+            geom_utm = shape(f["geometry"])
+            c = geom_utm.centroid
+            best_id, best_d = None, None
+            for gid, gx, gy in gdb_rows:
+                d = ((gx - c.x) ** 2 + (gy - c.y) ** 2) ** 0.5
+                if best_d is None or d < best_d:
+                    best_id, best_d = gid, d
+            ptype = clean(p.get("Type"))
+            if best_id is not None and best_d is not None and best_d <= MATCH_RADIUS_M:
+                matched_ids.add(best_id)
+                updates.append(
+                    (best_id, clean(p.get("Subclass")), clean(p.get("Services")), clean(p.get("Category")), clean(p.get("BED")))
+                )
+            elif ptype in ("Hospital", "Health Camping"):
+                extra_features.append(
+                    (
+                        {
+                            "name": clean(p.get("Name")),
+                            "type": ptype,
+                            "subclass": clean(p.get("Subclass")),
+                            "services": clean(p.get("Services")),
+                            "category": clean(p.get("Category")),
+                            "bed": clean(p.get("BED")),
+                            "shape_leng_src": p.get("SHAPE_Leng"),
+                            "shape_area_src": p.get("SHAPE_Area"),
+                            "source": SOURCE_TAG_SHP,
+                        },
+                        force_2d(to_multi(reproject(geom_utm))),
+                    )
+                )
+            # else: an unmatched substation (or anything else not a hospital) -- skip.
+
+    print(
+        f"  matched {len(matched_ids)}/{len(gdb_rows)} gdb rows to shapefile facilities "
+        f"(<= {MATCH_RADIUS_M}m); {len(extra_features)} shapefile-only Hospital/Health "
+        f"Camping rows to append"
+    )
+
+    if dry_run:
+        for row, _ in extra_features[:5]:
+            print(f"    sample new row: {row}")
+        return
+
+    with conn.cursor() as cur:
+        for gid, subclass, services, category, bed in updates:
+            cur.execute(
+                "UPDATE kumbh.public_service_facilities SET "
+                "subclass = COALESCE(subclass, %s), "
+                "services = COALESCE(services, %s), "
+                "category = COALESCE(category, %s), "
+                "bed = COALESCE(bed, %s) "
+                "WHERE id = %s",
+                (subclass, services, category, bed, gid),
+            )
+        cur.execute(
+            "DELETE FROM kumbh.public_service_facilities WHERE source = %s", (SOURCE_TAG_SHP,)
+        )
+        if extra_features:
+            cols = list(extra_features[0][0].keys())
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(["%s"] * len(cols))
+            sql = (
+                f"INSERT INTO kumbh.public_service_facilities ({col_list}, geom) "
+                f"VALUES ({placeholders}, ST_SetSRID(ST_GeomFromText(%s), {TARGET_SRID}))"
+            )
+            batch = [tuple(row.get(c) for c in cols) + (geom.wkt,) for row, geom in extra_features]
+            psycopg2.extras.execute_batch(cur, sql, batch, page_size=200)
+        conn.commit()
+    print(
+        f"  enriched {len(updates)} rows with subclass/services/category/bed where present; "
+        f"appended {len(extra_features)} shapefile-only rows"
+    )
+
+
+def backfill_sector_zone(conn, dry_run):
+    """Adds `zone` to kumbh.sector_boundary (see its REPLACE_SPECS extra_columns) and
+    fills it in by matching sector NAME against the 25 Aug shapefile's own
+    SECTOR_BOUNDARY_UPDATED, which carries a Zone column the 2027 gdb layer doesn't. All
+    32 sector names match exactly between the two drops (checked 2026-09-15), so a name
+    join is exact and needs no spatial fallback. See PLAN-evacuation.md §2.4."""
+    shp_path = SHP_2026_08_25_DIR / "SECTOR_BOUNDARY_UPDATED.shp"
+    print("\n=== sector_boundary.zone (backfill from 25 Aug shapefile) ===")
+    if not shp_path.exists():
+        print(f"  {shp_path} not found -- skipping zone backfill")
+        return
+
+    zone_by_name = {}
+    with fiona.open(shp_path) as src:
+        for f in src:
+            p = dict(f["properties"])
+            name = clean(p.get("Name"))
+            zone = clean(p.get("Zone"))
+            if name and zone:
+                zone_by_name[name] = zone
+    print(f"  read {len(zone_by_name)} sector->zone pairs from the shapefile")
+
+    if dry_run:
+        return
+
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE kumbh.sector_boundary ADD COLUMN IF NOT EXISTS zone text")
+        n = 0
+        for name, zone in zone_by_name.items():
+            cur.execute(
+                "UPDATE kumbh.sector_boundary SET zone = %s WHERE name = %s", (zone, name)
+            )
+            n += cur.rowcount
+        conn.commit()
+        cur.execute("SELECT count(*) FROM kumbh.sector_boundary WHERE zone IS NULL")
+        unmatched = cur.fetchone()[0]
+    print(f"  set zone on {n} sectors" + (f" ({unmatched} sectors still unmatched)" if unmatched else ""))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Read + report counts, write nothing")
     parser.add_argument("--only", type=str, default=None, help="Comma-separated table names to run")
+    parser.add_argument(
+        "--source-root",
+        type=str,
+        default=None,
+        help="Directory containing Kumbh_Mela_2027_V1_07_07/ and Kumbh_Mela_Shape/25_08_2026/ "
+        "(default: \"Kumbh Data/\" at the repo root if present, else the repo root itself)",
+    )
     args = parser.parse_args()
 
     only = set(args.only.split(",")) if args.only else None
+    set_source_root(resolve_source_root(args.source_root))
+    print(f"Source root: {SOURCE_ROOT}")
 
     if not GDB_PATH.exists():
         print(f"gdb not found at {GDB_PATH}", file=sys.stderr)
         sys.exit(1)
+    if not SHP_2026_08_25_DIR.exists():
+        print(
+            f"warning: 25 Aug shapefile dir not found at {SHP_2026_08_25_DIR} -- "
+            f"emergency_exit/hfl_area/hfl_line/zone/hospital-supplement will be skipped",
+            file=sys.stderr,
+        )
 
     conn = get_conn()
     results = {}
 
-    # sector_boundary must load first: sector_plan/road's sector_no backfill
-    # depends on spatially joining against it.
+    # sector_boundary must load first: sector_plan/road's sector_no backfill (and this
+    # script's own zone backfill) depend on spatially/name-joining against it.
     ordered_specs = sorted(REPLACE_SPECS, key=lambda s: 0 if s["table"] == "sector_boundary" else 1)
 
     try:
@@ -1331,6 +1788,10 @@ def main():
             results[spec["table"]] = load_replace_table(conn, spec, args.dry_run)
             if not args.dry_run and spec["table"] in ("sector_plan", "road"):
                 backfill_sector_no(conn, spec["table"])
+            if spec["table"] == "sector_boundary":
+                backfill_sector_zone(conn, args.dry_run)
+            if spec["table"] == "public_service_facilities":
+                supplement_public_service_facilities(conn, args.dry_run)
 
         for table, columns, geom_type, layers, map_fn in NEW_TABLE_SPECS:
             if only and table not in only:
@@ -1338,6 +1799,18 @@ def main():
             results[table] = load_new_table(conn, table, columns, geom_type, layers, map_fn, args.dry_run)
             if not args.dry_run and table == "tertiary_road":
                 dedupe_tertiary_road(conn)
+
+        for table, columns, geom_type, shp_filename, map_fn, feature_filter in SHP_TABLE_SPECS:
+            if only and table not in only:
+                continue
+            results[table] = load_shp_new_table(
+                conn, table, columns, geom_type, shp_filename, map_fn, args.dry_run, feature_filter
+            )
+            # emergency_exit's Sector_Nam free text fails to parse a trailing "-NN" for 1 of
+            # its 24 rows -- same spatial-join fallback as sector_plan/road above, reused
+            # since backfill_sector_no only assumes `sector_no`/`geom` columns exist.
+            if not args.dry_run and table == "emergency_exit":
+                backfill_sector_no(conn, table)
     finally:
         conn.close()
 

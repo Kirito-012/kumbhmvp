@@ -186,16 +186,28 @@ export async function GET(req: NextRequest) {
       ),
       pool.query(
         `
+      -- 'Emergency Exit' no longer occurs as a kumbh.road row (the 2027 gdb reload
+      -- dropped the label -- see PLAN-evacuation.md §2.1/§3); it's unioned in here from
+      -- kumbh.emergency_exit (loaded from the 25 Aug 2026 shapefile) so this row keeps
+      -- showing real counts instead of silently going to 0.
       SELECT g.type,
              coalesce(s.segments, 0) AS segments,
              coalesce(s.metres, 0) AS metres
-      FROM (SELECT DISTINCT type FROM kumbh.road) g
+      FROM (
+        SELECT DISTINCT type FROM kumbh.road
+        UNION SELECT 'Emergency Exit'
+      ) g
       LEFT JOIN (
         SELECT type, count(*) AS segments,
                round((sum(ST_Length(geom::geography)))::numeric, 0) AS metres
         FROM kumbh.road
         WHERE $1::int IS NULL OR sector_no = $1
         GROUP BY type
+        UNION ALL
+        SELECT 'Emergency Exit', count(*),
+               round((sum(ST_Length(geom::geography)))::numeric, 0)
+        FROM kumbh.emergency_exit
+        WHERE $1::int IS NULL OR sector_no = $1
       ) s ON s.type = g.type
       ORDER BY coalesce(s.metres, 0) DESC;
       `,

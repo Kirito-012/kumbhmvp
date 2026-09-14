@@ -34,7 +34,7 @@ const LAYERS: Record<
   },
   sector_boundary: {
     table: 'kumbh.sector_boundary',
-    columns: 'id, name, sector_no, area_hac',
+    columns: 'id, name, sector_no, area_hac, zone',
   },
   sector_plan: {
     table: 'kumbh.sector_plan',
@@ -212,6 +212,21 @@ const LAYERS: Record<
   other_transport: {
     table: 'kumbh.other_transport',
     columns: 'id, name',
+  },
+  // Loaded from the 25 Aug 2026 shapefile drop, not the 2027 gdb -- see
+  // scripts/load_kumbh_2027.py's SHP_TABLE_SPECS and PLAN-evacuation.md §2.3. `source`
+  // is always 'shp_2026_08_25' for these three; carried through so the app can flag it.
+  emergency_exit: {
+    table: 'kumbh.emergency_exit',
+    columns: 'id, road_name, row_width_m, sector_name, sector_no, source',
+  },
+  hfl_area: {
+    table: 'kumbh.hfl_area',
+    columns: 'id, type, name, sector_no, area_m2, source',
+  },
+  hfl_line: {
+    table: 'kumbh.hfl_line',
+    columns: 'id, name, return_period_years, bank, source',
   },
   tertiary_road: {
     table: 'kumbh.tertiary_road',

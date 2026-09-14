@@ -522,6 +522,41 @@ plain MapLibre `setFilter` on `in_sector` — no second layer or request, since 
 Its label is **"Street network (OSM)"** to flag it as third-party reference data, not curated project
 infrastructure.
 
+### Two source drops, and why a few tables mix them (`source` column)
+
+`scripts/load_kumbh_2027.py` reads from a `Kumbh Data/` folder at the repo root (gitignored, not
+committed — see `--source-root` below) that actually holds **two** drops:
+
+- `Kumbh_Mela_2027_V1_07_07/…gdb` (edited 2026-09-06) — **the source of truth for everything.**
+- `Kumbh_Mela_Shape/25_08_2026/` — an **older** shapefile export, kept only because the 2027 gdb
+  dropped or never had three things (see `SHP_TABLE_SPECS`/`supplement_public_service_facilities` in
+  the loader, and `PLAN-evacuation.md` §2-§3 for the full investigation):
+  - **`kumbh.emergency_exit`** (new table, 24 rows) — the 2027 road reload relabelled these 24 paths
+    (in sectors 7/9/11/12) as plain `Proposed Road`; the label survives only in the older drop, even
+    though 23 of the 24 paths' vertices coincide with a `Proposed Road` row in `kumbh.road`. Map mode's
+    "Emergency Exit" toggle now draws from this table (its own `emergency-exit-line` MapLibre layer) —
+    it used to be a `type='Emergency Exit'` filter on `road-line`, which is why the toggle existed but
+    drew nothing between the 2026-09-06 reload and this table's introduction.
+  - **`kumbh.hfl_area`** (19 rows) / **`kumbh.hfl_line`** (17 rows) — flood-risk polygons/lines (High
+    Flood Level) with no 2027 gdb equivalent at all.
+  - **21 rows appended to `kumbh.public_service_facilities`** — Hospital/Health Camping facilities
+    (AIIMS, Mela Hospital, Harmilap Mission, …) the 2027 gdb doesn't carry, plus `subclass`/`services`/
+    `category`/`bed` backfilled on the 57 gdb rows where the older drop has them (2027's own columns
+    are all null). `supplement_public_service_facilities` does this and re-runs automatically after any
+    reload of that table, since a plain gdb reload truncates it back to null/57.
+  - `kumbh.sector_boundary.zone` (32 rows, 5 zones) is also backfilled from the older drop's
+    `SECTOR_BOUNDARY_UPDATED.shp`, which carries a `Zone` column the 2027 layer doesn't — matched by
+    sector **name** (all 32 match exactly, no spatial join needed).
+
+  Every row actually sourced from the older drop carries `source = 'shp_2026_08_25'` (`'gdb_2027'`
+  otherwise, on tables that have the column at all) so the app can flag it as such — see the
+  "Source: 25 Aug 2026 survey" popup row for `emergency-exit-line`/`kumbh.hfl_*`.
+
+  **Do not casually pull anything else from the older drop.** These four exceptions were individually
+  verified (row counts, name/geometry matching) against the 2027 data — the 2027 gdb is authoritative
+  for everything not listed above, including its own 15-point-smaller `entry_exit` (63 vs. the older
+  drop's 78) and its `Public_Service_Facilities`/`FSTP` type set.
+
 ---
 
 ## 11. Build and deploy — the Oryx saga
@@ -636,25 +671,39 @@ Coverage is thin — the map and ticket flows have no automated tests.
 ### Extending `load_kumbh_2027.py`
 
 ```bash
-python scripts/load_kumbh_2027.py [--dry-run] [--only table1,table2]
+python scripts/load_kumbh_2027.py [--dry-run] [--only table1,table2] [--source-root PATH]
 ```
 
-Reads `POSTGRES_URL` from `.env.local`. Needs `fiona`, `pyproj`, `psycopg2-binary`.
+Reads `POSTGRES_URL` from `.env.local`. Needs `fiona`, `pyproj`, `psycopg2-binary`, `shapely`.
+`--source-root` defaults to `Kumbh Data/` at the repo root (gitignored — see §10's "Two source drops"
+for what lives in there and why); falls back to the legacy repo-root layout if that's not present.
 
-Two spec structures, both pairing a target table with source gdb layer(s) and a
+Three spec structures, all pairing a target table with one or more source layers/files and a
 `map_fn(properties, source_layer) -> dict` column mapper:
 
-- **`REPLACE_SPECS`** — table already exists. Old rows are copied to a dated
+- **`REPLACE_SPECS`** — table already exists, sourced from the gdb. Old rows are copied to a dated
   `<table>_backup_<date>` table, then truncated and reloaded.
 - **`NEW_TABLE_SPECS`** — creates the table if missing (serial PK, GiST index on geom, btree on
-  sector-like columns).
+  sector-like columns), sourced from the gdb.
+- **`SHP_TABLE_SPECS`** — like `NEW_TABLE_SPECS`, but reads one standalone shapefile from the older
+  25 Aug 2026 drop (`SHP_2026_08_25_DIR`) via `load_shp_new_table`, with an optional row-level
+  `feature_filter`. Only used for the three exceptions in §10's "Two source drops" — don't add a
+  layer here unless it's a genuine gap in the 2027 gdb, verified the way those three were
+  (`PLAN-evacuation.md` §2-§3).
 
-Reusable helpers: `force_2d()` (drops Z), `clean()` (normalizes blanks), `backfill_sector_no()`
-(post-load spatial join for sector numbers unparseable from free text), `dedupe_tertiary_road()` (the
-fold-a-subset-layer-into-a-flag-column pattern).
+Reusable helpers: `force_2d()` (drops Z), `to_multi()` (promotes a bare Polygon/LineString to Multi* --
+needed for shapefile sources, which aren't always the Multi variant a target column is declared as),
+`clean()` (normalizes blanks), `backfill_sector_no()` (post-load spatial join for sector numbers
+unparseable from free text — reusable on any table with `sector_no`/`geom`), `dedupe_tertiary_road()`
+(the fold-a-subset-layer-into-a-flag-column pattern), `backfill_sector_zone()` (name-join `zone` from
+the older drop onto `sector_boundary`), `supplement_public_service_facilities()` (centroid-matches the
+older drop's facilities onto the gdb rows and appends the ones the gdb doesn't have — idempotent, and
+re-run automatically after every reload of that table since a plain reload truncates its enrichment
+away).
 
-To add a layer: add an entry to the appropriate spec with a `map_fn`, following the existing
-`_<table>_map` pattern.
+To add a gdb layer: add an entry to `REPLACE_SPECS`/`NEW_TABLE_SPECS` with a `map_fn`, following the
+existing `_<table>_map` pattern. `SOURCE_TAG_2027`/`SOURCE_TAG_SHP` are the two values a table's
+`source` column (where present) can hold.
 
 ---
 
@@ -701,6 +750,11 @@ Branch `feat/heatmap` (not yet merged to `main`). Recent work (this may be stale
 - `proxy.ts` canonical redirect scoped to production so localhost dev works
 - `Road_Secondary` classified and loaded (12 of 109 rows into `kumbh.road`, 97 duplicates
   dropped via content-hash exclusion) — the gdb load is now fully complete, 67/67 (§10)
+- Evacuation mode (`PLAN-evacuation.md`) Phase 0 committed: `kumbh.emergency_exit`/`hfl_area`/
+  `hfl_line` loaded from the older 25 Aug 2026 shapefile drop, `public_service_facilities` enriched
+  with 21 extra hospitals, `sector_boundary.zone` backfilled — see §10's "Two source drops". Map
+  mode's Emergency Exit toggle now draws real data again (its own `emergency-exit-line` layer/source,
+  not a `road-line` filter). Phases 1+ (the actual Evacuation mode UI) not yet started.
 
 Open items:
 

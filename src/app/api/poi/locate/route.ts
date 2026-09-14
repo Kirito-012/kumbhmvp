@@ -76,6 +76,10 @@ const LAYERS: Record<string, { table: string; nameColumn: string | null }> = {
   entry_exit_line: { table: 'kumbh.entry_exit_line', nameColumn: null },
   junction: { table: 'kumbh.junction', nameColumn: 'name' },
   direction_line: { table: 'kumbh.direction_line', nameColumn: null },
+  // 25 Aug 2026 shapefile drop, not the 2027 gdb -- see PLAN-evacuation.md §2.3.
+  emergency_exit: { table: 'kumbh.emergency_exit', nameColumn: 'road_name' },
+  hfl_area: { table: 'kumbh.hfl_area', nameColumn: 'name' },
+  hfl_line: { table: 'kumbh.hfl_line', nameColumn: 'name' },
   footpath: { table: 'kumbh.footpath', nameColumn: 'name' },
   ropeway: { table: 'kumbh.ropeway', nameColumn: 'name' },
   parking: { table: 'kumbh.parking', nameColumn: 'name_of_parking' },

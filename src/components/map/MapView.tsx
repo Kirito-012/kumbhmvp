@@ -956,11 +956,17 @@ function applyLayerVisibility(map: MLMap, visibility: Record<string, boolean>) {
       ['sector-plan-fill', visibility.sector_plan],
       ['sector-plan-class-outline', visibility.sector_plan],
       ['sector-plan-peripheral-outline', visibility.sector_plan],
-      // Visible if at least one road type is toggled on -- road-line is one
-      // shared layer for all 3 types, so which specific types actually draw
-      // is handled by its `filter` (see the sector/class filter effect),
-      // not by this layout visibility.
-      ['road-line', ROAD_TYPE_DEFS.some((d) => visibility[d.key])],
+      // Visible if at least one *real* road type is toggled on -- road-line is one shared
+      // layer for Existing/Proposed Road, so which one actually draws is handled by its
+      // `filter` (see the sector/class filter effect), not by this layout visibility.
+      // Emergency Exit is excluded here: it no longer lives on kumbh.road at all (see the
+      // emergency_exit source/emergency-exit-line layer above), so it gets its own
+      // visibility entry just below instead of forcing this layer on for no rows.
+      [
+        'road-line',
+        ROAD_TYPE_DEFS.filter((d) => d.type !== 'Emergency Exit').some((d) => visibility[d.key]),
+      ],
+      ['emergency-exit-line', visibility.road_emergency_exit],
       ['sector-boundary-line', visibility.sector_boundary],
       ['sector-name-label', visibility.sector_names],
       ['sector-hover-fill', visibility.sector_boundary],
@@ -1808,7 +1814,6 @@ export default function MapView({
   // already reconciled. Runs once; the effects below take over persisting
   // further changes.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- SSR/hydration guard, same pattern as NotificationBell.tsx
     setVisibility(loadStoredVisibility())
   }, [])
 
@@ -1855,7 +1860,7 @@ export default function MapView({
 
   function popupHeaderHtml(feature: MapGEOJSONFeatureCompat) {
     const p = feature.properties ?? {}
-    const isRoad = feature.layer.id === 'road-line'
+    const isRoad = feature.layer.id === 'road-line' || feature.layer.id === 'emergency-exit-line'
     const isBoundary =
       feature.layer.id === 'sector-boundary-line' || feature.layer.id === 'sector-hit-target'
     const poiDef = poiLayerDef(feature.layer.id)
@@ -1868,7 +1873,11 @@ export default function MapView({
           ? (p.name ?? poiDef.label)
           : (p.label ?? 'Parcel')
     const subtitle = isRoad
-      ? p.type
+      ? // road-line rows carry their own `type` ('Existing Road'/'Proposed Road');
+        // emergency-exit-line rows have no `type` column (see the tiles route) since the
+        // layer IS the type now -- fall back to the fixed label so the popup still reads
+        // the same as when this was a road-line row (see the isRoad comment above).
+        (p.type ?? 'Emergency Exit')
       : isBoundary
         ? `Sector ${p.sector_no}`
         : poiDef
@@ -1931,10 +1940,16 @@ export default function MapView({
             .filter(([k]) => !['id', 'name', 'geom', 'osm_id', 'in_sector'].includes(k))
             .map(([k, v]): [string, unknown] => [poiPropertyLabel(k), v]),
         ]
-      : feature.layer.id === 'road-line'
+      : feature.layer.id === 'road-line' || feature.layer.id === 'emergency-exit-line'
         ? [
             ['ROW width (m)', p.row_width_m],
             ['Sector', p.sector_no],
+            // emergency-exit-line rows carry `source` (road-line rows from kumbh.road
+            // don't have the column at all, so this is always undefined/hidden there) --
+            // see PLAN-evacuation.md §2.3 on why these 24 rows come from older data.
+            ...(p.source === 'shp_2026_08_25'
+              ? ([['Source', '25 Aug 2026 survey']] as [string, unknown][])
+              : []),
           ]
         : feature.layer.id === 'sector-boundary-line' || feature.layer.id === 'sector-hit-target'
           ? [['Area (ha)', p.area_hac]]
@@ -2110,6 +2125,16 @@ export default function MapView({
       map.addSource('road', {
         type: 'vector',
         tiles: [`${location.origin}/api/tiles/road/{z}/{x}/{y}`],
+        promoteId: 'id',
+      })
+      // 24 rows, loaded from the 25 Aug 2026 shapefile drop rather than the 2027 gdb --
+      // see scripts/load_kumbh_2027.py's SHP_TABLE_SPECS. The 2027 road reload dropped the
+      // 'Emergency Exit' road-type label entirely (kumbh.road has no such rows any more),
+      // so this table -- not a `type` filter on road-line -- is what the Emergency Exit
+      // toggle (see ROAD_TYPE_DEFS/emergency-exit-line below) actually draws now.
+      map.addSource('emergency_exit', {
+        type: 'vector',
+        tiles: [`${location.origin}/api/tiles/emergency_exit/{z}/{x}/{y}`],
         promoteId: 'id',
       })
       map.addSource('sector_boundary', {
@@ -2289,6 +2314,21 @@ export default function MapView({
           // boundary line's constant 1px. Emergency Exit stays 2x that (2px)
           // so it's still visually distinct from Proposed/Existing Road.
           'line-width': ['case', ['==', ['get', 'type'], 'Emergency Exit'], 2, 1],
+        },
+      })
+      // Emergency exits live on their own source/layer now (see the emergency_exit source
+      // above) rather than as a `type` value on road-line -- kept visually identical
+      // (same colour, same 2px width) to when they were still part of kumbh.road, and
+      // driven by the same `road_emergency_exit` visibility key (see ROAD_TYPE_DEFS,
+      // applyLayerVisibility, and the sector-filter effect's setFilter pair below).
+      map.addLayer({
+        id: 'emergency-exit-line',
+        type: 'line',
+        source: 'emergency_exit',
+        'source-layer': 'emergency_exit',
+        paint: {
+          'line-color': ROAD_TYPE_COLORS['Emergency Exit'],
+          'line-width': 2,
         },
       })
       map.addLayer({
@@ -3266,6 +3306,7 @@ export default function MapView({
             'sector-plan-filter-glow',
             'sector-plan-filter-outline',
             'road-line',
+            'emergency-exit-line',
             'sector-hit-target',
           ],
         })
@@ -3282,7 +3323,10 @@ export default function MapView({
           'sector-plan-filter-outline',
         ]
         const detail = hits.find(
-          (f) => PARCEL_DETAIL_LAYERS.includes(f.layer.id) || f.layer.id === 'road-line',
+          (f) =>
+            PARCEL_DETAIL_LAYERS.includes(f.layer.id) ||
+            f.layer.id === 'road-line' ||
+            f.layer.id === 'emergency-exit-line',
         )
         if (detail) {
           // A real parcel/road was hit -- show its popup only, don't touch
@@ -3875,6 +3919,11 @@ export default function MapView({
           ? roadCombined[0]
           : ['all', ...roadCombined]
     map.setFilter('road-line', roadFilter as FilterSpecification | null)
+    // emergency-exit-line has no `type` values to filter by (the layer IS the type now,
+    // see the emergency_exit source's comment above) -- only the sector filter applies.
+    if (map.getLayer('emergency-exit-line')) {
+      map.setFilter('emergency-exit-line', sectorFilter as FilterSpecification | null)
+    }
 
     // sector-selected-outline/-glow highlight whichever sector is "selected" in the mode
     // actually active -- Map mode's own `selectedSector`, but Heatmap/Ticket mode track their
