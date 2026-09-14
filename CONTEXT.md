@@ -481,7 +481,7 @@ on any viewport, whenever `InsightsModePanel` is collapsed (tracked via its `onW
 even with the panel tucked away. It deliberately recomputes its own small rollup from
 `insightsData`/`filters`/`heatMetric` rather than reaching into the paint effects' internal refs.
 
-### Evacuation mode — `PLAN-evacuation.md` (Phase 3 of ~8, in progress)
+### Evacuation mode — `PLAN-evacuation.md` (Phase 4 of ~8, in progress)
 
 A 4th `ModeSwitcher` segment (amber, `--map-mode-evacuation`, key `4`), for crowd-flow/evacuation
 planning: entry/exit points and routes, direction signage, emergency exits, traffic routes, plus
@@ -528,11 +528,28 @@ is null (most of them are — see §2.2 above). Every label shown anywhere (sear
 popups) comes from `src/lib/evacuation/labels.ts`, never a raw column value — `traffic_route.name` in
 particular is null on half the rows and inconsistently cased on the rest, so its label is always built
 from the structured `entry_exit`/`plan`/corridor-flag columns instead. `src/lib/evacuation/filters.ts`
-has the `EvacFilters` type plus `buildEvacFilters`/`trafficRoutePlanVisible` (unit-tested), but nothing
-calls them yet — wiring filter chips to `setFilter`/layer visibility is Phase 4.
+has the `EvacFilters` type plus `buildEvacFilters`/`trafficRoutePlanVisible` (unit-tested).
 
-As of Phase 3, `EvacuationModePanel`/`EvacuationPanel` are still placeholder shells (Phase 1's mode
-plumbing) — the real search UI and filter chips land in Phase 4.
+**`EvacuationModePanel` (real, Phase 4):** search (`useEvacuationSearch`, 200ms debounce +
+`AbortController`), scenario/direction/corridor filter chips, and interactive layer toggles.
+**Deliberately not** built by extracting Map mode's ~700-line unified search into the shared
+`src/components/map/search/*` components the plan originally sketched — that refactor's only payoff
+was code reuse, and its risk (a regression in Map mode's most-used control, unreviewed) wasn't worth it
+for an autonomous pass. `EvacuationModePanel` has its own self-contained search UI instead, following
+the same visual conventions; Map mode's own search code is completely untouched.
+
+Filter chips are wired all the way to the map: `evacLayers.ts`'s `applyEvacFilters` applies direction/
+corridor as real `setFilter` calls (ANDed onto traffic_route's permanent peak/normal split), and
+`setEvacLayersVisible` now also takes `evacFilters` so the scenario chip can show/hide the peak vs
+normal traffic-route layer without fighting the `traffic_route` on/off toggle (two independent
+booleans on the same pair of layers). **One filter is a known no-op:** Direction has no effect on
+`entry_exit`'s point badges, since that layer sits on a clustered geojson source and a style filter
+can't change cluster membership (see "Clustering" above) — doing this right needs a server-side
+`?remark=` refetch, not built yet.
+
+`EvacuationPanel` (right side) is still a Phase 1 placeholder, though it already shows the focused
+sector/zone's title and a working "Clear sector"/"Clear zone" link, since `evacFocus` already existed.
+The real hero/legend/feature-list content is Phase 6.
 
 ---
 
@@ -811,9 +828,10 @@ Branch `feat/heatmap` (not yet merged to `main`). Recent work (this may be stale
   with 21 extra hospitals, `sector_boundary.zone` backfilled — see §10's "Two source drops". Map
   mode's Emergency Exit toggle now draws real data again (its own `emergency-exit-line` layer/source,
   not a `road-line` filter).
-- Evacuation mode Phases 1-3 committed: mode plumbing, its map layers (`evacLayers.ts`), and
-  `/api/evacuation/search`+`/summary` with `labels.ts`/`filters.ts` (§8, §9's "Evacuation mode"
-  subsection). Panels are still Phase 1 placeholders — the real search UI/filter chips are Phase 4.
+- Evacuation mode Phases 1-4 committed: mode plumbing, its map layers, search/summary APIs, and a
+  real `EvacuationModePanel` (search + working filter chips + layer toggles) — §9's "Evacuation mode"
+  subsection. `EvacuationPanel` (right side) is still a Phase 1 placeholder; Phase 5 (click/popups/
+  fly-in polish) and Phase 6 (the real right panel) haven't started.
 
 Open items:
 

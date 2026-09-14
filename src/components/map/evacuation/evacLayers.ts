@@ -1,6 +1,7 @@
 import type { Map as MLMap, ExpressionSpecification, FilterSpecification } from 'maplibre-gl'
 import { badgeIconId, makeBadgeIcon } from '@/lib/mapBadgeIcon'
 import { EVAC_COLORS, type EvacKey, type EvacTheme } from '@/lib/evacuation/layers'
+import { buildEvacFilters, trafficRoutePlanVisible, type EvacFilters } from '@/lib/evacuation/filters'
 
 // Evacuation mode's own MapLibre layers -- see PLAN-evacuation.md §6. Every layer here is created
 // once, hidden, in initMap's `load` handler (gated on canUseInsights, same as insightLayers.ts's
@@ -440,31 +441,77 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
   })
 }
 
-/** Toggles every evac-* layer's layout visibility per `evacVisibility`, called whenever the mode
- *  or the visibility store changes (see MapView's mode-visibility effect). The 6 supporting keys
- *  with no evac-* layer of their own (thematic_gate/junction/bridge/footpath/fh_location/
- *  public_service_facilities) reuse Map mode's own `poi-*` layers directly -- `onEnabled` is
- *  called with those ids too so the caller (which owns `applyLayerVisibility`'s force-off list)
- *  can un-hide exactly the ones this mode wants, without this module reaching into Map-mode layer
- *  ids itself. */
+/** Toggles every evac-* layer's layout visibility per `evacVisibility`, called whenever the mode,
+ *  the visibility store, or `evacFilters` changes (see MapView's mode-visibility effect). The 6
+ *  supporting keys with no evac-* layer of their own (thematic_gate/junction/bridge/footpath/
+ *  fh_location/public_service_facilities) reuse Map mode's own `poi-*` layers directly -- the
+ *  caller (which owns `applyLayerVisibility`'s force-off list in `visibilityForMode`) un-hides
+ *  exactly the ones this mode wants, without this module reaching into Map-mode layer ids itself.
+ *
+ *  traffic_route's peak/normal layers are special-cased: their visibility is the AND of the
+ *  `traffic_route` evacVisibility toggle AND the plan filter's own choice of which of the two to
+ *  show (`trafficRoutePlanVisible`) -- two independent on/off conditions on the same pair of
+ *  layers, so they can't just read `evacVisibility.traffic_route` like every other layer here. */
 export function setEvacLayersVisible(
   map: MLMap,
   on: boolean,
   evacVisibility: Record<EvacKey, boolean>,
+  evacFilters: EvacFilters,
 ): void {
   for (const [key, layerIds] of Object.entries(LAYERS_BY_KEY) as [
     Exclude<EvacKey, 'zone_outline'>,
     string[],
   ][]) {
-    const visible = on && evacVisibility[key]
+    const layerOn = on && evacVisibility[key]
     for (const id of layerIds) {
-      if (map.getLayer(id)) {
-        map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none')
-      }
+      if (!map.getLayer(id)) continue
+      const visible =
+        id === 'evac-traffic-route-peak'
+          ? layerOn && trafficRoutePlanVisible('Peak day', evacFilters)
+          : id === 'evac-traffic-route-normal'
+            ? layerOn && trafficRoutePlanVisible('Normal day', evacFilters)
+            : layerOn
+      map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none')
     }
   }
   // Selected-feature layers stay hidden until Phase 5 gives them something to show, regardless of
   // `on` -- there's no evacVisibility key for "is something selected".
+}
+
+/** Applies the direction/corridor filters (PLAN-evacuation.md §6.3) to every evac-* layer whose
+ *  underlying table has those columns, ANDed onto traffic_route's own permanent peak/normal
+ *  split. Called whenever `evacFilters` changes.
+ *
+ *  `entry_exit` (the point badges) is deliberately NOT filtered here: it sits on a clustered
+ *  geojson source, and a style `setFilter` can't change which points get clustered together in
+ *  the first place (CONTEXT.md §9 "Clustering") -- doing this properly needs the server-side
+ *  `?remark=` refetch path this file's own header comment and the plan's §6.3 describe, which
+ *  isn't wired up yet. The Direction chip currently has no visible effect on entry/exit points. */
+export function applyEvacFilters(map: MLMap, filters: EvacFilters): void {
+  if (!map.getLayer('evac-traffic-route-casing')) return // not created yet (canUseInsights false)
+
+  const plain = buildEvacFilters(filters)
+  const asFilter = (f: FilterSpecification | null | undefined) => (f ?? null) as FilterSpecification | null
+
+  // The casing has no permanent plan split of its own (unlike the peak/normal core layers), so a
+  // plan selection is applied here as a real filter rather than a visibility choice.
+  const casingParts = [plain.traffic_route, filters.plan ? ['==', ['get', 'plan'], filters.plan] : null].filter(
+    (p): p is FilterSpecification => Boolean(p),
+  )
+  map.setFilter(
+    'evac-traffic-route-casing',
+    casingParts.length === 0 ? null : casingParts.length === 1 ? casingParts[0] : (['all', ...casingParts] as unknown as FilterSpecification),
+  )
+
+  const peak = buildEvacFilters(filters, { traffic_route: PEAK_DAY_FILTER })
+  const normal = buildEvacFilters(filters, { traffic_route: NOT_PEAK_DAY_FILTER })
+  map.setFilter('evac-traffic-route-peak', asFilter(peak.traffic_route))
+  map.setFilter('evac-traffic-route-normal', asFilter(normal.traffic_route))
+
+  map.setFilter('evac-entry-exit-line-glow', asFilter(plain.entry_exit_line))
+  map.setFilter('evac-entry-exit-line', asFilter(plain.entry_exit_line))
+
+  map.setFilter('evac-direction-line', asFilter(plain.direction_line))
 }
 
 /** Re-applies every evac-* colour paint property and regenerates the EN/EXT badge images for the

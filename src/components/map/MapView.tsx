@@ -113,6 +113,7 @@ import EvacuationModePanel from '@/components/map/evacuation/EvacuationModePanel
 import EvacuationPanel from '@/components/map/evacuation/EvacuationPanel'
 import {
   addEvacLayers,
+  applyEvacFilters,
   applyEvacTheme,
   setEvacLayersVisible,
 } from '@/components/map/evacuation/evacLayers'
@@ -124,10 +125,17 @@ import {
   type EvacSelection,
   type EvacSupportKey,
 } from '@/lib/evacuation/layers'
+import type { EvacFilters } from '@/lib/evacuation/filters'
+import type { EvacSearchResult } from '@/components/map/evacuation/useEvacuationSearch'
 
 type Sector = {
   sector_no: number
   name: string
+  // Added for Evacuation mode's "Jump to zone" search (Phase 4, PLAN-evacuation.md §2.4) -- every
+  // other consumer of /api/sectors already ignores unknown fields, so this is a backward-
+  // compatible addition, not a breaking one. Optional because localStorage/SSR fallbacks and
+  // tests construct Sector objects without it.
+  zone?: string | null
   area_hac: number
   lng: number
   lat: number
@@ -1457,8 +1465,10 @@ export default function MapView({
   // split as `visibility`/`loadStoredVisibility` below, for the same hydration-mismatch reason.
   const [evacVisibility, setEvacVisibility] =
     useState<Record<EvacKey, boolean>>(defaultEvacVisibility)
-  // evacFilters (plan/direction/corridor) lands in Phase 3 alongside the search/summary API that
-  // actually consumes it -- no point carrying unused filter state through two phases first.
+  // Not persisted (unlike evacVisibility) and not restored from the URL -- a filtered view is
+  // meant to be a momentary narrowing while looking at the map, not something that survives a
+  // reload or gets shared, same as Map mode's own classFilter/subclassFilter above.
+  const [evacFilters, setEvacFilters] = useState<EvacFilters>({})
   // Initialized to the plain defaults (not loadStoredVisibility) so the first
   // client render matches what the server rendered -- localStorage doesn't
   // exist during SSR, and reading it in the initializer here would make the
@@ -1481,6 +1491,11 @@ export default function MapView({
   useEffect(() => {
     evacVisibilityRef.current = evacVisibility
   }, [evacVisibility])
+  /** Same staleness reason as evacVisibilityRef, for evacFilters. */
+  const evacFiltersRef = useRef<EvacFilters>(evacFilters)
+  useEffect(() => {
+    evacFiltersRef.current = evacFilters
+  }, [evacFilters])
   // Empty array means "all classes" -- multiple classes can be selected at
   // once, all rendering together on the map (same on/off model as
   // poiVisibility/roadTypeVisibility rather than a single active choice).
@@ -3024,7 +3039,13 @@ export default function MapView({
         map,
         visibilityForMode(visibilityRef.current, modeRef.current, evacVisibilityRef.current),
       )
-      setEvacLayersVisible(map, modeRef.current === 'evacuation', evacVisibilityRef.current)
+      applyEvacFilters(map, evacFiltersRef.current)
+      setEvacLayersVisible(
+        map,
+        modeRef.current === 'evacuation',
+        evacVisibilityRef.current,
+        evacFiltersRef.current,
+      )
 
       function setHoverFilter(sectorNo: number | null) {
         const filter: FilterSpecification =
@@ -3691,14 +3712,15 @@ export default function MapView({
     setInsightLayersVisible(map, mode === 'heatmap')
     setTicketLayersVisible(map, mode === 'tickets')
     setInsightLabelVisible(map, mode === 'tickets')
-    setEvacLayersVisible(map, mode === 'evacuation', evacVisibility)
+    applyEvacFilters(map, evacFilters)
+    setEvacLayersVisible(map, mode === 'evacuation', evacVisibility, evacFilters)
     // Evacuation mode dims basemap place-name labels the same way Heatmap does, so the mode's own
     // (differently-coloured) routes/badges stay legible against the basemap underneath them.
     setBasemapLabelsDimmed(map, mode === 'heatmap' || mode === 'evacuation', (id) =>
       APP_SOURCE_IDS.has(id),
     )
     if (mode !== 'heatmap') popupRef.current?.remove()
-  }, [visibility, mode, mapReady, evacVisibility])
+  }, [visibility, mode, mapReady, evacVisibility, evacFilters])
 
   // Keeps the double-stroke selected-sector highlight in sync with insightSector while Heatmap is
   // active -- filtered to -1 (matches nothing) the rest of the time via setInsightSelectedFilter's
@@ -3850,6 +3872,66 @@ export default function MapView({
       ],
       { padding: fitBoundsMargin(), duration: 600 },
     )
+  }
+
+  /** "Jump to sector" from EvacuationModePanel's search -- same fly-in as
+   *  selectInsightSectorFromPanel, into evacFocus instead of insightSector. */
+  function selectEvacSector(sectorNo: number) {
+    setEvacFocus({ kind: 'sector', sectorNo })
+    const map = mapRef.current
+    const s = sectors.find((x) => x.sector_no === sectorNo)
+    if (!map || !s) return
+    map.fitBounds(
+      [
+        [s.xmin, s.ymin],
+        [s.xmax, s.ymax],
+      ],
+      { padding: fitBoundsMargin(), duration: 600 },
+    )
+  }
+
+  /** "Zones" search group -- bbox is the union of the zone's member sectors, computed client-side
+   *  in EvacuationModePanel from the `sectors` state it already has (PLAN-evacuation.md §2.4). */
+  function selectEvacZone(zone: string, bbox: [number, number, number, number]) {
+    setEvacFocus({ kind: 'zone', zone })
+    const map = mapRef.current
+    if (!map) return
+    map.fitBounds(
+      [
+        [bbox[0], bbox[1]],
+        [bbox[2], bbox[3]],
+      ],
+      { padding: fitBoundsMargin(), duration: 600 },
+    )
+  }
+
+  /** A search result row -- PLAN-evacuation.md §9's "openEvacFeature", steps 1-2 only (turn the
+   *  layer on if needed, then fly). Step 3 (pulse highlight + popup once the fly-in settles) needs
+   *  the evac-selected source actually populated and a moveend listener, both Phase 5's job --
+   *  evacSelection is set here already so Phase 5 only has to add the paint/popup side. */
+  function selectEvacResult(layer: string, result: EvacSearchResult) {
+    if (layer in defaultEvacVisibility()) {
+      setEvacVisibility((v) => (v[layer as EvacKey] ? v : { ...v, [layer as EvacKey]: true }))
+    }
+    setEvacSelection({ layer, id: result.id })
+    const map = mapRef.current
+    if (!map) return
+    if (result.bbox) {
+      const [xmin, ymin, xmax, ymax] = result.bbox
+      map.fitBounds(
+        [
+          [xmin, ymin],
+          [xmax, ymax],
+        ],
+        { padding: fitBoundsMargin(), maxZoom: 16.5, duration: 800 },
+      )
+    } else if (result.anchor) {
+      map.flyTo({
+        center: result.anchor as [number, number],
+        zoom: Math.max(map.getZoom(), 16.5),
+        duration: 800,
+      })
+    }
   }
 
   // Mirrors mode/insightSector/evacFocus into the URL (?mode=&isector=/&esector=|&ezone=) so a
@@ -5774,6 +5856,13 @@ export default function MapView({
       ) : mode === 'evacuation' ? (
         <EvacuationModePanel
           evacVisibility={evacVisibility}
+          onToggleLayer={(key) => setEvacVisibility((v) => ({ ...v, [key]: !v[key] }))}
+          evacFilters={evacFilters}
+          onFiltersChange={setEvacFilters}
+          sectors={sectors}
+          onSelectSector={selectEvacSector}
+          onSelectZone={selectEvacZone}
+          onSelectResult={selectEvacResult}
           forceCollapsed={expandedDockedPanel === 'stats'}
           onExpand={() => {
             if (isPhoneViewport()) setExpandedDockedPanel('search')
