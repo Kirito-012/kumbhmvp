@@ -288,6 +288,8 @@ All GIS routes use `runtime = 'nodejs'` and `getPool()`; ticket routes use `dbCo
 | `/api/poi/points/[layer]`               | Full GeoJSON for the 7 small point layers (client-side clustering)                                                                            |
 | `/api/tiles/[layer]/[z]/[x]/[y]`        | MVT vector tiles — see §9                                                                                                                     |
 | `/api/tickets/by-parcel/[sectorPlanId]` | Does this map parcel already have a ticket?                                                                                                   |
+| `/api/evacuation/search`                | Evacuation mode's search (PLAN-evacuation.md §8.1) — sector/zone-aware, labels via `src/lib/evacuation/labels.ts`. Gated on `read:all`/`ticket`, same as `/api/insights/*`. |
+| `/api/evacuation/summary`                | Per-layer counts, zone outlines, and (with `?sector=`/`?zone=`) a focused feature list + nearby care facilities (§8.2). Same gating.           |
 | `/api/v1/tickets` (POST)                | **External integration** — see below                                                                                                          |
 
 ### `/api/v1/tickets` — the DroneSeva integration
@@ -479,7 +481,7 @@ on any viewport, whenever `InsightsModePanel` is collapsed (tracked via its `onW
 even with the panel tucked away. It deliberately recomputes its own small rollup from
 `insightsData`/`filters`/`heatMetric` rather than reaching into the paint effects' internal refs.
 
-### Evacuation mode — `PLAN-evacuation.md` (Phase 2 of ~8, in progress)
+### Evacuation mode — `PLAN-evacuation.md` (Phase 3 of ~8, in progress)
 
 A 4th `ModeSwitcher` segment (amber, `--map-mode-evacuation`, key `4`), for crowd-flow/evacuation
 planning: entry/exit points and routes, direction signage, emergency exits, traffic routes, plus
@@ -518,8 +520,19 @@ from "belongs to the vendored basemap" — same bug `INSIGHT_HEAT_SOURCE`/`INSIG
 already had comments warning about, missed the first time. A real theme toggle would have deleted it as a
 stale basemap source. Fixed alongside adding evacLayers.ts's own three new sources to the same list.
 
-As of Phase 2, `EvacuationModePanel`/`EvacuationPanel` are still placeholder shells (Phase 1's mode
-plumbing) — the real search, filters and `/api/evacuation/*` routes land in Phases 3-4.
+**Search + summary APIs (Phase 3):** `/api/evacuation/search` and `/api/evacuation/summary` (§8 table)
+are sector- **and zone-aware** — each result's sector/zone comes from a `LEFT JOIN LATERAL` against
+`sector_boundary` on `ST_Intersects(boundary, ST_PointOnSurface(feature))`, so a query like "12" or
+"rishikesh zone" finds features spatially inside that area even when the feature's own `sector` column
+is null (most of them are — see §2.2 above). Every label shown anywhere (search results, and eventually
+popups) comes from `src/lib/evacuation/labels.ts`, never a raw column value — `traffic_route.name` in
+particular is null on half the rows and inconsistently cased on the rest, so its label is always built
+from the structured `entry_exit`/`plan`/corridor-flag columns instead. `src/lib/evacuation/filters.ts`
+has the `EvacFilters` type plus `buildEvacFilters`/`trafficRoutePlanVisible` (unit-tested), but nothing
+calls them yet — wiring filter chips to `setFilter`/layer visibility is Phase 4.
+
+As of Phase 3, `EvacuationModePanel`/`EvacuationPanel` are still placeholder shells (Phase 1's mode
+plumbing) — the real search UI and filter chips land in Phase 4.
 
 ---
 
@@ -798,11 +811,9 @@ Branch `feat/heatmap` (not yet merged to `main`). Recent work (this may be stale
   with 21 extra hospitals, `sector_boundary.zone` backfilled — see §10's "Two source drops". Map
   mode's Emergency Exit toggle now draws real data again (its own `emergency-exit-line` layer/source,
   not a `road-line` filter).
-- Evacuation mode Phases 1-2 committed: mode plumbing (4th `ModeSwitcher` segment, `4` shortcut, its own
-  `evacVisibility` store, deep-link/`Esc` handling) and its map layers (`evacLayers.ts` — core/flood
-  layers, EN/EXT badges, theme swap; arrows/zone-outlines/selection-highlight/hover deferred, see the
-  phase table) — see §9's "Evacuation mode" subsection. Panels are still Phase 1 placeholders; the real
-  search/filters/API are Phases 3+, not yet started.
+- Evacuation mode Phases 1-3 committed: mode plumbing, its map layers (`evacLayers.ts`), and
+  `/api/evacuation/search`+`/summary` with `labels.ts`/`filters.ts` (§8, §9's "Evacuation mode"
+  subsection). Panels are still Phase 1 placeholders — the real search UI/filter chips are Phase 4.
 
 Open items:
 
