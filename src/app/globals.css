@@ -529,6 +529,31 @@ input[type='checkbox'].kumbh-checkbox {
   }
 }
 
+/* Directional variant of panel-in for the Heatmap/Ticket mode docked panels (Panel's `entrance`
+   prop) -- slides in from whichever edge the panel is actually docked to (left/right) instead of
+   just fading in place, so the initial mount into Heatmap/Ticket mode reads as more deliberate than
+   Map mode's plain panel-in. Same 0.98 scale-up as panel-in, just with a signed translateX added. */
+@keyframes panel-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-18px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+@keyframes panel-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(18px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
 /* Sector Report drawer's swipe-in/swipe-out -- unlike panel-in above (a
    subtle fade+scale for the docked side panels, which never unmount), the
    bottom drawer fully slides off-screen on open/close since it mounts and

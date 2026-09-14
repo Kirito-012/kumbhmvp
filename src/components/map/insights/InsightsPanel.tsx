@@ -14,10 +14,12 @@ import {
 import type { MapMode } from '@/components/map/insights/ModeSwitcher'
 import {
   useInsightTheme,
-  ProgressRing,
-  StackedStatusBar,
+  StatusBreakdownDonut,
   Sparkline,
   bucketColor,
+  Reveal,
+  AnimatedBar,
+  pillEntranceDelayMs,
 } from '@/components/map/insights/charts'
 import { useSectorInsights } from '@/components/map/insights/useSectorInsights'
 import {
@@ -179,6 +181,7 @@ export default function InsightsPanel({
       title="Insights"
       subtitle={subtitle}
       side="right"
+      entrance="slide"
       resizable
       defaultWidth={320}
       minWidth={260}
@@ -201,14 +204,16 @@ export default function InsightsPanel({
         </div>
       ) : (
         <div className="flex flex-col gap-5">
-          <InsightsHero
-            mode={mode}
-            sector={sector}
-            insightsData={insightsData}
-            filters={filters}
-            sectors={sectors}
-            theme={theme}
-          />
+          <Reveal index={0}>
+            <InsightsHero
+              mode={mode}
+              sector={sector}
+              insightsData={insightsData}
+              filters={filters}
+              sectors={sectors}
+              onFilterStatusBucket={onFilterStatusBucket}
+            />
+          </Reveal>
 
           {hasActiveFilters &&
           scopeTuples(insightsData.tickets, sector).filter((t) =>
@@ -220,55 +225,74 @@ export default function InsightsPanel({
               filters,
             ),
           ).length === 0 ? (
-            <div
-              className="rounded-lg border border-dashed px-2.5 py-3 text-center text-[11.5px]"
-              style={{ borderColor: 'var(--map-border)', color: 'var(--map-fg-faint)' }}
-            >
-              No tickets match these filters.{' '}
-              <button
-                type="button"
-                onClick={onClearFilters}
-                className="cursor-pointer font-semibold underline-offset-2 hover:underline"
-                style={{ color: 'var(--map-accent)' }}
+            <Reveal index={1}>
+              <div
+                className="rounded-lg border border-dashed px-2.5 py-3 text-center text-[11.5px]"
+                style={{ borderColor: 'var(--map-border)', color: 'var(--map-fg-faint)' }}
               >
-                Clear
-              </button>
-            </div>
+                No tickets match these filters.{' '}
+                <button
+                  type="button"
+                  onClick={onClearFilters}
+                  className="cursor-pointer font-semibold underline-offset-2 hover:underline"
+                  style={{ color: 'var(--map-accent)' }}
+                >
+                  Clear
+                </button>
+              </div>
+            </Reveal>
           ) : (
             <>
-              <StatusProgress
-                sector={sector}
-                insightsData={insightsData}
-                filters={filters}
-                theme={theme}
-                onFilterStatusBucket={onFilterStatusBucket}
-              />
-              <Categories
-                sector={sector}
-                insightsData={insightsData}
-                filters={filters}
-                onFilterClassGroup={onFilterClassGroup}
-                onClearClassGroups={onClearClassGroups}
-              />
-              <PriorityTrend
-                sector={sector}
-                insightsData={insightsData}
-                filters={filters}
-                detail={detail}
-                onFilterPriority={onFilterPriority}
-              />
+              <Reveal index={1}>
+                <StatusProgress
+                  sector={sector}
+                  insightsData={insightsData}
+                  filters={filters}
+                  theme={theme}
+                  onFilterStatusBucket={onFilterStatusBucket}
+                />
+              </Reveal>
+              <Reveal index={2}>
+                <Categories
+                  sector={sector}
+                  insightsData={insightsData}
+                  filters={filters}
+                  onFilterClassGroup={onFilterClassGroup}
+                  onClearClassGroups={onClearClassGroups}
+                />
+              </Reveal>
+              <Reveal index={3}>
+                <PriorityTrend
+                  sector={sector}
+                  insightsData={insightsData}
+                  filters={filters}
+                  detail={detail}
+                  onFilterPriority={onFilterPriority}
+                />
+              </Reveal>
             </>
           )}
 
-          <Assignees detail={detail} loading={loading} error={error} onRetry={refetch} />
+          <Reveal index={4}>
+            <Assignees
+              sector={sector}
+              detail={detail}
+              loading={loading}
+              error={error}
+              onRetry={refetch}
+            />
+          </Reveal>
 
-          <TicketListBlock
-            sector={sector}
-            detail={detail}
-            statuses={insightsData.statuses}
-            priorities={insightsData.priorities}
-            onLocate={onLocate}
-          />
+          <Reveal index={5}>
+            <TicketListBlock
+              sector={sector}
+              detail={detail}
+              statuses={insightsData.statuses}
+              priorities={insightsData.priorities}
+              filters={filters}
+              onLocate={onLocate}
+            />
+          </Reveal>
         </div>
       )}
     </Panel>
@@ -281,90 +305,103 @@ function InsightsHero({
   insightsData,
   filters,
   sectors,
-  theme,
+  onFilterStatusBucket,
 }: {
   mode: Exclude<MapMode, 'map'>
   sector: number | 'peripheral' | null
   insightsData: InsightsTicketData
   filters: InsightsFilters
   sectors: SectorSummary[]
-  theme: ReturnType<typeof useInsightTheme>
+  onFilterStatusBucket: (bucket: StatusBucket) => void
 }) {
-  const scoped = scopeTuples(insightsData.tickets, sector)
+  // Ignores only the statusSlugs filter itself -- same reasoning and same filtersIgnoringStatus
+  // shape as StatusProgress below, so the hero's donut/legend counts always stay in sync with the
+  // Status & Progress tiles directly under it instead of the two disagreeing whenever a
+  // category/priority/time filter is active (the hero used to ignore every filter, not just its
+  // own dimension, so it went stale the moment any filter narrowed the ticket set).
+  const filtersIgnoringStatus: InsightsFilters = { ...filters, statusSlugs: undefined }
+  const scoped = scopeTuples(insightsData.tickets, sector).filter((t) =>
+    matchesFilters(
+      t,
+      insightsData.statuses,
+      insightsData.priorities,
+      insightsData.classGroups,
+      filtersIgnoringStatus,
+    ),
+  )
   const totals = bucketTotals(scoped, insightsData.statuses)
   const total = scoped.length
-  const resolvedPct = total > 0 ? Math.round(((totals.resolved + totals.closed) / total) * 100) : 0
 
-  if (mode === 'tickets') {
-    return (
-      <div className="flex items-center gap-4">
-        <ProgressRing percent={resolvedPct} label={`${resolvedPct}%`} sublabel="resolved" />
-        <div className="min-w-0 flex-1">
-          <p className="text-[11px]" style={{ color: 'var(--map-fg-faint)' }}>
-            {total.toLocaleString()} ticket{total === 1 ? '' : 's'}
-          </p>
-          <div className="mt-2">
-            <StackedStatusBar counts={totals} total={total} />
-          </div>
-        </div>
-      </div>
+  // Same "which buckets does the active status filter cover" check as StatusProgress's per-tile
+  // `active` below, computed once here so the donut can dim every non-matching wedge/legend row
+  // together instead of re-deriving it per segment.
+  const activeBuckets = new Set<StatusBucket>(
+    BUCKET_ORDER.filter((bucket) => {
+      const bucketSlugs = insightsData.statuses
+        .filter((s) => s.bucket === bucket)
+        .map((s) => s.slug)
+      return (
+        bucketSlugs.length > 0 && bucketSlugs.every((slug) => filters.statusSlugs?.includes(slug))
+      )
+    }),
+  )
+
+  // Heatmap-only rank/comparison, layered onto the same donut+bar hero Ticket mode uses -- both
+  // modes share this component, so switching modes shouldn't change what the headline widget looks
+  // like (only Heatmap adds the extra "#N of 32 sectors" row below it). Rank/median only make sense
+  // for one specific numbered sector, since both are computed across sectors (PLAN-heatmap.md
+  // §6.2 item 1).
+  let rankInfo: { rank: number; ofCount: number; ratioToMedian: number | null } | null = null
+  if (mode === 'heatmap' && typeof sector === 'number') {
+    const allRollups = rollupBySector(
+      insightsData.tickets,
+      insightsData.statuses,
+      insightsData.priorities,
+      insightsData.classGroups,
+      filters,
     )
+    const opensByNamedSector = sectors.map((s) => allRollups.get(s.sector_no)?.open ?? 0)
+    const sortedOpens = [...opensByNamedSector].sort((a, b) => b - a)
+    const mid = Math.floor(sortedOpens.length / 2)
+    const median =
+      sortedOpens.length === 0
+        ? 0
+        : sortedOpens.length % 2 === 0
+          ? (sortedOpens[mid - 1] + sortedOpens[mid]) / 2
+          : sortedOpens[mid]
+    const openCount = allRollups.get(sector)?.open ?? 0
+    const rank = opensByNamedSector.filter((v) => v > openCount).length + 1
+    rankInfo = {
+      rank,
+      ofCount: sectors.length,
+      ratioToMedian: median > 0 ? openCount / median : null,
+    }
   }
 
-  // Heatmap hero -- rank/comparison only make sense for one specific numbered sector, since
-  // "median" and "#N of 32" are both computed across sectors (PLAN-heatmap.md §6.2 item 1).
-  const allRollups = rollupBySector(
-    insightsData.tickets,
-    insightsData.statuses,
-    insightsData.priorities,
-    insightsData.classGroups,
-    filters,
-  )
-  const opensByNamedSector = sectors.map((s) => allRollups.get(s.sector_no)?.open ?? 0)
-  const sortedOpens = [...opensByNamedSector].sort((a, b) => b - a)
-  const mid = Math.floor(sortedOpens.length / 2)
-  const median =
-    sortedOpens.length === 0
-      ? 0
-      : sortedOpens.length % 2 === 0
-        ? (sortedOpens[mid - 1] + sortedOpens[mid]) / 2
-        : sortedOpens[mid]
-
-  const openCount =
-    typeof sector === 'number' ? (allRollups.get(sector)?.open ?? 0) : totals.new + totals.progress
-  const rank =
-    typeof sector === 'number' ? opensByNamedSector.filter((v) => v > openCount).length + 1 : null
-
   return (
-    <div>
-      <p
-        className="text-[30px] font-semibold leading-none tabular-nums"
-        style={{ color: 'var(--map-fg)' }}
-      >
-        {openCount.toLocaleString()}
-      </p>
-      <p className="mt-1 text-[11px]" style={{ color: 'var(--map-fg-faint)' }}>
-        open tickets
-      </p>
-      {rank !== null && sectors.length > 0 && (
+    <div className="flex flex-col gap-2">
+      <StatusBreakdownDonut
+        counts={totals}
+        total={total}
+        activeBuckets={activeBuckets}
+        onSelect={onFilterStatusBucket}
+      />
+      {rankInfo && rankInfo.ofCount > 0 && (
         <div
-          className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]"
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]"
           style={{ color: 'var(--map-fg-muted)' }}
         >
           <span
             className="rounded-full px-1.5 py-0.5 font-semibold"
             style={{ background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
           >
-            #{rank} of {sectors.length} sectors
+            #{rankInfo.rank} of {rankInfo.ofCount} sectors
           </span>
-          {median > 0 && <span>{(openCount / median).toFixed(1)}× the sector median</span>}
+          {rankInfo.ratioToMedian !== null && (
+            <span>{rankInfo.ratioToMedian.toFixed(1)}× the sector median (open tickets)</span>
+          )}
         </div>
       )}
-      <div
-        className="mt-2 h-1 w-8 rounded-full"
-        style={{ background: bucketColor('progress', theme) }}
-        aria-hidden
-      />
     </div>
   )
 }
@@ -501,8 +538,18 @@ function Categories({
     else entry.resolved++
     byClass.set(cls, entry)
   }
+  // Once a sector or a status/priority/time filter narrows the data, a category with 0 tickets in
+  // that scope is just noise (an invisible zero-width bar padding out the scroll) -- keep zero rows
+  // only in the fully unfiltered "All sectors" overview, where they still show the full category
+  // taxonomy at a glance.
+  const otherFiltersActive =
+    (filters.statusSlugs?.length ?? 0) > 0 ||
+    (filters.prioritySlugs?.length ?? 0) > 0 ||
+    filters.createdWithinMs !== undefined
+  const showZeroRows = sector === null && !otherFiltersActive
   const rows = Array.from(byClass.entries())
     .map(([name, counts]) => ({ name, ...counts, total: counts.open + counts.resolved }))
+    .filter((r) => showZeroRows || r.total > 0)
     .sort((a, b) => b.open - a.open)
 
   if (rows.length === 0) {
@@ -569,23 +616,19 @@ function Categories({
               >
                 {row.name}
               </span>
-              <span
-                className="w-16 shrink-0 overflow-hidden rounded-full"
-                style={{ height: 5, background: 'var(--map-border)' }}
-              >
-                <span
-                  className="block h-full rounded-full"
-                  style={{
-                    width: `${row.total > 0 ? (row.open / row.total) * 100 : 0}%`,
-                    background: color,
-                  }}
-                />
-              </span>
+              <AnimatedBar
+                percent={row.total > 0 ? (row.open / row.total) * 100 : 0}
+                fill={color}
+                height={5}
+                trackClassName="w-16 shrink-0"
+                delayMs={pillEntranceDelayMs(2)}
+              />
               <span
                 className="w-6 shrink-0 text-right text-[11px] tabular-nums"
                 style={{ color: 'var(--map-fg-faint)' }}
+                title={`${row.open} open · ${row.resolved} resolved`}
               >
-                {row.open}
+                {row.total}
               </span>
             </button>
           )
@@ -652,15 +695,13 @@ function PriorityTrend({
               >
                 {p.name}
               </span>
-              <span
-                className="h-1.5 flex-1 overflow-hidden rounded-full"
-                style={{ background: 'var(--map-border)' }}
-              >
-                <span
-                  className="block h-full rounded-full"
-                  style={{ width: `${(count / max) * 100}%`, background: p.color }}
-                />
-              </span>
+              <AnimatedBar
+                percent={(count / max) * 100}
+                fill={p.color}
+                height={6}
+                trackClassName="flex-1"
+                delayMs={pillEntranceDelayMs(3)}
+              />
               <span
                 className="w-5 shrink-0 text-right text-[10.5px] tabular-nums"
                 style={{ color: 'var(--map-fg-muted)' }}
@@ -708,16 +749,20 @@ function PriorityTrend({
 }
 
 function Assignees({
+  sector,
   detail,
   loading,
   error,
   onRetry,
 }: {
+  sector: number | 'peripheral' | null
   detail: ReturnType<typeof useSectorInsights>['data']
   loading: boolean
   error: string | null
   onRetry: () => void
 }) {
+  const scopeLabel =
+    sector === null ? '' : sector === 'peripheral' ? ' in the peripheral area' : ' in this sector'
   return (
     <Section title="Assignees" icon={<TagIcon className="h-full w-full" />} theme="violet">
       {loading && !detail ? (
@@ -746,7 +791,7 @@ function Assignees({
         </div>
       ) : (
         <p className="text-[11.5px]" style={{ color: 'var(--map-fg-faint)' }}>
-          No tickets assigned in this sector yet
+          No open tickets have an assignee{scopeLabel} yet
         </p>
       )}
     </Section>
@@ -758,12 +803,14 @@ function TicketListBlock({
   detail,
   statuses,
   priorities,
+  filters,
   onLocate,
 }: {
   sector: number | 'peripheral' | null
   detail: ReturnType<typeof useSectorInsights>['data']
   statuses: InsightsTicketData['statuses']
   priorities: InsightsTicketData['priorities']
+  filters: InsightsFilters
   onLocate: (lng: number, lat: number) => void
 }) {
   const [query, setQuery] = useState('')
@@ -773,19 +820,51 @@ function TicketListBlock({
   const listHref =
     typeof sector === 'number' ? `/tickets?sector=${sector}&status=open` : '/tickets?status=open'
 
+  // The per-sector fetch (useSectorInsights) only scopes by sector, so without this the list kept
+  // showing every ticket in the sector even after Categories/Priority & Trend/Status & Progress
+  // narrowed everything else in the panel down. createdWithinMs is skipped -- SectorTicketRow has
+  // no createdAt to filter on.
+  const scopedTickets = detail.tickets.filter((t) => {
+    if (
+      filters.statusSlugs &&
+      filters.statusSlugs.length > 0 &&
+      !filters.statusSlugs.includes(t.statusSlug)
+    )
+      return false
+    if (
+      filters.prioritySlugs &&
+      filters.prioritySlugs.length > 0 &&
+      !filters.prioritySlugs.includes(t.prioritySlug)
+    )
+      return false
+    if (
+      filters.classGroups &&
+      filters.classGroups.length > 0 &&
+      !filters.classGroups.includes(t.classGroup)
+    )
+      return false
+    return true
+  })
+
   const q = query.trim().toLowerCase()
   const filteredTickets = q
-    ? detail.tickets.filter(
+    ? scopedTickets.filter(
         (t) => String(t.number).includes(q) || t.subject.toLowerCase().includes(q),
       )
-    : detail.tickets
+    : scopedTickets
+
+  const hasActiveListFilter =
+    q.length > 0 ||
+    (filters.statusSlugs?.length ?? 0) > 0 ||
+    (filters.prioritySlugs?.length ?? 0) > 0 ||
+    (filters.classGroups?.length ?? 0) > 0
 
   return (
     <Section
       title="Tickets"
       icon={<TicketIcon className="h-full w-full" />}
       theme="blue"
-      count={detail.totalCount}
+      count={hasActiveListFilter ? filteredTickets.length : detail.totalCount}
     >
       <div className="relative mb-2">
         <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--map-fg-faint)]" />
@@ -805,7 +884,9 @@ function TicketListBlock({
       </div>
       {filteredTickets.length === 0 ? (
         <p className="text-[11.5px]" style={{ color: 'var(--map-fg-faint)' }}>
-          {q ? 'No tickets match your search.' : 'No tickets in this scope.'}
+          {hasActiveListFilter
+            ? 'No tickets match the current filters.'
+            : 'No tickets in this scope.'}
         </p>
       ) : (
         <div className="flex flex-col gap-1">
@@ -875,7 +956,7 @@ function TicketListBlock({
           })}
         </div>
       )}
-      {!q && detail.truncated && (
+      {!hasActiveListFilter && detail.truncated && (
         <a
           href={listHref}
           className="mt-2 block text-[11px] font-semibold underline-offset-2 hover:underline"

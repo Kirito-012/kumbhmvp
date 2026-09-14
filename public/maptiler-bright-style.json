@@ -2821,19 +2821,10 @@
       "minzoom": 4,
       "maxzoom": 16,
       "layout": {
-        "icon-image": "circle",
-        "icon-size": {
-          "stops": [
-            [6, 0.35],
-            [12, 0.5]
-          ]
-        },
         "symbol-sort-key": ["to-number", ["get", "rank"]],
-        "text-anchor": "left",
         "text-field": "{name:en}",
         "text-font": ["Open Sans Semi Bold", "Noto Sans Regular"],
         "text-max-width": 8,
-        "text-offset": [0.4, 0],
         "text-size": {
           "base": 1.2,
           "stops": [
@@ -2844,16 +2835,6 @@
         "visibility": "visible"
       },
       "paint": {
-        "icon-color": "hsl(0, 0%, 0%)",
-        "icon-halo-blur": 0,
-        "icon-halo-color": "hsl(0, 0%, 100%)",
-        "icon-halo-width": 1,
-        "icon-opacity": {
-          "stops": [
-            [11.99, 1],
-            [12, 0]
-          ]
-        },
         "text-color": "hsl(0, 0%, 0%)",
         "text-halo-blur": 0,
         "text-halo-color": "hsl(0, 0%, 100%)",

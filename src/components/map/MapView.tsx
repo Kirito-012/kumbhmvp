@@ -57,6 +57,7 @@ import {
   INSIGHT_HEAT_LAYER,
   INSIGHT_HEAT_SOURCE,
   INSIGHT_SECTOR_FILL_LAYER,
+  INSIGHT_SECTOR_LABEL_SOURCE,
   INSIGHT_HEAT_POINTS_LAYER,
   INSIGHT_TICKET_FILL_LAYER,
   applyInsightTheme,
@@ -64,15 +65,20 @@ import {
   applyTicketTheme,
   setBasemapLabelsDimmed,
   setInsightHeatData,
+  setInsightHeatIntensityScale,
   setInsightLabelVisible,
   setInsightLayersVisible,
+  setInsightSectorLabelPoints,
   setInsightSelectedFilter,
   setTicketLayersVisible,
   updateTicketSectorLabels,
+  SECTOR_LABEL_TEXT_COLOR,
+  SECTOR_LABEL_HALO_COLOR,
 } from '@/components/map/insights/insightLayers'
 import {
   rollupBySector,
   bucketBySectorPlanId,
+  isOpenTicket,
   type SectorPlanBucket,
   type InsightsFilters,
   type HeatMetric,
@@ -795,6 +801,14 @@ const APP_SOURCE_IDS = new Set([
   // on every theme toggle, invisible until now only because the glow was hidden below z13
   // (PLAN-heatmap.md §11.6).
   INSIGHT_HEAT_SOURCE,
+  // Same reasoning as INSIGHT_HEAT_SOURCE above, same bug: the one-point-per-sector label sources
+  // (Ticket mode's "S7 · 52% resolved" and Map mode's plain "07. GAURISHANKAR" name label) are
+  // GeoJSON sources this component creates once and re-populates in place -- omitting them here
+  // meant a theme toggle silently deleted the source (and its symbol layer along with it, since
+  // removeSource requires the layer gone first -- see the removeLayer/removeSource pair below)
+  // without ever recreating either, leaving every sector label gone until a full page reload.
+  INSIGHT_SECTOR_LABEL_SOURCE,
+  'sector-name-points',
   ...POI_LAYER_DEFS.map((d) => d.key),
 ])
 
@@ -948,6 +962,7 @@ function applyLayerVisibility(map: MLMap, visibility: Record<string, boolean>) {
       // not by this layout visibility.
       ['road-line', ROAD_TYPE_DEFS.some((d) => visibility[d.key])],
       ['sector-boundary-line', visibility.sector_boundary],
+      ['sector-name-label', visibility.sector_names],
       ['sector-hover-fill', visibility.sector_boundary],
       ['sector-hover-glow', visibility.sector_boundary],
       ['sector-hover-outline', visibility.sector_boundary],
@@ -996,6 +1011,11 @@ function visibilityForMode(
   const override = { ...visibility }
   for (const d of ROAD_TYPE_DEFS) override[d.key] = false
   for (const d of POI_LAYER_DEFS) override[d.key] = false
+  // Heatmap/Ticket mode have their own sector labelling (the density glow needs none; Ticket mode
+  // shows the richer "S7 · 52% resolved" label -- see INSIGHT_SECTOR_LABEL_LAYER) -- this plain
+  // name-only label is a Map-mode-only base layer, so it's always forced off outside Map mode
+  // regardless of the user's own toggle state, same as roads/POIs above.
+  override.sector_names = false
   if (mode === 'heatmap') {
     override.sector_plan = false
     override.sector_boundary = false
@@ -1016,6 +1036,7 @@ function defaultVisibility(): Record<string, boolean> {
   return {
     sector_plan: true,
     sector_boundary: true,
+    sector_names: true,
     ...Object.fromEntries(ROAD_TYPE_DEFS.map((d) => [d.key, false])),
     ...Object.fromEntries(POI_LAYER_DEFS.map((d) => [d.key, false])),
   }
@@ -1151,13 +1172,22 @@ export default function MapView({
   /** Mirrors `selectedSector` state for the same reason as measuringRef -- read by the
    *  once-registered 'contextmenu' handler to right-click-deselect the current sector. */
   const selectedSectorRef = useRef<number | 'all'>('all')
-  /** Live on-screen width of the right-docked Stats panel (0 while
-   *  collapsed), reported by Panel.tsx -- read by every fitBounds/flyTo
-   *  call below so the map centers results in the space actually left of
-   *  the panel instead of flying results half-hidden behind it. A ref
-   *  (not state) since this only feeds imperative map calls and shouldn't
-   *  itself trigger a re-render on every resize-drag frame. */
-  const statsPanelWidthRef = useRef(0)
+  /** Last known *expanded* width of the right-docked Stats/Insights panel --
+   *  read by reservedMapPadding (see below) so the map's centered area
+   *  always leaves room for the panel at the width it would open to,
+   *  regardless of whether it happens to be collapsed right now. Panel.tsx's
+   *  onRenderedWidthChange reports 0 while collapsed; the two onWidthChange
+   *  handlers below deliberately ignore that 0 and only ever overwrite this
+   *  with a real (>0) width, so collapsing the panel never shrinks the
+   *  reserved space and un-collapsing it never jumps the map's center --
+   *  this is what "irrespective of whether the panel is active" means in
+   *  practice. Defaults to Panel's own defaultWidth (320, shared by
+   *  StatsPanel/InsightsPanel) so the very first paint -- before either
+   *  panel has ever reported its width -- already reserves the right
+   *  amount instead of guessing 0. A ref (not state) since this only feeds
+   *  imperative map calls and shouldn't itself trigger a re-render on every
+   *  resize-drag frame. */
+  const rightPanelWidthRef = useRef(320)
   /** Set by initMap once the map is actually created (which now happens asynchronously, after
    *  the vendored basemap style JSON fetch resolves -- see the mount effect below) -- the effect's
    *  own cleanup can't just close over `map`/`marker` directly the way it used to when map
@@ -1173,21 +1203,85 @@ export default function MapView({
    *  relying on MapLibre's built-in cluster:true (see the point-source comment in initMap for why). */
   const poiRawFeaturesRef = useRef<Record<string, Feature<Point>[]>>({})
 
-  // Right-panel-aware padding for fitBounds/flyTo -- same left-side
-  // constant as before (accounts for the fixed-width "Kumbh Mela" panel,
-  // ~w-72 + its offset), but the right side now reads the Stats panel's
-  // actual live width (0 when collapsed) instead of a guessed constant, so
-  // results center in whatever space is really free of both docked panels.
-  function mapFlyPadding() {
+  // The map's *persistent* padding -- set on the map itself via
+  // map.setPadding() (see applyMapPadding below), never passed as a
+  // one-off `padding:` option to individual fitBounds/flyTo/jumpTo calls.
+  //
+  // Why: MapLibre's `padding` option on jumpTo/easeTo/flyTo doesn't reset
+  // after the call -- it's stored on the transform and stays in effect for
+  // every camera move after it, including ones that never mention padding
+  // at all (drag, scroll-zoom, the +/- buttons, a cluster-click easeTo).
+  // The old code passed `padding: mapFlyPadding()` to ~10 separate call
+  // sites, which meant every fitBounds after the very first jumpTo was
+  // fitting against left+340 twice over (once already stored on the
+  // transform, once again from its own options.padding) -- that's what
+  // made fly-ins zoom out too far. And because `right` here depends on
+  // rightPanelWidthRef, whichever value happened to be stored from the
+  // *previous* call bled into the next one, which is why the misplacement
+  // looked inconsistent ("sometimes") rather than a fixed, explainable
+  // offset.
+  //
+  // Setting it once (on mount, and again whenever a panel's rendered width
+  // or the viewport itself changes -- see applyMapPadding/its call sites)
+  // means MapLibre's own centerPoint/cameraForBounds math -- which already
+  // subtracts the transform's stored padding before computing a fit -- does
+  // the centering for every camera move in the file for free, and does it
+  // exactly once.
+  //
+  // Below `sm` both docked panels go full-bleed overlays (see Panel.tsx),
+  // so reserving their expanded width would leave fitBounds no free area at
+  // all -- a small symmetric margin is used there instead, same as the
+  // phone experience already assumes elsewhere.
+  function reservedMapPadding() {
+    if (typeof window !== 'undefined' && window.innerWidth < 640) {
+      return { top: 24, bottom: 24, left: 24, right: 24 }
+    }
     return {
       top: 60,
       bottom: 60,
+      // Fixed -- the left "Kumbh Mela"/Heatmap panel isn't resizable (w-72,
+      // i.e. 288px, plus its left-3 12px offset and some breathing room).
       left: 340,
-      // +24 accounts for the panel's own right-3 (12px) edge offset plus a
-      // little breathing room, same idea as the left panel's constant.
-      right: statsPanelWidthRef.current > 0 ? statsPanelWidthRef.current + 24 : 60,
+      // The right "Stats"/Insights panel *is* drag-resizable (260-560px),
+      // so this follows its last known expanded width (rightPanelWidthRef,
+      // which ignores the panel's own collapse state -- see its declaration
+      // above) rather than a fixed guess -- widening it must never leave a
+      // result half-hidden behind it, and collapsing it must never shift
+      // the center either. +24 mirrors the left constant's own
+      // offset-plus-breathing-room padding.
+      right: rightPanelWidthRef.current + 24,
     }
   }
+
+  // Re-applies the map's persistent padding (see reservedMapPadding above).
+  // Called on mount, on every window resize (the sm breakpoint flips which
+  // branch of reservedMapPadding applies), and whenever the right panel's
+  // live width changes (dragged, expanded, or collapsed).
+  function applyMapPadding() {
+    mapRef.current?.setPadding(reservedMapPadding())
+  }
+
+  // Small *symmetric* extra margin for fitBounds calls only, layered on top
+  // of the persistent reservedMapPadding above purely for visual breathing
+  // room around the fitted shape. Symmetric so it never shifts the center
+  // MapLibre already computed from the persistent padding -- asymmetric
+  // padding here would reintroduce exactly the off-center bug this fixes.
+  function fitBoundsMargin() {
+    return { top: 40, bottom: 40, left: 40, right: 40 }
+  }
+
+  useEffect(() => {
+    function onResize() {
+      applyMapPadding()
+      // Drop the phone-only force-collapse tracker once the viewport grows past `sm` -- otherwise
+      // resizing up (or rotating) after it was set on a phone would leave the other docked panel
+      // stuck force-collapsed at a width where the two are meant to coexist open.
+      if (!isPhoneViewport()) setExpandedDockedPanel(null)
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- applyMapPadding/isPhoneViewport read refs/window, not state; stable enough not to need to be a dep
+  }, [])
 
   const [sectors, setSectors] = useState<Sector[]>([])
   /** Mirrors `sectors` for the map's one-time 'load' handler (click handler included) -- same
@@ -1197,6 +1291,33 @@ export default function MapView({
   useEffect(() => {
     sectorsRef.current = sectors
   }, [sectors])
+  // Populates the one-point-per-sector label source (see setInsightSectorLabelPoints) as soon as
+  // sector centroids load -- deliberately its own effect rather than folded into the ticket-mode
+  // label-text effect below, since that one is keyed on insightsData/mode/insightFilters and
+  // `sectors` loads independently of all three.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady || sectors.length === 0) return
+    setInsightSectorLabelPoints(map, sectors)
+  }, [sectors, mapReady])
+  // Same idea for Map mode's own "Sector names" base layer (sector-name-label/-points, unrelated
+  // to the Insights source above -- always created regardless of canUseInsights, see where it's
+  // added in initMap) -- one point per sector carrying the same "NN. Title" text formatSectorLabel
+  // already builds for the sidebar list, so the on-map label reads identically to it.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady || sectors.length === 0) return
+    const src = map.getSource('sector-name-points') as GeoJSONSource | undefined
+    if (!src) return
+    src.setData({
+      type: 'FeatureCollection',
+      features: sectors.map((s) => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [s.lng, s.lat] },
+        properties: { sector_no: s.sector_no, label: formatSectorLabel(s) },
+      })),
+    })
+  }, [sectors, mapReady])
   // Sub-class names + counts per class_group, for the left panel's search
   // tree -- fetched independently of StatsPanel's own /api/stats call (same
   // self-fetching pattern as `sectors` above) rather than threading it down.
@@ -1357,6 +1478,14 @@ export default function MapView({
    *  so two open at once would stack directly on top of each other). Harmless no-op at sm+,
    *  where the two panels dock side-by-side and coexist open as before. */
   const [expandedDockedPanel, setExpandedDockedPanel] = useState<'search' | 'stats' | null>(null)
+  /** Gate for the onExpand handlers below -- expandedDockedPanel must actually stay null at sm+
+   *  for the "harmless no-op" comment above to hold, since Panel's own effectiveCollapsed doesn't
+   *  re-check viewport width itself (only the *pill width* CSS is `max-sm:`-scoped, not whether
+   *  the panel's content renders at all) -- without this, expanding one docked panel would
+   *  force-collapse the other's content at every width, not just phone. */
+  function isPhoneViewport() {
+    return typeof window !== 'undefined' && window.innerWidth < 640
+  }
   // Which browse-mode groups are collapsed when the query is empty (ignored
   // while typing, when every matching group is shown expanded). "Jump to
   // sector" starts collapsed since navigating to a sector is a different
@@ -1398,13 +1527,13 @@ export default function MapView({
   // effect above) were a rough guess at the Haridwar-Rishikesh corridor's
   // midpoint that turned out to sit well southwest of the plan's actual
   // centroid -- Haridwar/Rishikesh/the sector chain along the Ganges rendered
-  // bunched into the upper-right of the viewport no matter how mapFlyPadding
-  // was tuned, because padding only repositions a *correct* center within
-  // the free viewport, it can't fix a center that's wrong to begin with.
-  // Computing the real union bbox from the sectors the map already fetches
-  // (same xmin/ymin/xmax/ymax shape /api/sector-plan/locate uses for its own
-  // fitBounds) and fitting to it is exact regardless of how the plan's
-  // geographic footprint shifts as sectors are added/moved, unlike a
+  // bunched into the upper-right of the viewport no matter how the fly
+  // padding was tuned, because padding only repositions a *correct* center
+  // within the free viewport, it can't fix a center that's wrong to begin
+  // with. Computing the real union bbox from the sectors the map already
+  // fetches (same xmin/ymin/xmax/ymax shape /api/sector-plan/locate uses for
+  // its own fitBounds) and fitting to it is exact regardless of how the
+  // plan's geographic footprint shifts as sectors are added/moved, unlike a
   // hand-picked constant that silently goes stale.
   //
   // Skipped when opening a specific ticket's parcel (initialParcel) -- that
@@ -1413,8 +1542,15 @@ export default function MapView({
   // (initialFitDoneRef) so it never re-fires and yanks the camera out from
   // under a user who has already panned/selected a sector by the time
   // sectors happens to reload.
+  //
+  // `mapReady` is in the deps (not just `sectors`) because the map itself is
+  // created asynchronously (see the mount effect's basemap-style fetch
+  // above) -- without it, sectors finishing their fetch before the map
+  // exists left this permanently skipped: the effect ran once, found no
+  // map, returned, and had no other dependency left to change to retrigger
+  // it once the map showed up moments later.
   useEffect(() => {
-    if (initialParcel || initialFitDoneRef.current || sectors.length === 0) return
+    if (initialParcel || initialFitDoneRef.current || sectors.length === 0 || !mapReady) return
     const map = mapRef.current
     if (!map) return
     initialFitDoneRef.current = true
@@ -1427,9 +1563,9 @@ export default function MapView({
         [xmin, ymin],
         [xmax, ymax],
       ],
-      { padding: mapFlyPadding(), duration: 0 },
+      { padding: fitBoundsMargin(), duration: 0 },
     )
-  }, [sectors, initialParcel])
+  }, [sectors, initialParcel, mapReady])
 
   // Swaps the vendored CARTO basemap style when the app theme toggles --
   // watches <html data-theme> directly (rather than re-rendering on some
@@ -1545,6 +1681,10 @@ export default function MapView({
       if (map.getLayer('sector-boundary-line')) {
         map.setPaintProperty('sector-boundary-line', 'line-color', c.boundary)
         map.setPaintProperty('sector-boundary-line', 'line-width', SECTOR_BOUNDARY_WIDTH[theme])
+      }
+      if (map.getLayer('sector-name-label')) {
+        map.setPaintProperty('sector-name-label', 'text-color', SECTOR_LABEL_TEXT_COLOR[theme])
+        map.setPaintProperty('sector-name-label', 'text-halo-color', SECTOR_LABEL_HALO_COLOR[theme])
       }
       // tertiary_road is the one POI line layer with its own per-theme
       // color/opacity (TERTIARY_ROAD_STYLE) instead of def.color -- without
@@ -1920,15 +2060,17 @@ export default function MapView({
       // midpoint, which is NOT the visually free area once the docked left
       // "Kumbh Mela" panel and top-right Stats panel are drawn on top -- on
       // first load (before any fitBounds/flyTo call ever runs) that made the
-      // initial view read as pushed up/left of where it should sit. Every
-      // other camera move in this file already accounts for this via
-      // mapFlyPadding(); jumpTo (unlike easeTo/flyTo) recenters instantly
-      // with no animation, so calling it here immediately after construction
-      // corrects the initial view before the user perceives any motion.
+      // initial view read as pushed up/left of where it should sit. jumpTo's
+      // own `padding` option (unlike a one-off fitBounds/flyTo padding
+      // elsewhere in this file) calls tr.setPadding under the hood, so this
+      // single call both recenters instantly (no animation) AND establishes
+      // the map's *persistent* padding that every later camera move relies
+      // on -- see reservedMapPadding/applyMapPadding above for why nothing
+      // else in this file passes its own `padding:` option anymore.
       map.jumpTo({
         center: initialParcel ? [initialParcel.lng, initialParcel.lat] : CENTER,
         zoom: initialParcel ? 16 : INITIAL_ZOOM,
-        padding: mapFlyPadding(),
+        padding: reservedMapPadding(),
       })
       mapRef.current = map
       initMap(map)
@@ -2159,6 +2301,41 @@ export default function MapView({
           'line-width': SECTOR_BOUNDARY_WIDTH[readMapTheme()],
         },
       })
+      // Plain "NN. Name" sector label -- a Map-mode-only base layer (the "Sector names" toggle
+      // alongside Sector plan/Boundaries), unrelated to the Insights system's own richer Ticket-mode
+      // label (INSIGHT_SECTOR_LABEL_LAYER, "S7 · 52% resolved") so it's created unconditionally here
+      // rather than gated behind canUseInsights -- a surveyor with no insights access still gets
+      // sector names on the plain map. One point per sector (its centroid, from the `sectors` state
+      // this component already fetches from /api/sectors) rather than the tiled sector_boundary
+      // vector source, for the same reason INSIGHT_SECTOR_LABEL_LAYER moved off it: a large sector
+      // polygon is clipped per-tile, so a label anchored to the polygon itself repeats once per
+      // fragment. The source starts empty; the sectors-state effect below (setSectorNameLabelPoints)
+      // fills it in once /api/sectors resolves.
+      if (!map.getSource('sector-name-points')) {
+        map.addSource('sector-name-points', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        })
+      }
+      if (!map.getLayer('sector-name-label')) {
+        map.addLayer({
+          id: 'sector-name-label',
+          type: 'symbol',
+          source: 'sector-name-points',
+          minzoom: 11,
+          layout: {
+            'text-field': ['get', 'label'],
+            'text-font': ['Noto Sans Bold'],
+            'text-size': 12,
+            'text-allow-overlap': false,
+          },
+          paint: {
+            'text-color': SECTOR_LABEL_TEXT_COLOR[readMapTheme()],
+            'text-halo-color': SECTOR_LABEL_HALO_COLOR[readMapTheme()],
+            'text-halo-width': 2,
+          },
+        })
+      }
 
       // Remaining POI layers (Aug 2026 JSON drop) -- one source + one visual
       // layer per entry in POI_LAYER_DEFS (river excluded -- it was already
@@ -2848,6 +3025,27 @@ export default function MapView({
           return
         }
 
+        // Flies to a sector's real extent -- shared by Heatmap's and Ticket mode's bare-sector
+        // click fallback below, so selecting a different sector on the map always recenters the
+        // same way Map mode's own selectedSector effect does. Unconditional (no zoom check): a
+        // fixed "only if zoomed out past 13" gate used to mean the *first* sector click flew in
+        // but every click after that silently did nothing, since the camera was already past the
+        // threshold -- exactly the "fly-in stopped working" bug this fixes. Reads sectorsRef (not
+        // `sectors` state) for the same staleness reason as every other ref in this once-
+        // registered 'load' handler -- see sectorsRef's own declaration.
+        function flyToSectorNo(sectorNo: number | null) {
+          if (sectorNo === null) return
+          const sector = sectorsRef.current.find((s) => s.sector_no === sectorNo)
+          if (!sector) return
+          map.fitBounds(
+            [
+              [sector.xmin, sector.ymin],
+              [sector.xmax, sector.ymax],
+            ],
+            { padding: fitBoundsMargin(), duration: 600 },
+          )
+        }
+
         // Heatmap mode's own click handling (revised PLAN-heatmap.md §11.7) -- takes over entirely
         // while active, before any of the plain-map hit-testing below (which would find nothing
         // useful anyway, since sector_plan/sector_boundary are hidden in this mode). Ticket mode
@@ -2963,8 +3161,8 @@ export default function MapView({
           }
 
           // No ticket dot under the cursor -- fall back to the (invisible) sector hit-target so
-          // bare sector area still selects that sector for the Insights panel. Only recenters the
-          // camera when zoomed out; a click while already close in shouldn't jump the view.
+          // bare sector area still selects that sector for the Insights panel, and flies to it
+          // (flyToSectorNo above) the same way Map mode's sector selection always does.
           const sectorHits = map.queryRenderedFeatures(e.point, {
             layers: [INSIGHT_SECTOR_FILL_LAYER],
           })
@@ -2975,30 +3173,18 @@ export default function MapView({
           const raw = sectorHits[0].properties?.sector_no
           const sectorNo = typeof raw === 'number' ? raw : null
           setInsightSector(sectorNo)
-          if (map.getZoom() < 13) {
-            const sector =
-              sectorNo === null
-                ? undefined
-                : sectorsRef.current.find((s) => s.sector_no === sectorNo)
-            if (sector) {
-              map.fitBounds(
-                [
-                  [sector.xmin, sector.ymin],
-                  [sector.xmax, sector.ymax],
-                ],
-                { padding: mapFlyPadding(), duration: 600 },
-              )
-            }
-          }
+          flyToSectorNo(sectorNo)
           return
         }
 
         // Ticket mode's own click handling (PLAN-heatmap.md §5.4 item 2) -- a parcel hit selects
         // that parcel's sector for the Insights panel AND opens the same popup Map mode uses
         // (showPopup already renders "no ticket" gracefully via /api/tickets/by-parcel, so this
-        // works the same for a ticket-backed parcel and a plain Road/Parking one). Falls back to
-        // bare-sector selection with no popup when only sector-hit-target matches, mirroring the
-        // Heatmap branch's empty-area fallback just above.
+        // works the same for a ticket-backed parcel and a plain Road/Parking one). A parcel hit
+        // never flies -- the clicked parcel is already on screen, so recentering on it would only
+        // jump the view for no reason. Falls back to bare-sector selection with no popup when only
+        // sector-hit-target matches, mirroring the Heatmap branch's empty-area fallback just
+        // above -- including the same flyToSectorNo fly-in, which this mode used to skip entirely.
         if (modeRef.current === 'tickets') {
           const hits = map.queryRenderedFeatures(e.point, {
             layers: [INSIGHT_TICKET_FILL_LAYER, 'sector-plan-hit-target'],
@@ -3021,7 +3207,9 @@ export default function MapView({
           }
           const sectorHits = map.queryRenderedFeatures(e.point, { layers: ['sector-hit-target'] })
           const raw = sectorHits[0]?.properties?.sector_no
-          setInsightSector(typeof raw === 'number' ? raw : null)
+          const sectorNo = typeof raw === 'number' ? raw : null
+          setInsightSector(sectorNo)
+          flyToSectorNo(sectorNo)
           return
         }
 
@@ -3432,16 +3620,25 @@ export default function MapView({
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady || mode !== 'heatmap' || !insightsData) return
-    setInsightHeatData(
+    const collection = buildHeatFeatureCollection(
+      insightsData.tickets,
+      insightsData.statuses,
+      insightsData.priorities,
+      insightsData.classGroups,
+      insightFilters,
+      heatMetric,
+    )
+    setInsightHeatData(map, collection)
+    // MapLibre's heatmap-density is relative to what's on screen, so a filter that drops most
+    // tickets can still repaint the same red "hot" core from whatever's left -- scaling intensity
+    // by how much of the eligible set survived the filter gives a visible "this filter did
+    // something" cue instead of the glow looking unchanged (see setInsightHeatIntensityScale).
+    const eligibleTotal = insightsData.tickets.filter(
+      (t) => heatMetric === 'total' || isOpenTicket(t, insightsData.statuses),
+    ).length
+    setInsightHeatIntensityScale(
       map,
-      buildHeatFeatureCollection(
-        insightsData.tickets,
-        insightsData.statuses,
-        insightsData.priorities,
-        insightsData.classGroups,
-        insightFilters,
-        heatMetric,
-      ),
+      eligibleTotal > 0 ? collection.features.length / eligibleTotal : 1,
     )
   }, [insightsData, mode, insightFilters, heatMetric, mapReady])
 
@@ -3517,7 +3714,7 @@ export default function MapView({
         [s.xmin, s.ymin],
         [s.xmax, s.ymax],
       ],
-      { padding: mapFlyPadding(), duration: 600 },
+      { padding: fitBoundsMargin(), duration: 600 },
     )
   }
 
@@ -3679,10 +3876,25 @@ export default function MapView({
           : ['all', ...roadCombined]
     map.setFilter('road-line', roadFilter as FilterSpecification | null)
 
+    // sector-selected-outline/-glow highlight whichever sector is "selected" in the mode
+    // actually active -- Map mode's own `selectedSector`, but Heatmap/Ticket mode track their
+    // selection separately as `insightSector` (which can also be 'peripheral', not just a
+    // number). Without this, the two layers stayed wired to `selectedSector` alone, which never
+    // changes while browsing Heatmap/Ticket (their clicks only ever set insightSector) -- so the
+    // highlight line silently never appeared there, even though sector-boundary (and so these two
+    // layers) stays visible in Ticket mode (see visibilityForMode's own comment on why).
+    const highlightedSectorNo =
+      mode === 'map'
+        ? selectedSector === 'all'
+          ? null
+          : selectedSector
+        : typeof insightSector === 'number'
+          ? insightSector
+          : null
     const selectedSectorFilter = (
-      selectedSector === 'all'
+      highlightedSectorNo === null
         ? ['==', ['get', 'sector_no'], -1]
-        : ['==', ['get', 'sector_no'], selectedSector]
+        : ['==', ['get', 'sector_no'], highlightedSectorNo]
     ) as FilterSpecification
     if (map.getLayer('sector-selected-outline')) {
       map.setFilter('sector-selected-outline', selectedSectorFilter)
@@ -3701,15 +3913,14 @@ export default function MapView({
             [s.xmin, s.ymin],
             [s.xmax, s.ymax],
           ],
-          // Extra left padding accounts for the "Kumbh Mela" panel docked
-          // over the map's left edge (w-72 + its offset, ~320px) -- plain
-          // symmetric padding fits the sector to the map's full width and
-          // leaves its left edge hidden behind the panel.
-          { padding: mapFlyPadding(), maxZoom: 16, duration: 800 },
+          // The map's persistent padding (see reservedMapPadding) already
+          // keeps the "Kumbh Mela"/Stats panels clear -- this is just a
+          // small symmetric breathing-room margin around the fitted sector.
+          { padding: fitBoundsMargin(), maxZoom: 16, duration: 800 },
         )
       }
     }
-  }, [selectedSector, classFilter, subclassFilter, sectors, visibility, mode])
+  }, [selectedSector, classFilter, subclassFilter, sectors, visibility, mode, insightSector])
 
   // POI sub-class filter -- narrows individual POI layers to a subset of
   // their subclass values, for the 4 layers that have one (see
@@ -3856,11 +4067,12 @@ export default function MapView({
                 [xmin, ymin],
                 [xmax, ymax],
               ],
-              // Same left padding as the sector fitBounds above (accounts for
-              // the docked "Kumbh Mela" panel), but a lower maxZoom -- a
-              // single-parcel bbox would otherwise zoom in tighter than is
-              // useful for orienting on where the parcel actually is.
-              { padding: mapFlyPadding(), maxZoom: 15, duration: 800 },
+              // Same breathing-room margin as the sector fitBounds above --
+              // the persistent map padding already keeps the panels clear --
+              // but a lower maxZoom -- a single-parcel bbox would otherwise
+              // zoom in tighter than is useful for orienting on where the
+              // parcel actually is.
+              { padding: fitBoundsMargin(), maxZoom: 15, duration: 800 },
             )
           }
         })
@@ -3886,10 +4098,13 @@ export default function MapView({
    *  visiting one result at a time instead of relying on the (possibly
    *  wide, for scattered matches) bbox fit above. */
   function flyToLocateFeature(lng: number, lat: number) {
+    // No explicit `padding:` -- the map's persistent padding (see
+    // reservedMapPadding/applyMapPadding) already keeps this centered in
+    // the free strip; MapLibre derives `center` from centerPoint, which
+    // accounts for the transform's stored padding on its own.
     mapRef.current?.flyTo({
       center: [lng, lat],
       zoom: 17,
-      padding: mapFlyPadding(),
       duration: 700,
     })
   }
@@ -3945,7 +4160,7 @@ export default function MapView({
               [xmin, ymin],
               [xmax, ymax],
             ],
-            { padding: mapFlyPadding(), maxZoom: 15, duration: 800 },
+            { padding: fitBoundsMargin(), maxZoom: 15, duration: 800 },
           )
         }
       })
@@ -3991,7 +4206,7 @@ export default function MapView({
                 [xmin, ymin],
                 [xmax, ymax],
               ],
-              { padding: mapFlyPadding(), maxZoom: 15, duration: 800 },
+              { padding: fitBoundsMargin(), maxZoom: 15, duration: 800 },
             )
           }
         })
@@ -4286,10 +4501,11 @@ export default function MapView({
     key: string
     label: string
     icon: typeof ParcelIcon
-    theme: 'blue' | 'teal'
+    theme: 'blue' | 'teal' | 'violet'
   }> = [
     { key: 'sector_plan', label: 'Sector plan', icon: ParcelIcon, theme: 'blue' },
     { key: 'sector_boundary', label: 'Boundaries', icon: GridIcon, theme: 'teal' },
+    { key: 'sector_names', label: 'Sector names', icon: TagIcon, theme: 'violet' },
   ]
   // --- Unified search panel -------------------------------------------
   // Merges what used to be three separate widgets (SECTOR box, CLASS box,
@@ -4473,7 +4689,9 @@ export default function MapView({
           side="left"
           overlayOpen={panelDropdownOpen}
           forceCollapsed={expandedDockedPanel === 'stats'}
-          onExpand={() => setExpandedDockedPanel('search')}
+          onExpand={() => {
+            if (isPhoneViewport()) setExpandedDockedPanel('search')
+          }}
           onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'search' ? null : cur))}
         >
           <div className="flex flex-col gap-4">
@@ -5423,7 +5641,9 @@ export default function MapView({
           selectedSector={insightSector}
           onSelectSector={selectInsightSectorFromPanel}
           forceCollapsed={expandedDockedPanel === 'stats'}
-          onExpand={() => setExpandedDockedPanel('search')}
+          onExpand={() => {
+            if (isPhoneViewport()) setExpandedDockedPanel('search')
+          }}
           onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'search' ? null : cur))}
           onWidthChange={(w) => setInsightsModeCollapsed(w === 0)}
         />
@@ -5464,10 +5684,16 @@ export default function MapView({
           roadTypeVisibility={visibility}
           onToggleRoadType={(key) => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
           onWidthChange={(w) => {
-            statsPanelWidthRef.current = w
+            // Ignore the 0 Panel reports while collapsed -- see
+            // rightPanelWidthRef's declaration for why the reserved space
+            // must survive collapsing the panel.
+            if (w > 0) rightPanelWidthRef.current = w
+            applyMapPadding()
           }}
           forceCollapsed={expandedDockedPanel === 'search'}
-          onExpand={() => setExpandedDockedPanel('stats')}
+          onExpand={() => {
+            if (isPhoneViewport()) setExpandedDockedPanel('stats')
+          }}
           onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'stats' ? null : cur))}
         />
       ) : (
@@ -5514,10 +5740,14 @@ export default function MapView({
           onClearFilters={() => setInsightFilters({})}
           onLocate={flyToLocateFeature}
           onWidthChange={(w) => {
-            statsPanelWidthRef.current = w
+            // Same "ignore the collapsed 0" rule as StatsPanel's onWidthChange above.
+            if (w > 0) rightPanelWidthRef.current = w
+            applyMapPadding()
           }}
           forceCollapsed={expandedDockedPanel === 'search'}
-          onExpand={() => setExpandedDockedPanel('stats')}
+          onExpand={() => {
+            if (isPhoneViewport()) setExpandedDockedPanel('stats')
+          }}
           onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'stats' ? null : cur))}
         />
       )}
@@ -5529,7 +5759,6 @@ export default function MapView({
             const s = sectors.find((x) => x.sector_no === selectedSector)
             return s ? formatSectorLabel(s) : `Sector ${selectedSector}`
           })()}
-          onClose={() => setSelectedSector('all')}
         />
       )}
 

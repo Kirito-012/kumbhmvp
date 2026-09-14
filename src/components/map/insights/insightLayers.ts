@@ -30,6 +30,13 @@ const PARCEL_SOURCE = 'sector_plan'
 const PARCEL_SOURCE_LAYER = 'sector_plan'
 
 export const INSIGHT_HEAT_SOURCE = 'insight-tickets'
+// One point per sector (its centroid), fed from the same `sectors` array MapView already fetches
+// from /api/sectors -- deliberately NOT the sector_boundary vector tile source: a large sector
+// polygon is clipped into a separate fragment per tile it overlaps, so a symbol layer placed
+// directly on it puts one label per fragment (the same sector's label repeating several times at
+// low zoom). A one-feature-per-sector point source makes "exactly one label per sector" structural
+// rather than something to fight with placement options like symbol-avoid-edges.
+export const INSIGHT_SECTOR_LABEL_SOURCE = 'insight-sector-label-points'
 
 export const INSIGHT_SECTOR_FILL_LAYER = 'insight-sector-fill'
 export const INSIGHT_SECTOR_OUTLINE_LAYER = 'insight-sector-outline'
@@ -71,6 +78,23 @@ const SECTOR_OUTLINE_COLOR: Record<Theme, string> = {
   dark: 'rgba(203,213,225,0.45)',
 }
 
+// Sector label text/halo -- opposite of NO_DATA_COLOR's pairing on purpose: NO_DATA_COLOR is a
+// muted neutral meant to recede (fine for an empty-fill colour, bad for label contrast), and it
+// was previously reused here as the halo, giving near-black text a near-black (dark theme) or
+// near-white text a near-white (light theme) halo -- both effectively invisible. These pairs are
+// plain high-contrast opposites (dark text on a light halo, light text on a dark halo) so the
+// label reads as a solid legible plate in both themes regardless of what's underneath. Exported so
+// MapView's own plain "sector name" label (Map mode's base-layer toggle, not part of the Insights
+// system) can match this exact look rather than inventing a second palette.
+export const SECTOR_LABEL_TEXT_COLOR: Record<Theme, string> = {
+  light: '#0f172a',
+  dark: '#f8fafc',
+}
+export const SECTOR_LABEL_HALO_COLOR: Record<Theme, string> = {
+  light: '#ffffff',
+  dark: '#0b1220',
+}
+
 // Fixed green -> lime -> yellow -> orange -> red density ramp, alpha baked into each rgba stop so
 // the basemap and its road/place-name labels stay readable through even the reddest core
 // (PLAN-heatmap.md §11.4). Deliberately independent of HEAT_PALETTE (which stays theme-aware and
@@ -110,6 +134,12 @@ export function addInsightLayers(map: MLMap, theme: Theme): void {
       data: { type: 'FeatureCollection', features: [] },
     })
   }
+  if (!map.getSource(INSIGHT_SECTOR_LABEL_SOURCE)) {
+    map.addSource(INSIGHT_SECTOR_LABEL_SOURCE, {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+    })
+  }
 
   if (!map.getLayer(INSIGHT_SECTOR_FILL_LAYER)) {
     map.addLayer({
@@ -143,8 +173,7 @@ export function addInsightLayers(map: MLMap, theme: Theme): void {
     map.addLayer({
       id: INSIGHT_SECTOR_LABEL_LAYER,
       type: 'symbol',
-      source: SECTOR_SOURCE,
-      'source-layer': SECTOR_SOURCE_LAYER,
+      source: INSIGHT_SECTOR_LABEL_SOURCE,
       minzoom: 11,
       layout: {
         visibility: 'none',
@@ -154,9 +183,11 @@ export function addInsightLayers(map: MLMap, theme: Theme): void {
         'text-allow-overlap': false,
       },
       paint: {
-        'text-color': theme === 'dark' ? '#0b0d11' : '#ffffff',
-        'text-halo-color': NO_DATA_COLOR[theme],
-        'text-halo-width': 1.2,
+        'text-color': SECTOR_LABEL_TEXT_COLOR[theme],
+        'text-halo-color': SECTOR_LABEL_HALO_COLOR[theme],
+        // Wide enough to read as a solid plate behind the text (rather than a thin outline) over
+        // any basemap/heat-glow colour underneath, since this label has no real background layer.
+        'text-halo-width': 2,
       },
     })
   }
@@ -400,8 +431,31 @@ export function updateTicketSectorLabels(
       sectorLabelExpr(labelBySector),
       {},
     ])
-    map.setPaintProperty(INSIGHT_SECTOR_LABEL_LAYER, 'text-halo-color', NO_DATA_COLOR[theme])
+    map.setPaintProperty(
+      INSIGHT_SECTOR_LABEL_LAYER,
+      'text-halo-color',
+      SECTOR_LABEL_HALO_COLOR[theme],
+    )
   }
+}
+
+/** Populates the dedicated one-point-per-sector label source from MapView's `sectors` state (its
+ *  /api/sectors fetch, unrelated to and loaded independently of ticket data) -- called from its own
+ *  effect keyed only on [sectors, mapReady] so the label anchor points exist as soon as sector data
+ *  loads, regardless of ticket/mode/filter state. Each feature carries the same `sector_no`
+ *  property sectorLabelExpr already matches on, so no other code needs to change. */
+export function setInsightSectorLabelPoints(
+  map: MLMap,
+  sectors: { sector_no: number; lng: number; lat: number }[],
+): void {
+  const src = map.getSource(INSIGHT_SECTOR_LABEL_SOURCE)
+  if (!src || !('setData' in src)) return
+  const features: Feature<Point, { sector_no: number }>[] = sectors.map((s) => ({
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [s.lng, s.lat] },
+    properties: { sector_no: s.sector_no },
+  }))
+  ;(src as GeoJSONSource).setData({ type: 'FeatureCollection', features })
 }
 
 /** Re-applies theme-dependent paint -- the heat colour ramp, sector outline hairline, label
@@ -426,10 +480,11 @@ export function applyInsightTheme(map: MLMap, theme: Theme): void {
     )
   }
   if (map.getLayer(INSIGHT_SECTOR_LABEL_LAYER)) {
+    map.setPaintProperty(INSIGHT_SECTOR_LABEL_LAYER, 'text-color', SECTOR_LABEL_TEXT_COLOR[theme])
     map.setPaintProperty(
       INSIGHT_SECTOR_LABEL_LAYER,
-      'text-color',
-      theme === 'dark' ? '#0b0d11' : '#ffffff',
+      'text-halo-color',
+      SECTOR_LABEL_HALO_COLOR[theme],
     )
   }
   if (map.getLayer(INSIGHT_SECTOR_SELECTED_LAYER)) {
@@ -514,6 +569,34 @@ export function setInsightHeatData(
 ): void {
   const src = map.getSource(INSIGHT_HEAT_SOURCE)
   if (src && 'setData' in src) (src as GeoJSONSource).setData(data)
+}
+
+// Same zoom stops as addInsightLayers's initial 'heatmap-intensity' paint value (10->0.15,
+// 13->0.5, 16->1.2) -- kept as the one base curve setInsightHeatIntensityScale multiplies, so the
+// unfiltered look (ratio 1) is pixel-identical to what addInsightLayers paints at rest.
+const BASE_HEAT_INTENSITY_STOPS: [number, number][] = [
+  [10, 0.15],
+  [13, 0.5],
+  [16, 1.2],
+]
+
+/**
+ * Scales the heatmap-intensity curve by `ratio` (the filtered ticket count divided by the total
+ * eligible count) so the glow visibly dims once a category/status/priority filter narrows the
+ * ticket set down. MapLibre's `heatmap-density` normalises to whatever's currently on screen, so
+ * without this a heavy filter can still repaint the same "hot" red core from just a handful of
+ * leftover points -- making the map look like it ignored the filter even though the underlying
+ * data did change (every count elsewhere in the panel updates correctly). Clamped to [0.3, 1] so a
+ * severe filter dims the glow rather than making it vanish outright.
+ */
+export function setInsightHeatIntensityScale(map: MLMap, ratio: number): void {
+  if (!map.getLayer(INSIGHT_HEAT_LAYER)) return
+  const clamped = Math.max(0.3, Math.min(1, ratio))
+  const expr = ['interpolate', ['linear'], ['zoom']] as unknown[]
+  for (const [zoom, value] of BASE_HEAT_INTENSITY_STOPS) {
+    expr.push(zoom, value * clamped)
+  }
+  map.setPaintProperty(INSIGHT_HEAT_LAYER, 'heatmap-intensity', expr as ExpressionSpecification)
 }
 
 // Cached ORIGINAL (undimmed) text-opacity/icon-opacity per basemap symbol layer id, populated the

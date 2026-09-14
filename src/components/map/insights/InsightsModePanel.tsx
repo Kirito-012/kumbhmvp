@@ -4,7 +4,12 @@ import { useState, type ReactNode } from 'react'
 import Panel from '@/components/map/Panel'
 import { FlameIcon, TicketIcon, SearchIcon } from '@/components/map/icons'
 import type { MapMode } from '@/components/map/insights/ModeSwitcher'
-import { useInsightTheme } from '@/components/map/insights/charts'
+import {
+  useInsightTheme,
+  Reveal,
+  AnimatedBar,
+  pillEntranceDelayMs,
+} from '@/components/map/insights/charts'
 import {
   rollupBySector,
   heatValueForSector,
@@ -94,6 +99,7 @@ export default function InsightsModePanel({
       }
       title={isHeatmap ? 'Heatmap' : 'Ticket status'}
       side="left"
+      entrance="slide"
       forceCollapsed={forceCollapsed}
       onExpand={onExpand}
       onCollapse={onCollapse}
@@ -237,174 +243,180 @@ function InsightsModeBody({
   return (
     <div className="flex flex-col gap-4">
       {isHeatmap && (
-        <div>
-          <SectionLabel>Metric</SectionLabel>
-          <div
-            className="grid grid-cols-2 gap-1 rounded-lg border p-0.5"
-            style={{ borderColor: 'var(--map-border)' }}
-          >
-            {METRIC_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => onHeatMetricChange(opt.value)}
-                aria-pressed={heatMetric === opt.value}
-                className="cursor-pointer rounded-md px-1 py-1 text-[10.5px] font-semibold transition-colors"
-                style={
-                  heatMetric === opt.value
-                    ? { background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }
-                    : { color: 'var(--map-fg-muted)' }
-                }
-              >
-                {opt.label}
-              </button>
-            ))}
+        <Reveal index={0}>
+          <div>
+            <SectionLabel>Metric</SectionLabel>
+            <div
+              className="grid grid-cols-2 gap-1 rounded-lg border p-0.5"
+              style={{ borderColor: 'var(--map-border)' }}
+            >
+              {METRIC_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => onHeatMetricChange(opt.value)}
+                  aria-pressed={heatMetric === opt.value}
+                  className="cursor-pointer rounded-md px-1 py-1 text-[10.5px] font-semibold transition-colors"
+                  style={
+                    heatMetric === opt.value
+                      ? { background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }
+                      : { color: 'var(--map-fg-muted)' }
+                  }
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        </Reveal>
       )}
 
-      <div>
-        <SectionLabel>Legend</SectionLabel>
-        {isHeatmap ? (
-          <div className="flex flex-col gap-1.5">
-            <div
-              className="h-2.5 w-full shrink-0 rounded-full"
-              style={{ background: heatGradientCss(theme) }}
-              aria-hidden
-            />
-            <div
-              className="flex items-center justify-between text-[11.5px]"
-              style={{ color: 'var(--map-fg-muted)' }}
-            >
-              <span>Fewer</span>
-              <span>{heatMetric === 'pctOpen' ? 'More open tickets' : 'More tickets'}</span>
+      <Reveal index={1}>
+        <div>
+          <SectionLabel>Legend</SectionLabel>
+          {isHeatmap ? (
+            <div className="flex flex-col gap-1.5">
+              <div
+                className="h-2.5 w-full shrink-0 rounded-full"
+                style={{ background: heatGradientCss(theme) }}
+                aria-hidden
+              />
+              <div
+                className="flex items-center justify-between text-[11.5px]"
+                style={{ color: 'var(--map-fg-muted)' }}
+              >
+                <span>Fewer</span>
+                <span>{heatMetric === 'pctOpen' ? 'More open tickets' : 'More tickets'}</span>
+              </div>
+              {heatMetric === 'pctOpen' && (
+                <p className="text-[10.5px]" style={{ color: 'var(--map-fg-faint)' }}>
+                  Map shows open-ticket density · list ranked by % open
+                </p>
+              )}
             </div>
-            {heatMetric === 'pctOpen' && (
-              <p className="text-[10.5px]" style={{ color: 'var(--map-fg-faint)' }}>
-                Map shows open-ticket density · list ranked by % open
-              </p>
-            )}
+          ) : (
+            <div className="flex flex-col gap-1">
+              {BUCKET_ORDER.map((bucket) => {
+                const count = bucketCounts[bucket]
+                return (
+                  <div
+                    key={bucket}
+                    className="flex items-center gap-2 text-[11.5px]"
+                    style={{
+                      color: count > 0 ? 'var(--map-fg-muted)' : 'var(--map-fg-faint)',
+                      opacity: count > 0 ? 1 : 0.6,
+                    }}
+                  >
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                      style={{ background: BUCKET_COLORS[bucket][theme] }}
+                      aria-hidden
+                    />
+                    <span className="flex-1">{BUCKET_LABELS[bucket]}</span>
+                    <span className="tabular-nums font-medium">{count}</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </Reveal>
+
+      <Reveal index={2}>
+        <div>
+          <SectionLabel>Sectors</SectionLabel>
+          <div className="relative mb-1.5">
+            <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--map-fg-faint)]" />
+            <input
+              type="text"
+              value={sectorQuery}
+              onChange={(e) => setSectorQuery(e.target.value)}
+              placeholder="Search sectors…"
+              aria-label="Search sectors"
+              className="w-full rounded-lg border py-1.5 pl-8 pr-2.5 text-[11.5px] outline-none transition-shadow placeholder:text-[var(--map-fg-faint)] focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
+              style={{
+                borderColor: 'var(--map-border)',
+                background: 'var(--map-input-bg)',
+                color: 'var(--map-fg)',
+              }}
+            />
           </div>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {BUCKET_ORDER.map((bucket) => {
-              const count = bucketCounts[bucket]
+          {visibleRanked.length === 0 && (
+            <p className="px-1.5 py-1 text-[11.5px]" style={{ color: 'var(--map-fg-faint)' }}>
+              No sectors match your search.
+            </p>
+          )}
+          <div className="flex flex-col gap-0.5">
+            {visibleRanked.map((row) => {
+              const isSelected =
+                row.key === 'peripheral'
+                  ? selectedSector === 'peripheral'
+                  : selectedSector === row.key
+              const color =
+                row.key === 'peripheral'
+                  ? 'var(--map-fg-faint)'
+                  : colorForValue(row.value, breaks, theme)
               return (
-                <div
-                  key={bucket}
-                  className="flex items-center gap-2 text-[11.5px]"
+                <button
+                  key={row.key}
+                  type="button"
+                  onClick={() => onSelectSector(row.key)}
+                  className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors"
                   style={{
-                    color: count > 0 ? 'var(--map-fg-muted)' : 'var(--map-fg-faint)',
-                    opacity: count > 0 ? 1 : 0.6,
+                    background: isSelected ? 'var(--map-accent-bg)' : 'transparent',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isSelected) e.currentTarget.style.background = 'var(--map-surface-hover)'
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isSelected) e.currentTarget.style.background = 'transparent'
                   }}
                 >
                   <span
-                    className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                    style={{ background: BUCKET_COLORS[bucket][theme] }}
-                    aria-hidden
+                    className="min-w-0 flex-1 truncate text-[11.5px]"
+                    style={{
+                      color: isSelected ? 'var(--map-fg)' : 'var(--map-fg-muted)',
+                      fontWeight: isSelected ? 600 : 500,
+                    }}
+                  >
+                    {row.label}
+                  </span>
+                  <span
+                    className="w-10 shrink-0 text-right text-[11px] tabular-nums"
+                    style={{ color: 'var(--map-fg-faint)' }}
+                  >
+                    {metricValueLabel(row.value)}
+                  </span>
+                  <AnimatedBar
+                    percent={(row.value / maxValue) * 100}
+                    fill={color}
+                    height={6}
+                    trackClassName="w-10 shrink-0"
+                    delayMs={pillEntranceDelayMs(2)}
                   />
-                  <span className="flex-1">{BUCKET_LABELS[bucket]}</span>
-                  <span className="tabular-nums font-medium">{count}</span>
-                </div>
+                </button>
               )
             })}
           </div>
-        )}
-      </div>
-
-      <div>
-        <SectionLabel>Sectors</SectionLabel>
-        <div className="relative mb-1.5">
-          <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--map-fg-faint)]" />
-          <input
-            type="text"
-            value={sectorQuery}
-            onChange={(e) => setSectorQuery(e.target.value)}
-            placeholder="Search sectors…"
-            aria-label="Search sectors"
-            className="w-full rounded-lg border py-1.5 pl-8 pr-2.5 text-[11.5px] outline-none transition-shadow placeholder:text-[var(--map-fg-faint)] focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
-            style={{
-              borderColor: 'var(--map-border)',
-              background: 'var(--map-input-bg)',
-              color: 'var(--map-fg)',
-            }}
-          />
         </div>
-        {visibleRanked.length === 0 && (
-          <p className="px-1.5 py-1 text-[11.5px]" style={{ color: 'var(--map-fg-faint)' }}>
-            No sectors match your search.
-          </p>
-        )}
-        <div className="flex flex-col gap-0.5">
-          {visibleRanked.map((row) => {
-            const isSelected =
-              row.key === 'peripheral'
-                ? selectedSector === 'peripheral'
-                : selectedSector === row.key
-            const color =
-              row.key === 'peripheral'
-                ? 'var(--map-fg-faint)'
-                : colorForValue(row.value, breaks, theme)
-            return (
-              <button
-                key={row.key}
-                type="button"
-                onClick={() => onSelectSector(row.key)}
-                className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors"
-                style={{
-                  background: isSelected ? 'var(--map-accent-bg)' : 'transparent',
-                }}
-                onMouseEnter={(e) => {
-                  if (!isSelected) e.currentTarget.style.background = 'var(--map-surface-hover)'
-                }}
-                onMouseLeave={(e) => {
-                  if (!isSelected) e.currentTarget.style.background = 'transparent'
-                }}
-              >
-                <span
-                  className="min-w-0 flex-1 truncate text-[11.5px]"
-                  style={{
-                    color: isSelected ? 'var(--map-fg)' : 'var(--map-fg-muted)',
-                    fontWeight: isSelected ? 600 : 500,
-                  }}
-                >
-                  {row.label}
-                </span>
-                <span
-                  className="w-10 shrink-0 text-right text-[11px] tabular-nums"
-                  style={{ color: 'var(--map-fg-faint)' }}
-                >
-                  {metricValueLabel(row.value)}
-                </span>
-                <span
-                  className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full"
-                  style={{ background: 'var(--map-border)' }}
-                >
-                  <span
-                    className="block h-full rounded-full"
-                    style={{ width: `${(row.value / maxValue) * 100}%`, background: color }}
-                  />
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      </div>
+      </Reveal>
 
-      <div
-        className="flex items-center justify-between border-t pt-2.5 text-[10.5px]"
-        style={{ borderColor: 'var(--map-border)', color: 'var(--map-fg-faint)' }}
-      >
-        <span>Updated {timeAgo(generatedAt)}</span>
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="cursor-pointer font-semibold underline-offset-2 hover:underline"
-          style={{ color: 'var(--map-accent)' }}
+      <Reveal index={3}>
+        <div
+          className="flex items-center justify-between border-t pt-2.5 text-[10.5px]"
+          style={{ borderColor: 'var(--map-border)', color: 'var(--map-fg-faint)' }}
         >
-          ↻ Refresh
-        </button>
-      </div>
+          <span>Updated {timeAgo(generatedAt)}</span>
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="cursor-pointer font-semibold underline-offset-2 hover:underline"
+            style={{ color: 'var(--map-accent)' }}
+          >
+            ↻ Refresh
+          </button>
+        </div>
+      </Reveal>
     </div>
   )
 }

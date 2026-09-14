@@ -19,6 +19,7 @@ export default function Panel({
   forceCollapsed = false,
   onExpand,
   onCollapse,
+  entrance = 'fade',
 }: {
   icon: ReactNode
   title: string
@@ -59,6 +60,11 @@ export default function Panel({
    *  without it, that tracker would stay pointed at this panel forever after its first
    *  expansion, permanently hiding the sibling even once this panel is closed again. */
   onCollapse?: () => void
+  /** 'fade' (default) is the original in-place fade+scale-up, used by Map mode's two panels.
+   *  'slide' adds a signed translateX (from whichever edge `side` docks to) on top of the same
+   *  fade+scale, for callers that want their initial mount to read as more deliberate --
+   *  currently just the Heatmap/Ticket mode panels. */
+  entrance?: 'fade' | 'slide'
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const [width, setWidth] = useState(defaultWidth)
@@ -166,7 +172,13 @@ export default function Panel({
         backdrop-blur-md
         flex flex-col
         ${dragging ? '' : 'transition-[opacity,transform] duration-200 ease-out'}
-        animate-[panel-in_220ms_ease-out]`}
+        ${
+          entrance === 'slide'
+            ? side === 'left'
+              ? 'animate-[panel-in-left_420ms_cubic-bezier(0.16,1,0.3,1)]'
+              : 'animate-[panel-in-right_420ms_cubic-bezier(0.16,1,0.3,1)]'
+            : 'animate-[panel-in_220ms_ease-out]'
+        }`}
     >
       {resizable && (
         <div
