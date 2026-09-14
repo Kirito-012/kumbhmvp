@@ -139,7 +139,7 @@ export default function InsightsPanel({
   onExpand,
   onCollapse,
 }: {
-  mode: Exclude<MapMode, 'map'>
+  mode: Extract<MapMode, 'heatmap' | 'tickets'>
   sector: number | 'peripheral' | null
   insightsData: InsightsTicketData | null
   filters: InsightsFilters
@@ -307,7 +307,7 @@ function InsightsHero({
   sectors,
   onFilterStatusBucket,
 }: {
-  mode: Exclude<MapMode, 'map'>
+  mode: Extract<MapMode, 'heatmap' | 'tickets'>
   sector: number | 'peripheral' | null
   insightsData: InsightsTicketData
   filters: InsightsFilters

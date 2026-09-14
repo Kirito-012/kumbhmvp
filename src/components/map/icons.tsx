@@ -266,3 +266,28 @@ export function TicketIcon({ className }: IconProps) {
     </svg>
   )
 }
+
+// An exit arrow leaving a doorway -- Evacuation mode's ModeSwitcher segment/panel icon (see
+// PLAN-evacuation.md §4.2). The doorway is a bracket open on the right (matches TicketIcon's own
+// open-bracket motif above) with an arrow passing through the opening, same 1.5px/24-unit style as
+// every other icon here.
+export function EvacuationIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M10 4H7a2 2 0 00-2 2v12a2 2 0 002 2h3"
+        className={base}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9 12h11m0 0l-3.5-3.5M20 12l-3.5 3.5"
+        className={base}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}

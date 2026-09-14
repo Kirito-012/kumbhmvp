@@ -69,7 +69,7 @@ export default function InsightsModePanel({
   onCollapse,
   onWidthChange,
 }: {
-  mode: Exclude<MapMode, 'map'>
+  mode: Extract<MapMode, 'heatmap' | 'tickets'>
   insightsData: InsightsTicketData | null
   loading: boolean
   error: string | null
@@ -170,7 +170,7 @@ function InsightsModeBody({
   generatedAt,
   onRefresh,
 }: {
-  mode: Exclude<MapMode, 'map'>
+  mode: Extract<MapMode, 'heatmap' | 'tickets'>
   insightsData: InsightsTicketData
   sectors: SectorSummary[]
   heatMetric: HeatMetric

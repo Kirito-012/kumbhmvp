@@ -1,14 +1,17 @@
 'use client'
 
 import { useRef } from 'react'
-import { FlameIcon, LayersIcon, TicketIcon } from '@/components/map/icons'
+import { EvacuationIcon, FlameIcon, LayersIcon, TicketIcon } from '@/components/map/icons'
 
-export type MapMode = 'map' | 'heatmap' | 'tickets'
+export type MapMode = 'map' | 'heatmap' | 'tickets' | 'evacuation'
 
+// Appended at the end (rather than, say, alphabetised) so the existing 1/2/3 keyboard shortcuts
+// keep meaning what they always have -- see PLAN-evacuation.md §5.2. 4 selects Evacuation.
 const SEGMENTS: { mode: MapMode; label: string; icon: typeof LayersIcon }[] = [
   { mode: 'map', label: 'Map', icon: LayersIcon },
   { mode: 'heatmap', label: 'Heatmap', icon: FlameIcon },
   { mode: 'tickets', label: 'Tickets', icon: TicketIcon },
+  { mode: 'evacuation', label: 'Evacuation', icon: EvacuationIcon },
 ]
 
 /** Per-mode indicator tint, as `--map-*` tokens (see globals.css) so it re-themes with the rest
@@ -18,6 +21,7 @@ const INDICATOR_VAR: Record<MapMode, string> = {
   map: 'var(--map-accent)',
   heatmap: 'var(--map-mode-heatmap)',
   tickets: 'var(--map-mode-tickets)',
+  evacuation: 'var(--map-mode-evacuation)',
 }
 
 /** Segmented pill placed after the measure button in the top-left control strip (see MapView's

@@ -108,6 +108,14 @@ import {
   UndoIcon,
   XIcon,
 } from '@/components/map/icons'
+import EvacuationModePanel from '@/components/map/evacuation/EvacuationModePanel'
+import EvacuationPanel from '@/components/map/evacuation/EvacuationPanel'
+import {
+  defaultEvacVisibility,
+  type EvacFocus,
+  type EvacKey,
+  type EvacSelection,
+} from '@/lib/evacuation/layers'
 
 type Sector = {
   sector_no: number
@@ -1019,9 +1027,14 @@ function visibilityForMode(
   for (const d of POI_LAYER_DEFS) override[d.key] = false
   // Heatmap/Ticket mode have their own sector labelling (the density glow needs none; Ticket mode
   // shows the richer "S7 · 52% resolved" label -- see INSIGHT_SECTOR_LABEL_LAYER) -- this plain
-  // name-only label is a Map-mode-only base layer, so it's always forced off outside Map mode
-  // regardless of the user's own toggle state, same as roads/POIs above.
-  override.sector_names = false
+  // name-only label is a Map-mode-only base layer, so it's always forced off outside those two
+  // modes regardless of the user's own toggle state, same as roads/POIs above. Evacuation mode is
+  // the one exception (PLAN-evacuation.md §1 decision #6/§5.3): it has no sector labelling of its
+  // own, so sector_plan/sector_boundary/sector_names all just keep following the user's shared
+  // `visibility` there, same as plain Map mode -- only the roads/POI override above applies.
+  if (mode !== 'evacuation') {
+    override.sector_names = false
+  }
   if (mode === 'heatmap') {
     override.sector_plan = false
     override.sector_boundary = false
@@ -1064,6 +1077,25 @@ function loadStoredVisibility(): Record<string, boolean> {
   }
 }
 
+// Evacuation mode's own visibility store -- deliberately separate from VISIBILITY_STORAGE_KEY
+// (PLAN-evacuation.md §1 decision #6: its layer toggles must never leak into Map mode's saved
+// layers, or vice versa). sector_plan/sector_boundary/sector_names are NOT in here -- those three
+// keep sharing the plain `visibility` state/storage per that same decision.
+const EVAC_VISIBILITY_STORAGE_KEY = 'tcsticket:mapView:evacVisibility'
+
+function loadStoredEvacVisibility(): Record<EvacKey, boolean> {
+  const defaults = defaultEvacVisibility()
+  try {
+    const raw = localStorage.getItem(EVAC_VISIBILITY_STORAGE_KEY)
+    if (!raw) return defaults
+    const stored = JSON.parse(raw)
+    if (!stored || typeof stored !== 'object') return defaults
+    return { ...defaults, ...stored }
+  } catch {
+    return defaults
+  }
+}
+
 // PLAN-heatmap.md §6.3: "A compact floating legend ... appears whenever the left panel is
 // collapsed, on any viewport, so the colours always have a key." Heatmap's branch just mirrors
 // the panel's single gradient bar (§11.8) -- unlike Ticket mode below it, it needs no per-sector
@@ -1079,7 +1111,7 @@ function FloatingLegend({
   filters,
   heatMetric,
 }: {
-  mode: Exclude<MapMode, 'map'>
+  mode: Extract<MapMode, 'heatmap' | 'tickets'>
   insightsData: InsightsTicketData
   filters: InsightsFilters
   heatMetric: HeatMetric
@@ -1402,7 +1434,7 @@ export default function MapView({
   const [mode, setMode] = useState<MapMode>(() => {
     if (!canUseInsights) return 'map'
     const m = searchParams.get('mode')
-    return m === 'heatmap' || m === 'tickets' ? m : 'map'
+    return m === 'heatmap' || m === 'tickets' || m === 'evacuation' ? m : 'map'
   })
   /** Mirrors `mode` for the map's one-time 'load' handler, same staleness reason as measuringRef. */
   const modeRef = useRef(mode)
@@ -1419,6 +1451,30 @@ export default function MapView({
     const n = raw === null ? NaN : Number(raw)
     return Number.isInteger(n) ? n : null
   })
+  // Evacuation mode's own state (PLAN-evacuation.md §5.1) -- kept separate from insightSector/
+  // selectedSector for the same reason those two are separate from each other: leaving the mode
+  // should put the user back where they were, and the Sector Report drawer must never pop open
+  // from an evacuation-mode click. `evacFocus` covers both a sector *and* a zone (unlike
+  // insightSector, evacuation mode has no per-parcel/per-status data, only "which area is this
+  // about"), read from the URL the same way insightSector is.
+  const [evacFocus, setEvacFocus] = useState<EvacFocus>(() => {
+    if (!canUseInsights) return null
+    const zone = searchParams.get('ezone')
+    if (zone) return { kind: 'zone', zone }
+    const raw = searchParams.get('esector')
+    const n = raw === null ? NaN : Number(raw)
+    return Number.isInteger(n) ? { kind: 'sector', sectorNo: n } : null
+  })
+  // The currently highlighted search result or clicked evac-* feature (Phase 5) -- never
+  // persisted in the URL, same as the map-mode parcel popup's own selection state.
+  const [evacSelection, setEvacSelection] = useState<EvacSelection>(null)
+  // Evacuation-mode-only layer toggles (core on, supporting/flood off) -- deliberately a
+  // *separate* store from `visibility` (decision #6), and the same SSR-safe-default-then-hydrate
+  // split as `visibility`/`loadStoredVisibility` below, for the same hydration-mismatch reason.
+  const [evacVisibility, setEvacVisibility] =
+    useState<Record<EvacKey, boolean>>(defaultEvacVisibility)
+  // evacFilters (plan/direction/corridor) lands in Phase 3 alongside the search/summary API that
+  // actually consumes it -- no point carrying unused filter state through two phases first.
   // Initialized to the plain defaults (not loadStoredVisibility) so the first
   // client render matches what the server rendered -- localStorage doesn't
   // exist during SSR, and reading it in the initializer here would make the
@@ -1822,6 +1878,18 @@ export default function MapView({
       localStorage.setItem(VISIBILITY_STORAGE_KEY, JSON.stringify(visibility))
     } catch {}
   }, [visibility])
+
+  // Same SSR-safe-default-then-hydrate split as `visibility` above, for evacVisibility's own
+  // separate store (PLAN-evacuation.md §5.1).
+  useEffect(() => {
+    setEvacVisibility(loadStoredEvacVisibility())
+  }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(EVAC_VISIBILITY_STORAGE_KEY, JSON.stringify(evacVisibility))
+    } catch {}
+  }, [evacVisibility])
 
   // Values come from PostGIS, not live user input, but escaping is cheap
   // defense-in-depth for HTML injected via Popup.setHTML.
@@ -3561,12 +3629,16 @@ export default function MapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mutators close over stable setMeasure/setMeasuring identities
   }, [measuring])
 
-  // Mode-switcher keyboard shortcuts (PLAN-heatmap.md §4.1): 1/2/3 pick Map/Heatmap/Tickets, Esc
-  // clears insightSector and returns to Map. Skipped while a text input has focus (so it doesn't
-  // hijack the search box) or while measuring (which already owns Escape for exiting itself,
-  // just above -- checked via the ref rather than `measuring` state so this effect doesn't need
-  // to re-register every time measuring toggles). Never registered for a surveyor: canUseInsights
-  // false means there's no switcher to drive and no insightSector to clear.
+  // Mode-switcher keyboard shortcuts (PLAN-heatmap.md §4.1, extended by PLAN-evacuation.md §5.2):
+  // 1/2/3/4 pick Map/Heatmap/Tickets/Evacuation. Escape's behaviour depends on the active mode --
+  // Heatmap/Tickets clear insightSector and return to Map in one press (unchanged); Evacuation
+  // steps back one level per press (clear evacSelection, then evacFocus, then return to Map) so a
+  // stray Escape while inspecting a feature doesn't also throw away the sector/zone you'd
+  // navigated to. Skipped while a text input has focus (so it doesn't hijack the search box) or
+  // while measuring (which already owns Escape for exiting itself, just above -- checked via the
+  // ref rather than `measuring` state so this effect doesn't need to re-register every time
+  // measuring toggles). Never registered for a surveyor: canUseInsights false means there's no
+  // switcher to drive and nothing mode-specific to clear.
   useEffect(() => {
     if (!canUseInsights) return
     function onKeyDown(e: KeyboardEvent) {
@@ -3576,14 +3648,21 @@ export default function MapView({
       if (e.key === '1') setMode('map')
       else if (e.key === '2') setMode('heatmap')
       else if (e.key === '3') setMode('tickets')
+      else if (e.key === '4') setMode('evacuation')
       else if (e.key === 'Escape') {
+        if (mode === 'evacuation') {
+          if (evacSelection) setEvacSelection(null)
+          else if (evacFocus) setEvacFocus(null)
+          else setMode('map')
+          return
+        }
         setInsightSector(null)
         setMode('map')
       }
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [canUseInsights])
+  }, [canUseInsights, mode, evacSelection, evacFocus])
 
   // Layer visibility -- reacts to toggling the sidebar's switches, and also
   // catches the one-time swap from SSR-safe defaults to the
@@ -3762,20 +3841,25 @@ export default function MapView({
     )
   }
 
-  // Mirrors mode/insightSector into the URL (?mode=&isector=) so a view can be shared or
-  // reloaded -- see PLAN-heatmap.md §4.1. router.replace (not push) so switching modes doesn't
-  // spam browser history. Preserves any other query params already there (e.g. a ticket's
-  // parcel/lng/lat deep link) rather than clobbering them.
+  // Mirrors mode/insightSector/evacFocus into the URL (?mode=&isector=/&esector=|&ezone=) so a
+  // view can be shared or reloaded -- see PLAN-heatmap.md §4.1, extended by PLAN-evacuation.md
+  // §5.1. router.replace (not push) so switching modes doesn't spam browser history. Preserves
+  // any other query params already there (e.g. a ticket's parcel/lng/lat deep link) rather than
+  // clobbering them.
   useEffect(() => {
     const params = new URLSearchParams(searchParams.toString())
     if (mode === 'map') params.delete('mode')
     else params.set('mode', mode)
     if (insightSector === null) params.delete('isector')
     else params.set('isector', String(insightSector))
+    params.delete('esector')
+    params.delete('ezone')
+    if (evacFocus?.kind === 'sector') params.set('esector', String(evacFocus.sectorNo))
+    else if (evacFocus?.kind === 'zone') params.set('ezone', evacFocus.zone)
     const qs = params.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- searchParams/router/pathname are read, not reacted to; re-running on their identity change would fight this effect's own replace
-  }, [mode, insightSector])
+  }, [mode, insightSector, evacFocus])
 
   // A parcel popup left open from Map mode reads as a stale/broken control once the map's whole
   // visual language has switched to Heatmap/Ticket shading underneath it.
@@ -5676,6 +5760,15 @@ export default function MapView({
             </div>
           </div>
         </Panel>
+      ) : mode === 'evacuation' ? (
+        <EvacuationModePanel
+          evacVisibility={evacVisibility}
+          forceCollapsed={expandedDockedPanel === 'stats'}
+          onExpand={() => {
+            if (isPhoneViewport()) setExpandedDockedPanel('search')
+          }}
+          onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'search' ? null : cur))}
+        />
       ) : (
         <InsightsModePanel
           mode={mode}
@@ -5736,6 +5829,22 @@ export default function MapView({
             // Ignore the 0 Panel reports while collapsed -- see
             // rightPanelWidthRef's declaration for why the reserved space
             // must survive collapsing the panel.
+            if (w > 0) rightPanelWidthRef.current = w
+            applyMapPadding()
+          }}
+          forceCollapsed={expandedDockedPanel === 'search'}
+          onExpand={() => {
+            if (isPhoneViewport()) setExpandedDockedPanel('stats')
+          }}
+          onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'stats' ? null : cur))}
+        />
+      ) : mode === 'evacuation' ? (
+        <EvacuationPanel
+          evacFocus={evacFocus}
+          sectors={sectors}
+          onClearFocus={() => setEvacFocus(null)}
+          onWidthChange={(w) => {
+            // Same "ignore the collapsed 0" rule as StatsPanel's onWidthChange above.
             if (w > 0) rightPanelWidthRef.current = w
             applyMapPadding()
           }}
@@ -5813,7 +5922,7 @@ export default function MapView({
 
       {insightsActive && insightsModeCollapsed && insightsData && (
         <FloatingLegend
-          mode={mode as Exclude<MapMode, 'map'>}
+          mode={mode as Extract<MapMode, 'heatmap' | 'tickets'>}
           insightsData={insightsData}
           filters={insightFilters}
           heatMetric={heatMetric}

@@ -124,6 +124,8 @@
      saturated red/emerald at light-mode intensity reads muddy against the dark glass panel. */
   --map-mode-heatmap: #f87171;
   --map-mode-tickets: #34d399;
+  /* Amber -- distinct from heatmap's red and tickets' green (PLAN-evacuation.md §4.2). */
+  --map-mode-evacuation: #fbbf24;
 }
 
 [data-theme='light'] {
@@ -233,6 +235,7 @@
   /* ModeSwitcher's sliding indicator (Map reuses --map-accent above). */
   --map-mode-heatmap: #dc2626;
   --map-mode-tickets: #059669;
+  --map-mode-evacuation: #d97706;
 }
 
 @theme inline {

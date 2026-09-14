@@ -456,11 +456,12 @@ green→red (`HEAT_PALETTE` in `src/lib/insights/heatScale.ts`, same ramp for bo
 single CSS gradient bar (`heatGradientCss`) in both `InsightsModePanel`'s legend and `FloatingLegend`.
 `computeQuantileBreaks`/`colorForValue` (same file) are Ticket mode's, not Heatmap's, colouring logic now.
 
-**Known gotcha:** loading the map directly via a `?mode=heatmap` deep link (rather than clicking the mode
-switch after the map has already loaded) can leave the heat layers stuck at `visibility: 'none'` — the
-mode-visibility effect is gated on `map.isStyleLoaded()` and doesn't re-run once the style finishes
-loading if `mode` was already `'heatmap'` on mount. A real in-app mode transition (click, or `1`/`2`/`3`)
-always works. Flagged but not yet fixed as of the Phase 7 branch.
+A `?mode=heatmap`/`?mode=tickets`/`?mode=evacuation` deep link cold-loads correctly — the
+mode-visibility effect is gated on `mapReady` (a state flip at the end of `initMap`'s `load` handler), not
+`map.isStyleLoaded()`, specifically so it re-runs once on mount even when `mode` is already non-`'map'`
+before the style finishes loading. (An earlier revision of this doc flagged the `isStyleLoaded()` version
+of this bug as open; it had already been fixed by the time PLAN-evacuation.md's Phase 1 checked, so this
+note now just explains why the `mapReady` gate exists rather than warning about it.)
 
 Data contract is a client-side split (`PLAN-heatmap.md §3.3`): a bulk ticket-tuple array
 (`useTicketInsights`) fetched once per `active` transition and filtered/rolled-up locally
@@ -477,6 +478,26 @@ on any viewport, whenever `InsightsModePanel` is collapsed (tracked via its `onW
 `Panel`'s `onRenderedWidthChange`, which reports 0 when collapsed) so the map's colours always have a key
 even with the panel tucked away. It deliberately recomputes its own small rollup from
 `insightsData`/`filters`/`heatMetric` rather than reaching into the paint effects' internal refs.
+
+### Evacuation mode — `PLAN-evacuation.md` (Phase 1 of ~8, in progress)
+
+A 4th `ModeSwitcher` segment (amber, `--map-mode-evacuation`, key `4`), for crowd-flow/evacuation
+planning: entry/exit points and routes, direction signage, emergency exits, traffic routes, plus
+off-by-default supporting layers (thematic gates, junctions, bridges, footpaths, fire hydrants, public
+service facilities, zone outlines) and flood risk (`hfl_area`/`hfl_line`). See §10's "Two source drops" for
+where the emergency-exit/flood/hospital data actually comes from.
+
+Its own layer-visibility store (`EvacKey` in `src/lib/evacuation/layers.ts`, defaults in
+`defaultEvacVisibility()`) is deliberately **separate** from Map mode's `visibility` — persisted under its
+own `localStorage` key (`tcsticket:mapView:evacVisibility`) — except `sector_plan`/`sector_boundary`/
+`sector_names`, which keep following the shared `visibility` in this mode (unlike Heatmap/Ticket, which
+force sector labels off and Heatmap alone also forces the sector layers themselves off).
+`Esc` in this mode steps back one level per press (clear the selected feature, then the focused
+sector/zone, then leave the mode) rather than exiting in one press like Heatmap/Ticket do.
+
+As of Phase 1, `EvacuationModePanel`/`EvacuationPanel` are placeholder shells (mode plumbing, layer-list
+readout, panel docking) — the real search, filters, map layers (`evacLayers.ts`), and
+`/api/evacuation/*` routes land in later phases.
 
 ---
 
@@ -754,7 +775,10 @@ Branch `feat/heatmap` (not yet merged to `main`). Recent work (this may be stale
   `hfl_line` loaded from the older 25 Aug 2026 shapefile drop, `public_service_facilities` enriched
   with 21 extra hospitals, `sector_boundary.zone` backfilled — see §10's "Two source drops". Map
   mode's Emergency Exit toggle now draws real data again (its own `emergency-exit-line` layer/source,
-  not a `road-line` filter). Phases 1+ (the actual Evacuation mode UI) not yet started.
+  not a `road-line` filter).
+- Evacuation mode Phase 1 committed: mode plumbing (4th `ModeSwitcher` segment, `4` shortcut, its own
+  `evacVisibility` store, deep-link/`Esc` handling), placeholder panels — see §9's new "Evacuation mode"
+  subsection. The real search/filters/map layers/API are Phases 2+, not yet started.
 
 Open items:
 
