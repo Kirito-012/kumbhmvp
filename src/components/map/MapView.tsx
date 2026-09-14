@@ -4,6 +4,7 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import type { Feature, Point } from 'geojson'
 import { clusterPoints } from '@/lib/poiClustering'
+import { badgeIconId, makeBadgeIcon } from '@/lib/mapBadgeIcon'
 import {
   Map as MLMap,
   Marker,
@@ -111,10 +112,17 @@ import {
 import EvacuationModePanel from '@/components/map/evacuation/EvacuationModePanel'
 import EvacuationPanel from '@/components/map/evacuation/EvacuationPanel'
 import {
+  addEvacLayers,
+  applyEvacTheme,
+  setEvacLayersVisible,
+} from '@/components/map/evacuation/evacLayers'
+import {
   defaultEvacVisibility,
+  EVAC_SUPPORT_KEYS,
   type EvacFocus,
   type EvacKey,
   type EvacSelection,
+  type EvacSupportKey,
 } from '@/lib/evacuation/layers'
 
 type Sector = {
@@ -636,54 +644,6 @@ function matchExpr(
   return ['match', ['get', field], ...pairs, fallback] as unknown as ExpressionSpecification
 }
 
-// One shared badge image per (text, colour) pair, registered with
-// map.addImage and placed via plain icon-image -- pre-baking the pill
-// background AND the text into one raster (rather than a stretched pill
-// image plus a separate text-field layer sized by icon-text-fit) gives
-// exact, predictable pixel dimensions matching the compact badge used in
-// the Layers/Stats panels, instead of fighting icon-text-fit's padding math.
-function badgeIconId(text: string, color: string) {
-  return `poi-badge-${text}-${color.replace('#', '')}`
-}
-
-// Rendered at 4x and downscaled via addImage's pixelRatio so the small
-// badge stays crisp. Sizing mirrors the panel badge: ~14px tall, ~3px
-// corner radius, minimal horizontal padding around the text.
-function makeBadgeIcon(text: string, color: string): ImageData {
-  const scale = 4
-  const height = 14 * scale
-  const paddingX = 4 * scale
-  const radius = 3 * scale
-  const fontSize = 9 * scale
-
-  const measure = document.createElement('canvas').getContext('2d')!
-  measure.font = `700 ${fontSize}px "Noto Sans", sans-serif`
-  const textWidth = measure.measureText(text).width
-  const width = Math.ceil(textWidth + paddingX * 2)
-
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext('2d')!
-  ctx.fillStyle = color
-  ctx.beginPath()
-  ctx.moveTo(radius, 0)
-  ctx.arcTo(width, 0, width, height, radius)
-  ctx.arcTo(width, height, 0, height, radius)
-  ctx.arcTo(0, height, 0, 0, radius)
-  ctx.arcTo(0, 0, width, 0, radius)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.fillStyle = '#ffffff'
-  ctx.font = `700 ${fontSize}px "Noto Sans", sans-serif`
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.fillText(text, width / 2, height / 2 + 1)
-
-  return ctx.getImageData(0, 0, width, height)
-}
-
 // A native MapLibre control (rather than an absolutely-positioned React
 // button) so it stacks in the bottom-right corner alongside the zoom/compass/
 // attribution controls using MapLibre's own layout instead of a guessed
@@ -800,6 +760,17 @@ const APP_SOURCE_IDS = new Set([
   'sector_plan',
   'road',
   'sector_boundary',
+  // Map mode's own Emergency Exit layer (Phase 0, PLAN-evacuation.md) -- same
+  // "missing from this set means syncBasemap deletes it as a stale basemap source
+  // on every theme toggle" bug as INSIGHT_HEAT_SOURCE/INSIGHT_SECTOR_LABEL_SOURCE
+  // below, caught while wiring up Evacuation mode's own sources in Phase 2.
+  'emergency_exit',
+  // Evacuation mode's own sources (Phase 2, evacLayers.ts) -- hfl_area/hfl_line have no 2027 gdb
+  // equivalent (loaded from the 25 Aug 2026 drop, see CONTEXT.md §10) and evac-selected is a
+  // client-populated geojson source (Phase 5); none of the three belong to any vendored basemap.
+  'hfl_area',
+  'hfl_line',
+  'evac-selected',
   'measure-line',
   'measure-label',
   'measure-preview',
@@ -1020,11 +991,24 @@ function applyLayerVisibility(map: MLMap, visibility: Record<string, boolean>) {
 function visibilityForMode(
   visibility: Record<string, boolean>,
   mode: MapMode,
+  evacVisibility: Record<EvacKey, boolean>,
 ): Record<string, boolean> {
   if (mode === 'map') return visibility
   const override = { ...visibility }
   for (const d of ROAD_TYPE_DEFS) override[d.key] = false
-  for (const d of POI_LAYER_DEFS) override[d.key] = false
+  for (const d of POI_LAYER_DEFS) {
+    // Evacuation mode's 6 "supporting" layers (decision #5) are the one case where a POI_LAYER_DEFS
+    // key stays visible in a non-map mode -- and it follows evacVisibility, not the user's own
+    // Map-mode `visibility`, since the two toggles are deliberately independent stores (decision
+    // #6). Every other POI key -- including the ones evacuation mode *also* draws, like
+    // traffic_route/entry_exit/direction_line -- stays off here: those get their own dedicated
+    // evac-* layers (see evacLayers.ts) instead of reusing Map mode's `poi-*` ones, so the two
+    // visual languages never mix.
+    override[d.key] =
+      mode === 'evacuation' && (EVAC_SUPPORT_KEYS as readonly string[]).includes(d.key)
+        ? evacVisibility[d.key as EvacSupportKey]
+        : false
+  }
   // Heatmap/Ticket mode have their own sector labelling (the density glow needs none; Ticket mode
   // shows the richer "S7 · 52% resolved" label -- see INSIGHT_SECTOR_LABEL_LAYER) -- this plain
   // name-only label is a Map-mode-only base layer, so it's always forced off outside those two
@@ -1492,6 +1476,11 @@ export default function MapView({
   useEffect(() => {
     visibilityRef.current = visibility
   }, [visibility])
+  /** Same staleness reason as visibilityRef, for evacVisibility's own store. */
+  const evacVisibilityRef = useRef<Record<EvacKey, boolean>>(evacVisibility)
+  useEffect(() => {
+    evacVisibilityRef.current = evacVisibility
+  }, [evacVisibility])
   // Empty array means "all classes" -- multiple classes can be selected at
   // once, all rendering together on the map (same on/off model as
   // poiVisibility/roadTypeVisibility rather than a single active choice).
@@ -1835,12 +1824,19 @@ export default function MapView({
       // Ticket mode's fill/outline colours (Phase 4) are plain theme-dependent paint values same
       // as everything above -- no data recompute needed, feature-state itself doesn't change.
       applyTicketTheme(map, theme)
+      // Evacuation mode's colours (and its EN/EXT badge images, which are coloured when created --
+      // see applyEvacTheme's own comment) are theme-dependent the same way -- PLAN-evacuation.md §6.4.
+      applyEvacTheme(map, theme)
       // The theme swap just destroyed and recreated every basemap layer object above, so any
       // cached "original opacity" from the OLD basemap's same-id layers is meaningless for the
-      // NEW one -- clear it, then re-dim from the new layers' own defaults if Heatmap is active
-      // (PLAN-heatmap.md §11.5/§11.6).
+      // NEW one -- clear it, then re-dim from the new layers' own defaults if Heatmap/Evacuation is
+      // active (PLAN-heatmap.md §11.5/§11.6, PLAN-evacuation.md §6.4).
       clearBasemapLabelDimCache()
-      setBasemapLabelsDimmed(map, modeRef.current === 'heatmap', (id) => APP_SOURCE_IDS.has(id))
+      setBasemapLabelsDimmed(
+        map,
+        modeRef.current === 'heatmap' || modeRef.current === 'evacuation',
+        (id) => APP_SOURCE_IDS.has(id),
+      )
     }
 
     const observer = new MutationObserver(() => void syncBasemap())
@@ -3018,7 +3014,17 @@ export default function MapView({
       // applies modeRef's current value (see its own comment) so a deep
       // link straight into Heatmap/Ticket mode hides POIs/roads from the
       // very first paint instead of flashing them on first.
-      applyLayerVisibility(map, visibilityForMode(visibilityRef.current, modeRef.current))
+      // Evacuation mode's own layers (PLAN-evacuation.md §6) -- created here, after every POI
+      // source/layer above exists, since several evac-* layers reuse those sources directly
+      // (traffic_route/entry_exit_line/direction_line/entry_exit/location_entry). Gated on
+      // canUseInsights like addInsightLayers/addTicketLayers above -- a surveyor's map never
+      // creates these either.
+      if (canUseInsights) addEvacLayers(map, readMapTheme())
+      applyLayerVisibility(
+        map,
+        visibilityForMode(visibilityRef.current, modeRef.current, evacVisibilityRef.current),
+      )
+      setEvacLayersVisible(map, modeRef.current === 'evacuation', evacVisibilityRef.current)
 
       function setHoverFilter(sectorNo: number | null) {
         const filter: FilterSpecification =
@@ -3681,13 +3687,18 @@ export default function MapView({
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
-    applyLayerVisibility(map, visibilityForMode(visibility, mode))
+    applyLayerVisibility(map, visibilityForMode(visibility, mode, evacVisibility))
     setInsightLayersVisible(map, mode === 'heatmap')
     setTicketLayersVisible(map, mode === 'tickets')
     setInsightLabelVisible(map, mode === 'tickets')
-    setBasemapLabelsDimmed(map, mode === 'heatmap', (id) => APP_SOURCE_IDS.has(id))
+    setEvacLayersVisible(map, mode === 'evacuation', evacVisibility)
+    // Evacuation mode dims basemap place-name labels the same way Heatmap does, so the mode's own
+    // (differently-coloured) routes/badges stay legible against the basemap underneath them.
+    setBasemapLabelsDimmed(map, mode === 'heatmap' || mode === 'evacuation', (id) =>
+      APP_SOURCE_IDS.has(id),
+    )
     if (mode !== 'heatmap') popupRef.current?.remove()
-  }, [visibility, mode, mapReady])
+  }, [visibility, mode, mapReady, evacVisibility])
 
   // Keeps the double-stroke selected-sector highlight in sync with insightSector while Heatmap is
   // active -- filtered to -1 (matches nothing) the rest of the time via setInsightSelectedFilter's

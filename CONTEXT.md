@@ -479,7 +479,7 @@ on any viewport, whenever `InsightsModePanel` is collapsed (tracked via its `onW
 even with the panel tucked away. It deliberately recomputes its own small rollup from
 `insightsData`/`filters`/`heatMetric` rather than reaching into the paint effects' internal refs.
 
-### Evacuation mode — `PLAN-evacuation.md` (Phase 1 of ~8, in progress)
+### Evacuation mode — `PLAN-evacuation.md` (Phase 2 of ~8, in progress)
 
 A 4th `ModeSwitcher` segment (amber, `--map-mode-evacuation`, key `4`), for crowd-flow/evacuation
 planning: entry/exit points and routes, direction signage, emergency exits, traffic routes, plus
@@ -491,13 +491,35 @@ Its own layer-visibility store (`EvacKey` in `src/lib/evacuation/layers.ts`, def
 `defaultEvacVisibility()`) is deliberately **separate** from Map mode's `visibility` — persisted under its
 own `localStorage` key (`tcsticket:mapView:evacVisibility`) — except `sector_plan`/`sector_boundary`/
 `sector_names`, which keep following the shared `visibility` in this mode (unlike Heatmap/Ticket, which
-force sector labels off and Heatmap alone also forces the sector layers themselves off).
+force sector labels off and Heatmap alone also forces the sector layers themselves off). The 6
+"supporting" POI layers (thematic gates, junctions, bridges, footpaths, fire hydrants, public service
+facilities) reuse Map mode's own `poi-*` layers directly, following `evacVisibility` instead of
+`visibility` while this mode is active — every other `POI_LAYER_DEFS` key (including ones this mode also
+draws, like `traffic_route`/`entry_exit`) stays hidden, since those get their own dedicated `evac-*`
+layers instead (see `evacLayers.ts`) so the two visual languages never mix.
 `Esc` in this mode steps back one level per press (clear the selected feature, then the focused
 sector/zone, then leave the mode) rather than exiting in one press like Heatmap/Ticket do.
 
-As of Phase 1, `EvacuationModePanel`/`EvacuationPanel` are placeholder shells (mode plumbing, layer-list
-readout, panel docking) — the real search, filters, map layers (`evacLayers.ts`), and
-`/api/evacuation/*` routes land in later phases.
+**Map layers (`evacLayers.ts`, Phase 2):** created once in `initMap`'s `load` handler (gated on
+`canUseInsights`), reusing the `traffic_route`/`entry_exit_line`/`direction_line`/`entry_exit`/
+`location_entry` sources MapView's own POI-layer loop already creates, plus `emergency_exit` (Phase 0)
+and two new vector sources for `hfl_area`/`hfl_line`. Entry is green, exit is rose (a different green/red
+split from Map mode's single "green = entry or exit" convention, since this mode's whole point is telling
+them apart), emergency exits keep Map mode's red, flood risk is translucent blue. EN/EXT point badges
+reuse the same canvas-drawn pill-icon generator as Map mode's "BS"/"G"/"FH" signage codes, extracted to
+`src/lib/mapBadgeIcon.ts` so both can share it. **Not yet implemented** (see the phase table in
+PLAN-evacuation.md for why): traffic-route/direction-signage arrows, zone outlines/labels, the
+selected-feature highlight's data (Phase 5), hover feature-state (Phase 5), and dimming
+`sector-plan-fill` itself (only basemap labels dim so far).
+
+**Gotcha this phase caught and fixed:** `emergency_exit` (Phase 0's own source) was missing from
+`APP_SOURCE_IDS`, the whitelist the basemap theme-swap effect uses to tell "one of our own sources" apart
+from "belongs to the vendored basemap" — same bug `INSIGHT_HEAT_SOURCE`/`INSIGHT_SECTOR_LABEL_SOURCE`
+already had comments warning about, missed the first time. A real theme toggle would have deleted it as a
+stale basemap source. Fixed alongside adding evacLayers.ts's own three new sources to the same list.
+
+As of Phase 2, `EvacuationModePanel`/`EvacuationPanel` are still placeholder shells (Phase 1's mode
+plumbing) — the real search, filters and `/api/evacuation/*` routes land in Phases 3-4.
 
 ---
 
@@ -776,9 +798,11 @@ Branch `feat/heatmap` (not yet merged to `main`). Recent work (this may be stale
   with 21 extra hospitals, `sector_boundary.zone` backfilled — see §10's "Two source drops". Map
   mode's Emergency Exit toggle now draws real data again (its own `emergency-exit-line` layer/source,
   not a `road-line` filter).
-- Evacuation mode Phase 1 committed: mode plumbing (4th `ModeSwitcher` segment, `4` shortcut, its own
-  `evacVisibility` store, deep-link/`Esc` handling), placeholder panels — see §9's new "Evacuation mode"
-  subsection. The real search/filters/map layers/API are Phases 2+, not yet started.
+- Evacuation mode Phases 1-2 committed: mode plumbing (4th `ModeSwitcher` segment, `4` shortcut, its own
+  `evacVisibility` store, deep-link/`Esc` handling) and its map layers (`evacLayers.ts` — core/flood
+  layers, EN/EXT badges, theme swap; arrows/zone-outlines/selection-highlight/hover deferred, see the
+  phase table) — see §9's "Evacuation mode" subsection. Panels are still Phase 1 placeholders; the real
+  search/filters/API are Phases 3+, not yet started.
 
 Open items:
 

@@ -1,0 +1,546 @@
+import type { Map as MLMap, ExpressionSpecification, FilterSpecification } from 'maplibre-gl'
+import { badgeIconId, makeBadgeIcon } from '@/lib/mapBadgeIcon'
+import { EVAC_COLORS, type EvacKey, type EvacTheme } from '@/lib/evacuation/layers'
+
+// Evacuation mode's own MapLibre layers -- see PLAN-evacuation.md §6. Every layer here is created
+// once, hidden, in initMap's `load` handler (gated on canUseInsights, same as insightLayers.ts's
+// addInsightLayers) and toggled purely by layout visibility from then on -- entering/leaving the
+// mode is a pure visibility flip with no layer-creation latency, same contract as Heatmap/Ticket.
+//
+// Every layer here reuses an EXISTING source (the `traffic_route`/`entry_exit_line`/
+// `direction_line`/`entry_exit`/`location_entry` POI sources MapView's own POI-layer loop already
+// creates, plus the `emergency_exit` source added in Phase 0) except `hfl_area`/`hfl_line`, which
+// get their own new vector sources here (Phase 0 loaded the tables; nothing else tiles them yet).
+// Map mode's own styling is never touched -- these are new layer ids, not edits to `poi-*`/
+// `road-line`/`emergency-exit-line`.
+//
+// Deliberately NOT implemented in this phase (see PLAN-evacuation.md §10 Phase 2's note): traffic-
+// route/direction-signage arrows (drawing-order-dependent, needs visual verification against the
+// real routes first -- shipping a wrong arrow is worse than no arrow), zone outlines/labels (their
+// geometry comes from /api/evacuation/summary, which is Phase 3), the selected-feature pulse glow's
+// actual population (Phase 5 owns the click/search selection logic; the layers exist here, empty),
+// and hover feature-state (ties into the same click handling Phase 5 adds).
+
+const FLOOD_AREA_SOURCE = 'hfl_area'
+const FLOOD_LINE_SOURCE = 'hfl_line'
+/** Holds the single currently-selected/hovered evac-* feature (Phase 5 populates it via
+ *  `setData()`) -- created empty now so later phases only need to feed it data, not touch layer
+ *  creation. A 'line' layer renders a LineString/Polygon feature's boundary; a 'circle' layer
+ *  renders a Point one; the same empty source backs both, so whichever geometry Phase 5 puts in
+ *  paints on the layer that actually matches it. */
+const SELECTED_SOURCE = 'evac-selected'
+
+/** Every layer id this module creates, grouped by which `evacVisibility` key controls it -- the
+ *  single source of truth `setEvacLayersVisible` and the theme-swap pass both iterate. Keys not
+ *  listed here (`zone_outline` -- no geometry until Phase 3) have nothing to toggle yet. */
+const LAYERS_BY_KEY: Record<Exclude<EvacKey, 'zone_outline'>, string[]> = {
+  hfl_area: ['evac-hfl-area-fill', 'evac-hfl-area-outline'],
+  hfl_line: ['evac-hfl-line'],
+  traffic_route: ['evac-traffic-route-casing', 'evac-traffic-route-peak', 'evac-traffic-route-normal'],
+  entry_exit_line: ['evac-entry-exit-line-glow', 'evac-entry-exit-line'],
+  direction_line: ['evac-direction-line'],
+  emergency_exit: ['evac-emergency-exit-glow', 'evac-emergency-exit-casing', 'evac-emergency-exit'],
+  entry_exit: [
+    'evac-entry-exit-cluster',
+    'evac-entry-exit-cluster-count',
+    'evac-entry-exit-hit',
+    'evac-entry-exit-badge',
+  ],
+  location_entry: ['evac-location-entry-hit', 'evac-location-entry-badge'],
+  // Supporting layers with no evac-* layer of their own yet -- they reuse Map mode's existing
+  // `poi-*` layers directly (see MapView's setEvacLayersVisible call site), so there's nothing for
+  // THIS module to toggle for them; listed here only so the Record is total over every EvacKey.
+  thematic_gate: [],
+  junction: [],
+  bridge: [],
+  footpath: [],
+  fh_location: [],
+  public_service_facilities: [],
+}
+
+function colorPair(pair: { light: string; dark: string }, theme: EvacTheme): string {
+  return theme === 'light' ? pair.light : pair.dark
+}
+
+/** 'Entry' -> green, 'Exit' -> rose, anything else (destination signs, null) -> slate. Reused for
+ *  entry_exit_line/entry_exit/location_entry's `remark` and traffic_route's `entry_exit` -- both
+ *  columns use the same 'Entry'/'Exit' vocabulary (case-sensitive; direction_line's own `remark`
+ *  is upper-cased 'ENTRY'/'EXIT' instead, so its expression upcases the field first). */
+function entryExitColorExpr(field: string, theme: EvacTheme): ExpressionSpecification {
+  return [
+    'match',
+    ['get', field],
+    'Entry',
+    colorPair(EVAC_COLORS.entry, theme),
+    'Exit',
+    colorPair(EVAC_COLORS.exit, theme),
+    colorPair(EVAC_COLORS.unknown, theme),
+  ] as unknown as ExpressionSpecification
+}
+
+function directionLineColorExpr(theme: EvacTheme): ExpressionSpecification {
+  return [
+    'match',
+    ['upcase', ['get', 'remark']],
+    'ENTRY',
+    colorPair(EVAC_COLORS.entry, theme),
+    'EXIT',
+    colorPair(EVAC_COLORS.exit, theme),
+    colorPair(EVAC_COLORS.unknown, theme),
+  ] as unknown as ExpressionSpecification
+}
+
+/** Same reversed-zoom glow curve as Map mode's own `poi-entry_exit_line-glow` (see MapView's POI
+ *  line-layer loop) -- these are short real-world segments that would otherwise be an invisible
+ *  speck at region zoom, so the glow widens as you zoom OUT rather than in. Reused verbatim for
+ *  entry/exit routes and emergency exits, the two other short-segment line layers this mode has. */
+const GLOW_WIDTH: ExpressionSpecification = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  4,
+  28,
+  9,
+  18,
+  13,
+  8,
+  16,
+  0,
+] as unknown as ExpressionSpecification
+const GLOW_OPACITY: ExpressionSpecification = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  4,
+  0.55,
+  9,
+  0.4,
+  16,
+  0,
+] as unknown as ExpressionSpecification
+
+const PEAK_DAY_FILTER: FilterSpecification = ['==', ['get', 'plan'], 'Peak day']
+const NOT_PEAK_DAY_FILTER: FilterSpecification = ['!=', ['get', 'plan'], 'Peak day']
+const UNCLUSTERED_FILTER: FilterSpecification = ['!', ['has', 'point_count']]
+const CLUSTERED_FILTER: FilterSpecification = ['has', 'point_count']
+
+function ensureBadgeImage(map: MLMap, text: string, color: string): string {
+  const id = badgeIconId(text, color)
+  if (map.hasImage(id)) map.removeImage(id)
+  map.addImage(id, makeBadgeIcon(text, color), { pixelRatio: 4 })
+  return id
+}
+
+/** Creates every evac-* source/layer once, hidden. Call from initMap's `load` handler, gated on
+ *  `canUseInsights`, AFTER MapView's own POI-layer loop has created the `traffic_route`/
+ *  `entry_exit_line`/`direction_line`/`entry_exit`/`location_entry` sources this reuses (order
+ *  within the evac-* stack itself is fully self-contained, so where this lands relative to Map
+ *  mode's own layers doesn't matter -- the two are never visible at the same time, see
+ *  visibilityForMode). Idempotent-guarded the same way MapView guards its own one-time layers
+ *  (`if (!map.getLayer(...))`), for Strict Mode's dev double-invoke. */
+export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
+  // Guarded on the very FIRST thing this function creates (not the last) so a call that somehow
+  // re-enters mid-way (React Strict Mode's dev double-invoke of the mount effect, or a Fast
+  // Refresh re-run while the map instance survives) bails out immediately rather than reaching a
+  // real `addSource`/`addLayer` call for an id that's already there -- MapLibre throws
+  // synchronously ("Source ... already exists") rather than no-op'ing on a duplicate id.
+  if (map.getSource(FLOOD_AREA_SOURCE)) return
+
+  map.addSource(FLOOD_AREA_SOURCE, {
+    type: 'vector',
+    tiles: [`${location.origin}/api/tiles/hfl_area/{z}/{x}/{y}`],
+    promoteId: 'id',
+  })
+  map.addSource(FLOOD_LINE_SOURCE, {
+    type: 'vector',
+    tiles: [`${location.origin}/api/tiles/hfl_line/{z}/{x}/{y}`],
+    promoteId: 'id',
+  })
+  map.addSource(SELECTED_SOURCE, {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  })
+
+  // --- Flood risk (off by default; hfl_area/hfl_line are 25-Aug-2026-only, see CONTEXT.md §10) --
+  map.addLayer({
+    id: 'evac-hfl-area-fill',
+    type: 'fill',
+    source: FLOOD_AREA_SOURCE,
+    'source-layer': 'hfl_area',
+    layout: { visibility: 'none' },
+    paint: {
+      'fill-color': colorPair(EVAC_COLORS.floodArea, theme),
+      'fill-opacity': theme === 'light' ? 0.14 : 0.18,
+    },
+  })
+  map.addLayer({
+    id: 'evac-hfl-area-outline',
+    type: 'line',
+    source: FLOOD_AREA_SOURCE,
+    'source-layer': 'hfl_area',
+    layout: { visibility: 'none' },
+    paint: {
+      'line-color': colorPair(EVAC_COLORS.floodArea, theme),
+      'line-width': 1,
+      'line-opacity': 0.6,
+    },
+  })
+  map.addLayer({
+    id: 'evac-hfl-line',
+    type: 'line',
+    source: FLOOD_LINE_SOURCE,
+    'source-layer': 'hfl_line',
+    layout: { visibility: 'none' },
+    paint: {
+      'line-color': colorPair(EVAC_COLORS.floodLine, theme),
+      'line-width': 1.5,
+      'line-dasharray': [3, 2],
+      // Fainter for a 25-year flood extent, strongest for the 100-year one -- so the least-likely
+      // scenario doesn't visually dominate the one worth planning around most.
+      'line-opacity': [
+        'match',
+        ['get', 'return_period_years'],
+        25,
+        0.45,
+        50,
+        0.65,
+        100,
+        0.9,
+        0.5,
+      ] as unknown as ExpressionSpecification,
+    },
+  })
+
+  // --- Traffic routes (core layer; on by default) ---------------------------------------------
+  map.addLayer({
+    id: 'evac-traffic-route-casing',
+    type: 'line',
+    source: 'traffic_route',
+    'source-layer': 'traffic_route',
+    layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' },
+    paint: {
+      'line-color': theme === 'light' ? '#0f172a' : '#e2e8f0',
+      'line-opacity': theme === 'light' ? 0.18 : 0.22,
+      'line-width': ['interpolate', ['linear'], ['zoom'], 8, 5, 14, 7] as unknown as ExpressionSpecification,
+    },
+  })
+  const trafficRouteCore = (id: string, filter: FilterSpecification, dashed: boolean) =>
+    map.addLayer({
+      id,
+      type: 'line',
+      source: 'traffic_route',
+      'source-layer': 'traffic_route',
+      filter,
+      layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': entryExitColorExpr('entry_exit', theme),
+        'line-width': ['interpolate', ['linear'], ['zoom'], 8, 2.5, 14, 4] as unknown as ExpressionSpecification,
+        ...(dashed ? { 'line-dasharray': [2, 1.5] } : {}),
+      },
+    })
+  // Peak day: solid core. Normal day (and the 5 rows with no `plan` at all): dashed -- see
+  // PLAN-evacuation.md §6.2 item 4 on why this is 2 layers rather than a data-driven dasharray.
+  trafficRouteCore('evac-traffic-route-peak', PEAK_DAY_FILTER, false)
+  trafficRouteCore('evac-traffic-route-normal', NOT_PEAK_DAY_FILTER, true)
+
+  // --- Entry/exit routes (on by default) ------------------------------------------------------
+  map.addLayer({
+    id: 'evac-entry-exit-line-glow',
+    type: 'line',
+    source: 'entry_exit_line',
+    'source-layer': 'entry_exit_line',
+    layout: { visibility: 'none' },
+    paint: {
+      'line-color': entryExitColorExpr('remark', theme),
+      'line-width': GLOW_WIDTH,
+      'line-opacity': GLOW_OPACITY,
+      'line-blur': 1.5,
+    },
+  })
+  map.addLayer({
+    id: 'evac-entry-exit-line',
+    type: 'line',
+    source: 'entry_exit_line',
+    'source-layer': 'entry_exit_line',
+    layout: { visibility: 'none' },
+    paint: {
+      'line-color': entryExitColorExpr('remark', theme),
+      'line-width': 2.5,
+    },
+  })
+
+  // --- Direction signage (on by default) ------------------------------------------------------
+  map.addLayer({
+    id: 'evac-direction-line',
+    type: 'line',
+    source: 'direction_line',
+    'source-layer': 'direction_line',
+    layout: { visibility: 'none' },
+    paint: {
+      'line-color': directionLineColorExpr(theme),
+      'line-width': 2,
+    },
+  })
+
+  // --- Emergency exits (on by default) ---------------------------------------------------------
+  map.addLayer({
+    id: 'evac-emergency-exit-glow',
+    type: 'line',
+    source: 'emergency_exit',
+    'source-layer': 'emergency_exit',
+    layout: { visibility: 'none' },
+    paint: {
+      'line-color': colorPair(EVAC_COLORS.emergencyExit, theme),
+      'line-width': GLOW_WIDTH,
+      'line-opacity': GLOW_OPACITY,
+      'line-blur': 1.5,
+    },
+  })
+  map.addLayer({
+    id: 'evac-emergency-exit-casing',
+    type: 'line',
+    source: 'emergency_exit',
+    'source-layer': 'emergency_exit',
+    layout: { visibility: 'none' },
+    paint: {
+      'line-color': colorPair(EVAC_COLORS.emergencyExitCasing, theme),
+      'line-width': 4,
+    },
+  })
+  map.addLayer({
+    id: 'evac-emergency-exit',
+    type: 'line',
+    source: 'emergency_exit',
+    'source-layer': 'emergency_exit',
+    layout: { visibility: 'none' },
+    paint: {
+      'line-color': colorPair(EVAC_COLORS.emergencyExit, theme),
+      'line-width': 2,
+    },
+  })
+
+  // --- Entry/exit point badges (on by default) ------------------------------------------------
+  // Own dedicated cluster/hit layers rather than reusing Map mode's `poi-entry_exit-*` ones --
+  // those are always force-hidden while this mode is active (visibilityForMode turns every
+  // POI_LAYER_DEFS key off), so reusing them would mean un-hiding specific Map-mode layers from
+  // evacuation-mode code, coupling the two. A dedicated layer set on the SAME already-clustered
+  // `entry_exit` source costs one extra paint definition, not an extra request.
+  map.addLayer({
+    id: 'evac-entry-exit-cluster',
+    type: 'circle',
+    source: 'entry_exit',
+    filter: CLUSTERED_FILTER,
+    layout: { visibility: 'none' },
+    paint: {
+      'circle-color': colorPair(EVAC_COLORS.entry, theme),
+      'circle-opacity': 0.8,
+      'circle-radius': ['step', ['get', 'point_count'], 9, 10, 14, 50, 19] as unknown as ExpressionSpecification,
+    },
+  })
+  map.addLayer({
+    id: 'evac-entry-exit-cluster-count',
+    type: 'symbol',
+    source: 'entry_exit',
+    filter: CLUSTERED_FILTER,
+    minzoom: 9,
+    layout: {
+      visibility: 'none',
+      'text-field': ['get', 'point_count_abbreviated'],
+      'text-font': ['Noto Sans Bold'],
+      'text-size': 11,
+      'text-allow-overlap': true,
+    },
+    paint: { 'text-color': '#ffffff' },
+  })
+  map.addLayer({
+    id: 'evac-entry-exit-hit',
+    type: 'circle',
+    source: 'entry_exit',
+    filter: UNCLUSTERED_FILTER,
+    layout: { visibility: 'none' },
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 10, 16, 14] as unknown as ExpressionSpecification,
+      'circle-opacity': 0,
+    },
+  })
+  map.addLayer({
+    id: 'evac-entry-exit-badge',
+    type: 'symbol',
+    source: 'entry_exit',
+    filter: UNCLUSTERED_FILTER,
+    layout: {
+      visibility: 'none',
+      'icon-image': [
+        'match',
+        ['get', 'remark'],
+        'Entry',
+        ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.entry, theme)),
+        'Exit',
+        ensureBadgeImage(map, 'EXT', colorPair(EVAC_COLORS.exit, theme)),
+        ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.unknown, theme)),
+      ] as unknown as ExpressionSpecification,
+      'icon-allow-overlap': false,
+    },
+  })
+
+  // --- Location entry markers (on by default) -------------------------------------------------
+  map.addLayer({
+    id: 'evac-location-entry-hit',
+    type: 'circle',
+    source: 'location_entry',
+    layout: { visibility: 'none' },
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 10, 16, 14] as unknown as ExpressionSpecification,
+      'circle-opacity': 0,
+    },
+  })
+  map.addLayer({
+    id: 'evac-location-entry-badge',
+    type: 'symbol',
+    source: 'location_entry',
+    layout: {
+      visibility: 'none',
+      'icon-image': ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.entry, theme)),
+      'icon-allow-overlap': false,
+      'text-field': ['get', 'name'],
+      'text-font': ['Noto Sans Bold'],
+      'text-size': 11,
+      'text-anchor': 'top',
+      'text-offset': [0, 0.8],
+    },
+    minzoom: 15,
+    paint: {
+      'text-color': theme === 'light' ? '#1e293b' : '#e2e8f0',
+      'text-halo-color': theme === 'light' ? '#ffffff' : '#0b0f19',
+      'text-halo-width': 1.5,
+    },
+  })
+
+  // --- Selected feature (inert until Phase 5) -------------------------------------------------
+  map.addLayer({
+    id: 'evac-selected-glow',
+    type: 'line',
+    source: SELECTED_SOURCE,
+    layout: { visibility: 'none' },
+    paint: { 'line-color': '#facc15', 'line-width': 10, 'line-opacity': 0.5, 'line-blur': 2 },
+  })
+  map.addLayer({
+    id: 'evac-selected-line',
+    type: 'line',
+    source: SELECTED_SOURCE,
+    layout: { visibility: 'none' },
+    paint: { 'line-color': '#facc15', 'line-width': 3 },
+  })
+  map.addLayer({
+    id: 'evac-selected-point',
+    type: 'circle',
+    source: SELECTED_SOURCE,
+    layout: { visibility: 'none' },
+    paint: { 'circle-radius': 12, 'circle-color': '#facc15', 'circle-opacity': 0.35 },
+  })
+}
+
+/** Toggles every evac-* layer's layout visibility per `evacVisibility`, called whenever the mode
+ *  or the visibility store changes (see MapView's mode-visibility effect). The 6 supporting keys
+ *  with no evac-* layer of their own (thematic_gate/junction/bridge/footpath/fh_location/
+ *  public_service_facilities) reuse Map mode's own `poi-*` layers directly -- `onEnabled` is
+ *  called with those ids too so the caller (which owns `applyLayerVisibility`'s force-off list)
+ *  can un-hide exactly the ones this mode wants, without this module reaching into Map-mode layer
+ *  ids itself. */
+export function setEvacLayersVisible(
+  map: MLMap,
+  on: boolean,
+  evacVisibility: Record<EvacKey, boolean>,
+): void {
+  for (const [key, layerIds] of Object.entries(LAYERS_BY_KEY) as [
+    Exclude<EvacKey, 'zone_outline'>,
+    string[],
+  ][]) {
+    const visible = on && evacVisibility[key]
+    for (const id of layerIds) {
+      if (map.getLayer(id)) {
+        map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none')
+      }
+    }
+  }
+  // Selected-feature layers stay hidden until Phase 5 gives them something to show, regardless of
+  // `on` -- there's no evacVisibility key for "is something selected".
+}
+
+/** Re-applies every evac-* colour paint property and regenerates the EN/EXT badge images for the
+ *  new theme -- called from MapView's one shared theme-swap effect (PLAN-evacuation.md §6.4).
+ *  Images are coloured when created (`makeBadgeIcon` bakes the fill in), so unlike a plain
+ *  `setPaintProperty` colour swap, the icon-image expression's referenced image ids must change
+ *  too -- `ensureBadgeImage` re-registers (or replaces) them under the new theme's colour. */
+export function applyEvacTheme(map: MLMap, theme: EvacTheme): void {
+  if (!map.getLayer('evac-hfl-area-fill')) return // not created yet (canUseInsights false)
+
+  map.setPaintProperty('evac-hfl-area-fill', 'fill-color', colorPair(EVAC_COLORS.floodArea, theme))
+  map.setPaintProperty(
+    'evac-hfl-area-fill',
+    'fill-opacity',
+    theme === 'light' ? 0.14 : 0.18,
+  )
+  map.setPaintProperty(
+    'evac-hfl-area-outline',
+    'line-color',
+    colorPair(EVAC_COLORS.floodArea, theme),
+  )
+  map.setPaintProperty('evac-hfl-line', 'line-color', colorPair(EVAC_COLORS.floodLine, theme))
+
+  map.setPaintProperty(
+    'evac-traffic-route-casing',
+    'line-color',
+    theme === 'light' ? '#0f172a' : '#e2e8f0',
+  )
+  map.setPaintProperty(
+    'evac-traffic-route-casing',
+    'line-opacity',
+    theme === 'light' ? 0.18 : 0.22,
+  )
+  map.setPaintProperty('evac-traffic-route-peak', 'line-color', entryExitColorExpr('entry_exit', theme))
+  map.setPaintProperty('evac-traffic-route-normal', 'line-color', entryExitColorExpr('entry_exit', theme))
+
+  map.setPaintProperty('evac-entry-exit-line-glow', 'line-color', entryExitColorExpr('remark', theme))
+  map.setPaintProperty('evac-entry-exit-line', 'line-color', entryExitColorExpr('remark', theme))
+
+  map.setPaintProperty('evac-direction-line', 'line-color', directionLineColorExpr(theme))
+
+  map.setPaintProperty(
+    'evac-emergency-exit-glow',
+    'line-color',
+    colorPair(EVAC_COLORS.emergencyExit, theme),
+  )
+  map.setPaintProperty(
+    'evac-emergency-exit-casing',
+    'line-color',
+    colorPair(EVAC_COLORS.emergencyExitCasing, theme),
+  )
+  map.setPaintProperty('evac-emergency-exit', 'line-color', colorPair(EVAC_COLORS.emergencyExit, theme))
+
+  map.setPaintProperty('evac-entry-exit-cluster', 'circle-color', colorPair(EVAC_COLORS.entry, theme))
+  map.setLayoutProperty('evac-entry-exit-badge', 'icon-image', [
+    'match',
+    ['get', 'remark'],
+    'Entry',
+    ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.entry, theme)),
+    'Exit',
+    ensureBadgeImage(map, 'EXT', colorPair(EVAC_COLORS.exit, theme)),
+    ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.unknown, theme)),
+  ] as unknown as ExpressionSpecification)
+  map.setLayoutProperty(
+    'evac-location-entry-badge',
+    'icon-image',
+    ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.entry, theme)),
+  )
+  map.setPaintProperty(
+    'evac-location-entry-badge',
+    'text-color',
+    theme === 'light' ? '#1e293b' : '#e2e8f0',
+  )
+  map.setPaintProperty(
+    'evac-location-entry-badge',
+    'text-halo-color',
+    theme === 'light' ? '#ffffff' : '#0b0f19',
+  )
+}
