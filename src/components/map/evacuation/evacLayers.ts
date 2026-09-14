@@ -15,12 +15,13 @@ import { buildEvacFilters, trafficRoutePlanVisible, type EvacFilters } from '@/l
 // Map mode's own styling is never touched -- these are new layer ids, not edits to `poi-*`/
 // `road-line`/`emergency-exit-line`.
 //
-// Deliberately NOT implemented in this phase (see PLAN-evacuation.md §10 Phase 2's note): traffic-
-// route/direction-signage arrows (drawing-order-dependent, needs visual verification against the
-// real routes first -- shipping a wrong arrow is worse than no arrow), zone outlines/labels (their
-// geometry comes from /api/evacuation/summary, which is Phase 3), the selected-feature pulse glow's
-// actual population (Phase 5 owns the click/search selection logic; the layers exist here, empty),
-// and hover feature-state (ties into the same click handling Phase 5 adds).
+// Deliberately NOT implemented (see PLAN-evacuation.md §10's phase notes): traffic-route/
+// direction-signage arrows (drawing-order-dependent, needs visual verification against the real
+// routes first -- shipping a wrong arrow is worse than no arrow), zone outlines/labels (their
+// geometry comes from /api/evacuation/summary but nothing renders it yet), and hover feature-state.
+// The selected-feature highlight (evac-selected-glow/-line/-point) IS populated now (Phase 5, see
+// MapView's evacSelection effect) but as a steady outline, not the plan's pulse-then-settle
+// animation -- that's deferred polish, not missing functionality.
 
 const FLOOD_AREA_SOURCE = 'hfl_area'
 const FLOOD_LINE_SOURCE = 'hfl_line'
@@ -145,6 +146,13 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
   // Refresh re-run while the map instance survives) bails out immediately rather than reaching a
   // real `addSource`/`addLayer` call for an id that's already there -- MapLibre throws
   // synchronously ("Source ... already exists") rather than no-op'ing on a duplicate id.
+  //
+  // This guard tripping on the FIRST real call (not a re-entry) is exactly the Phase 5 bug: if
+  // `hfl_area`/`hfl_line` ever gain an entry in classColors.ts's LINE_LAYER_COLORS/
+  // POLYGON_LAYER_COLORS again, MapView's generic POI loop will create a same-named `hfl_area`
+  // vector source of its own *before* this function ever runs, so this guard silently no-ops on
+  // every single call and every evac-* layer below silently never exists -- see that file's
+  // comment on why those two colour maps must never have entries for them.
   if (map.getSource(FLOOD_AREA_SOURCE)) return
 
   map.addSource(FLOOD_AREA_SOURCE, {
@@ -474,8 +482,9 @@ export function setEvacLayersVisible(
       map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none')
     }
   }
-  // Selected-feature layers stay hidden until Phase 5 gives them something to show, regardless of
-  // `on` -- there's no evacVisibility key for "is something selected".
+  // Selected-feature layers (evac-selected-glow/-line/-point) are deliberately NOT touched here --
+  // there's no evacVisibility key for "is something selected"; their own visibility is driven
+  // entirely by whether evacSelection is set, in MapView's dedicated effect (Phase 5).
 }
 
 /** Applies the direction/corridor filters (PLAN-evacuation.md §6.3) to every evac-* layer whose

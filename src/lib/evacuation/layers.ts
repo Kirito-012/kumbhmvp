@@ -1,3 +1,5 @@
+import type { Geometry } from 'geojson'
+
 // Evacuation mode's layer catalogue -- key lists, labels, and the mode's own colour palette.
 // See PLAN-evacuation.md §4.1 (this file), §6.1 (the palette) and §6.2 (what each key actually
 // draws, added in Phase 2 by evacLayers.ts). Kept separate from classColors.ts because these keys
@@ -105,5 +107,15 @@ export type EvacTheme = 'light' | 'dark'
 export type EvacFocus = { kind: 'sector'; sectorNo: number } | { kind: 'zone'; zone: string } | null
 
 /** The currently highlighted search result or clicked evac-* feature (Phase 5) -- never
- *  persisted in the URL, same as the map-mode parcel popup's own selection state. */
-export type EvacSelection = { layer: string; id: number | string } | null
+ *  persisted in the URL, same as the map-mode parcel popup's own selection state. `geometry` is
+ *  what actually paints the highlight (fed into the `evac-selected` geojson source): a map click
+ *  carries the clicked feature's exact geometry for free (queryRenderedFeatures returns it), while
+ *  a search result -- which only ever gives a bbox, never full geometry, to keep that response
+ *  light -- gets a rectangle built from its bbox instead. Slightly less precise for a result's
+ *  highlight than a click's, but avoids shipping full geometry through the search API for
+ *  something that's only ever a visual outline. */
+export type EvacSelection = {
+  layer: string
+  id: number | string
+  geometry: Geometry
+} | null

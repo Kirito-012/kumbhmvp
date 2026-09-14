@@ -125,7 +125,16 @@ import {
   type EvacSelection,
   type EvacSupportKey,
 } from '@/lib/evacuation/layers'
-import type { EvacFilters } from '@/lib/evacuation/filters'
+import { isEvacFiltersEmpty, type EvacFilters } from '@/lib/evacuation/filters'
+import {
+  directionLineLabel,
+  emergencyExitLabel,
+  entryExitLabel,
+  hflAreaLabel,
+  hflLineLabel,
+  locationEntryLabel,
+  trafficRouteLabel,
+} from '@/lib/evacuation/labels'
 import type { EvacSearchResult } from '@/components/map/evacuation/useEvacuationSearch'
 
 type Sector = {
@@ -1916,6 +1925,7 @@ export default function MapView({
   // popup reads as part of the same design system rather than a bare table.
   const POPUP_ICON_PATHS: Record<string, string> = {
     road: '<path d="M9 3L5 21M15 3l4 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 3v2.5M12 9.5v2.5M12 15.5v2.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+    evac: '<path d="M10 4H7a2 2 0 00-2 2v12a2 2 0 002 2h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 12h11m0 0l-3.5-3.5M20 12l-3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
     boundary:
       '<rect x="3.5" y="3.5" width="7" height="7" rx="1.2" stroke="currentColor" stroke-width="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.2" stroke="currentColor" stroke-width="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.2" stroke="currentColor" stroke-width="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.2" stroke="currentColor" stroke-width="1.6"/>',
     parcel:
@@ -2118,6 +2128,113 @@ export default function MapView({
         popup.setHTML(baseHtml(ticketRowsHtml(data.ticket)))
       })
       .catch(() => {})
+  }
+
+  // Clicking one of Evacuation mode's own evac-* layers (PLAN-evacuation.md §9 step 3) -- a
+  // dedicated popup builder rather than extending popupHeaderHtml/propertyRowsHtml's switch,
+  // since every evac layer needs its own label (via src/lib/evacuation/labels.ts, the same pure
+  // functions the search/summary APIs already use -- no server round-trip needed, the clicked
+  // feature's own vector-tile properties are exactly the row shape those functions expect) and
+  // its own small set of property rows, distinct enough from the road/POI/parcel cases that
+  // reusing that switch would have added more branches than it saved.
+  function evacPopupContent(layerId: string, p: Record<string, unknown>): { title: string; subtitle: string | null; rows: [string, unknown][] } {
+    const CORRIDOR_NAMES: Record<string, string> = {
+      deh_dir: 'Dehradun',
+      naj_dir: 'Najibabad',
+      sah_dir: 'Saharanpur',
+      meer_dir: 'Meerut',
+    }
+    const sourceRow: [string, unknown][] =
+      p.source === 'shp_2026_08_25' ? [['Source', '25 Aug 2026 survey']] : []
+
+    if (layerId === 'evac-traffic-route-peak' || layerId === 'evac-traffic-route-normal') {
+      const { label, sublabel } = trafficRouteLabel(p as Parameters<typeof trafficRouteLabel>[0])
+      const corridors = Object.entries(CORRIDOR_NAMES)
+        .filter(([flag]) => p[flag] === 1)
+        .map(([, name]) => name)
+      return {
+        title: label,
+        subtitle: sublabel,
+        rows: [
+          ['Direction', p.entry_exit],
+          ['Plan', p.plan],
+          ['Corridors', corridors.length ? corridors.join(', ') : undefined],
+        ],
+      }
+    }
+    if (layerId === 'evac-entry-exit-line') {
+      const { label, sublabel } = entryExitLabel(p as Parameters<typeof entryExitLabel>[0], 'route')
+      return { title: label, subtitle: sublabel, rows: [['Sector', p.sector], ...sourceRow] }
+    }
+    if (layerId === 'evac-direction-line') {
+      const { label, sublabel } = directionLineLabel(p as Parameters<typeof directionLineLabel>[0])
+      return { title: label, subtitle: sublabel, rows: [] }
+    }
+    if (layerId === 'evac-emergency-exit') {
+      const { label, sublabel } = emergencyExitLabel(p as Parameters<typeof emergencyExitLabel>[0])
+      return {
+        title: label,
+        subtitle: sublabel,
+        rows: [['ROW width (m)', p.row_width_m], ...sourceRow],
+      }
+    }
+    if (layerId === 'evac-entry-exit-hit' || layerId === 'evac-entry-exit-badge') {
+      const { label, sublabel } = entryExitLabel(p as Parameters<typeof entryExitLabel>[0], 'point')
+      return { title: label, subtitle: sublabel, rows: [['Sector', p.sector]] }
+    }
+    if (layerId === 'evac-location-entry-hit' || layerId === 'evac-location-entry-badge') {
+      const { label, sublabel } = locationEntryLabel(p as Parameters<typeof locationEntryLabel>[0])
+      return { title: label, subtitle: sublabel, rows: [] }
+    }
+    if (layerId === 'evac-hfl-area-fill') {
+      const { label, sublabel } = hflAreaLabel(p as Parameters<typeof hflAreaLabel>[0])
+      const hectares = typeof p.area_m2 === 'number' ? (p.area_m2 / 10000).toFixed(1) : undefined
+      return { title: label, subtitle: sublabel, rows: [['Area (ha)', hectares], ...sourceRow] }
+    }
+    if (layerId === 'evac-hfl-line') {
+      const { label, sublabel } = hflLineLabel(p as Parameters<typeof hflLineLabel>[0])
+      return { title: label, subtitle: sublabel, rows: [...sourceRow] }
+    }
+    return { title: 'Evacuation feature', subtitle: null, rows: [] }
+  }
+
+  function showEvacPopup(map: MLMap, layerId: string, properties: Record<string, unknown>, lngLat: LngLat) {
+    popupRef.current?.remove()
+    popupParcelIdRef.current = null
+    const { title, subtitle, rows } = evacPopupContent(layerId, properties)
+    const visibleRows = rows.filter(([, v]) => v !== undefined)
+    const headerHtml = `
+      <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 16px 12px;${visibleRows.length ? 'border-bottom:1px solid var(--map-popup-row-border)' : ''}">
+        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;background:color-mix(in srgb, var(--map-accent) 9%, transparent);color:var(--map-accent)">
+          <svg viewBox="0 0 24 24" fill="none" width="17" height="17">${POPUP_ICON_PATHS.evac}</svg>
+        </span>
+        <div style="min-width:0">
+          <div style="font-size:13.5px;font-weight:700;color:var(--map-popup-heading);line-height:1.3;overflow-wrap:anywhere">${escapeHtml(title)}</div>
+          ${subtitle ? `<div style="margin-top:1px;font-size:11.5px;color:var(--map-popup-subtle)">${escapeHtml(subtitle)}</div>` : ''}
+        </div>
+      </div>`
+    const rowsHtml = visibleRows.length
+      ? `<div style="padding:10px 16px 4px;display:flex;flex-direction:column">${visibleRows
+          .map(
+            ([k, v], i) =>
+              `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:5px 0;${i > 0 ? 'border-top:1px solid var(--map-popup-row-border)' : ''}">
+                <span style="font-size:11.5px;color:var(--map-popup-faint)">${escapeHtml(k)}</span>
+                <span style="font-size:12.5px;font-weight:600;color:var(--map-popup-heading);text-align:right;overflow-wrap:anywhere">${escapeHtml(v)}</span>
+              </div>`,
+          )
+          .join('')}</div>`
+      : ''
+    const popup = new Popup({ closeButton: true, maxWidth: '260px' })
+      .setLngLat(lngLat)
+      .setHTML(
+        `<div style="font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;width:240px;border-radius:16px">${headerHtml}${rowsHtml}</div>`,
+      )
+      .addTo(map)
+    popupRef.current = popup
+    popup.on('close', () => {
+      if (popupRef.current !== popup) return
+      popupRef.current = null
+    })
   }
 
   useEffect(() => {
@@ -3348,6 +3465,87 @@ export default function MapView({
           return
         }
 
+        // Evacuation mode's own click handling (PLAN-evacuation.md §9) -- mirrors Heatmap/Ticket's
+        // self-contained structure above rather than falling through to the generic map-mode
+        // handling below, because step 4 (bare sector) needs its own fly-in (flyToSectorNo) that
+        // plain Map-mode clicks don't do, and evacFocus/evacSelection are its own state, not
+        // selectedSector/insightSector.
+        if (modeRef.current === 'evacuation') {
+          // 1. Entry/exit point clusters zoom in, same +3 pattern as every other clustered POI
+          // layer (see the plain cluster check just below this whole branch).
+          const evacClusterHits = map.queryRenderedFeatures(e.point, {
+            layers: ['evac-entry-exit-cluster'],
+          })
+          if (evacClusterHits.length > 0) {
+            map.easeTo({
+              center: [e.lngLat.lng, e.lngLat.lat],
+              zoom: Math.min(map.getZoom() + 3, 18),
+              duration: 500,
+            })
+            return
+          }
+
+          // 2. One of this mode's own evac-* layers -- popup + highlight, no fly (the feature is
+          // already on screen).
+          const evacHits = map.queryRenderedFeatures(e.point, {
+            layers: [
+              'evac-traffic-route-peak',
+              'evac-traffic-route-normal',
+              'evac-entry-exit-line',
+              'evac-direction-line',
+              'evac-emergency-exit',
+              'evac-entry-exit-hit',
+              'evac-entry-exit-badge',
+              'evac-location-entry-hit',
+              'evac-location-entry-badge',
+              'evac-hfl-area-fill',
+              'evac-hfl-line',
+            ],
+          })
+          if (evacHits.length > 0) {
+            const hit = evacHits[0]
+            const rawId = hit.id ?? hit.properties?.id
+            const id = typeof rawId === 'number' ? rawId : String(rawId)
+            setEvacSelection({ layer: hit.layer.id, id, geometry: hit.geometry })
+            showEvacPopup(map, hit.layer.id, hit.properties ?? {}, e.lngLat)
+            return
+          }
+
+          // 3. Supporting layers (thematic_gate/junction/bridge/fh_location/
+          // public_service_facilities) reuse Map mode's own poi-* layers directly (see
+          // visibilityForMode) -- querying the exact same poiLayerIds list Map mode uses is safe
+          // and correctly scoped implicitly, since every OTHER poi-* layer stays hidden
+          // (visibility: 'none') while this mode is active, and queryRenderedFeatures skips
+          // hidden layers on its own.
+          const evacPoiHits = map.queryRenderedFeatures(e.point, { layers: poiLayerIds })
+          if (evacPoiHits.length > 0) {
+            const hit = evacPoiHits[0]
+            const layerId = hit.layer.id.replace(/-(hit|label)$/, '')
+            showPopup(
+              map,
+              { ...hit, layer: { id: layerId } } as unknown as MapGEOJSONFeatureCompat,
+              e.lngLat,
+            )
+            return
+          }
+
+          // 4/5. Bare sector -> evacFocus + fly-in. Empty area -> clear the selection.
+          const evacSectorHits = map.queryRenderedFeatures(e.point, {
+            layers: ['sector-plan-fill', 'sector-plan-hit-target', 'sector-hit-target'],
+          })
+          popupRef.current?.remove()
+          if (evacSectorHits.length === 0) {
+            setEvacSelection(null)
+            return
+          }
+          const rawSectorNo = evacSectorHits[0]?.properties?.sector_no
+          const sectorNo = typeof rawSectorNo === 'number' ? rawSectorNo : null
+          setEvacSelection(null)
+          setEvacFocus(sectorNo !== null ? { kind: 'sector', sectorNo } : null)
+          flyToSectorNo(sectorNo)
+          return
+        }
+
         // Clusters zoom the map in rather than opening a popup -- a cluster
         // circle represents many points at once, so there's no single
         // feature to show a popup for. Our clustering (see clusterPoints in
@@ -3722,6 +3920,34 @@ export default function MapView({
     if (mode !== 'heatmap') popupRef.current?.remove()
   }, [visibility, mode, mapReady, evacVisibility, evacFilters])
 
+  // Paints Evacuation mode's selected-feature highlight (PLAN-evacuation.md §6.2 item 11/§9) --
+  // pushes evacSelection's geometry into the evac-selected geojson source (created empty in
+  // evacLayers.ts's addEvacLayers) and shows whichever of the line/point pair matches its
+  // geometry type, hiding both when nothing is selected. A steady outline rather than the plan's
+  // pulse-then-settle animation -- the rAF tween is a nice-to-have polish step, not core
+  // functionality, and this phase's budget went to making the highlight/popup loop itself work
+  // for every evac layer type first (see evacPopupContent above).
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady || !map.getSource('evac-selected')) return
+    const source = map.getSource('evac-selected') as GeoJSONSource
+    if (!evacSelection) {
+      source.setData({ type: 'FeatureCollection', features: [] })
+      map.setLayoutProperty('evac-selected-glow', 'visibility', 'none')
+      map.setLayoutProperty('evac-selected-line', 'visibility', 'none')
+      map.setLayoutProperty('evac-selected-point', 'visibility', 'none')
+      return
+    }
+    source.setData({
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', properties: {}, geometry: evacSelection.geometry }],
+    })
+    const isPoint = evacSelection.geometry.type === 'Point'
+    map.setLayoutProperty('evac-selected-glow', 'visibility', isPoint ? 'none' : 'visible')
+    map.setLayoutProperty('evac-selected-line', 'visibility', isPoint ? 'none' : 'visible')
+    map.setLayoutProperty('evac-selected-point', 'visibility', isPoint ? 'visible' : 'none')
+  }, [evacSelection, mapReady])
+
   // Keeps the double-stroke selected-sector highlight in sync with insightSector while Heatmap is
   // active -- filtered to -1 (matches nothing) the rest of the time via setInsightSelectedFilter's
   // own null handling, so it never lingers visible after leaving the mode or clicking empty area.
@@ -3909,11 +4135,46 @@ export default function MapView({
    *  layer on if needed, then fly). Step 3 (pulse highlight + popup once the fly-in settles) needs
    *  the evac-selected source actually populated and a moveend listener, both Phase 5's job --
    *  evacSelection is set here already so Phase 5 only has to add the paint/popup side. */
+  /** A search result's bbox becomes a rectangle outline, or its anchor a point -- see
+   *  EvacSelection's own comment on why a result never carries its exact geometry. */
+  function evacSelectionGeometryForResult(result: EvacSearchResult): EvacSelection {
+    if (result.bbox) {
+      const [xmin, ymin, xmax, ymax] = result.bbox
+      return {
+        layer: '',
+        id: result.id,
+        geometry: {
+          type: 'Polygon',
+          coordinates: [
+            [
+              [xmin, ymin],
+              [xmax, ymin],
+              [xmax, ymax],
+              [xmin, ymax],
+              [xmin, ymin],
+            ],
+          ],
+        },
+      }
+    }
+    if (result.anchor) {
+      return { layer: '', id: result.id, geometry: { type: 'Point', coordinates: result.anchor } }
+    }
+    return null
+  }
+
   function selectEvacResult(layer: string, result: EvacSearchResult) {
     if (layer in defaultEvacVisibility()) {
       setEvacVisibility((v) => (v[layer as EvacKey] ? v : { ...v, [layer as EvacKey]: true }))
     }
-    setEvacSelection({ layer, id: result.id })
+    // §9's "if a chip filter would hide the result, clear it" -- simplified to "clear every
+    // filter unconditionally" rather than checking whether this specific result would actually
+    // be hidden: a false-positive clear (resetting a filter that wasn't blocking anything) is
+    // harmless, and figuring out whether a given result matches the current filters would need
+    // fields (plan/corridor flags) the search API doesn't return per-result.
+    if (!isEvacFiltersEmpty(evacFilters)) setEvacFilters({})
+    const geomSel = evacSelectionGeometryForResult(result)
+    setEvacSelection(geomSel && { ...geomSel, layer })
     const map = mapRef.current
     if (!map) return
     if (result.bbox) {

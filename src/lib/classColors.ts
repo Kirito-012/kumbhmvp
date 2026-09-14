@@ -224,11 +224,14 @@ export const LINE_LAYER_COLORS: Record<string, string> = {
   // swatch stands for the whole layer, so keep it in sync with the mid tier,
   // TERTIARY_ROAD_STYLE.light.colors.main.
   tertiary_road: '#4285f4',
-  // Not yet a Map-mode POI toggle (POI_LAYER_DEFS in MapView.tsx) -- reserved for
-  // Evacuation mode's flood-risk group (PLAN-evacuation.md §6.1). Loaded from the 25 Aug
-  // 2026 shapefile, not the 2027 gdb, so it deliberately does NOT reuse a Waterbody/River
-  // hue -- a distinct blue keeps "this is flood risk" from reading as "this is a river".
-  hfl_line: '#1d4ed8',
+  // hfl_line/hfl_area deliberately do NOT have entries here (or in POLYGON_LAYER_COLORS below) --
+  // adding one would auto-derive a `poi-hfl_line`/`poi-hfl_area` Map-mode toggle via
+  // POI_LAYER_DEFS (MapView.tsx builds it from Object.keys() of these three maps), which is
+  // exactly the bug PLAN-evacuation.md's Phase 5 caught: MapView's own generic POI loop created
+  // `kumbh.hfl_line`'s vector source before evacLayers.ts's addEvacLayers ever ran, so its
+  // `if (map.getSource('hfl_area')) return` guard tripped immediately and silently skipped every
+  // evac-* layer, every time. Flood risk is Evacuation-mode-only; its colours live in
+  // EVAC_COLORS.floodArea/floodLine (src/lib/evacuation/layers.ts) instead.
 }
 
 export const LINE_LAYER_LABELS: Record<string, string> = {
@@ -245,9 +248,6 @@ export const LINE_LAYER_LABELS: Record<string, string> = {
   // "(OSM)" flags this as third-party base-map street data, not curated
   // project infrastructure -- the exact ambiguity Pending.md wanted avoided.
   tertiary_road: 'Street network (OSM)',
-  // "25 Aug 2026 survey" flags this (like emergency_exit/hfl_area) as sourced from the
-  // older shapefile drop, not the 2027 gdb -- see PLAN-evacuation.md §2.3.
-  hfl_line: 'Flood lines (25 Aug 2026 survey)',
 }
 
 // Same tiered, cross-referenced palette as POINT_LAYER_COLORS above -- see
@@ -273,10 +273,7 @@ export const POLYGON_LAYER_COLORS: Record<string, string> = {
   dam: '#3f6b8c',
   landuse: '#6b7280',
   uk_district_boundary: '#6b7280',
-  // Not yet a Map-mode POI toggle -- reserved for Evacuation mode's flood-risk group, off
-  // by default (PLAN-evacuation.md §1 decision #10). Same hfl_line blue family, at fill
-  // opacity rather than a second hue, so the area and its bounding lines read as one layer.
-  hfl_area: '#2563eb',
+  // hfl_area has no entry here -- see LINE_LAYER_COLORS' comment on why.
 }
 
 export const POLYGON_LAYER_LABELS: Record<string, string> = {
@@ -295,7 +292,6 @@ export const POLYGON_LAYER_LABELS: Record<string, string> = {
   uk_district_boundary: 'District boundary',
   ropeway_area: 'Ropeway areas',
   other_transport: 'Other transport',
-  hfl_area: 'Flood risk areas (25 Aug 2026 survey)',
 }
 
 // Short signage codes shown as an on-map text label for a few POI point

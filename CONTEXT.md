@@ -481,7 +481,7 @@ on any viewport, whenever `InsightsModePanel` is collapsed (tracked via its `onW
 even with the panel tucked away. It deliberately recomputes its own small rollup from
 `insightsData`/`filters`/`heatMetric` rather than reaching into the paint effects' internal refs.
 
-### Evacuation mode — `PLAN-evacuation.md` (Phase 4 of ~8, in progress)
+### Evacuation mode — `PLAN-evacuation.md` (Phase 5 of ~8, in progress)
 
 A 4th `ModeSwitcher` segment (amber, `--map-mode-evacuation`, key `4`), for crowd-flow/evacuation
 planning: entry/exit points and routes, direction signage, emergency exits, traffic routes, plus
@@ -550,6 +550,31 @@ can't change cluster membership (see "Clustering" above) — doing this right ne
 `EvacuationPanel` (right side) is still a Phase 1 placeholder, though it already shows the focused
 sector/zone's title and a working "Clear sector"/"Clear zone" link, since `evacFocus` already existed.
 The real hero/legend/feature-list content is Phase 6.
+
+**Click handling + popups (Phase 5):** a new mode-specific branch in `initMap`'s click handler (mirroring
+Heatmap/Ticket's own self-contained branches) checks entry/exit clusters (+3 zoom, same as every other
+clustered POI layer), then the evac-\* layers themselves (popup via a new `evacPopupContent`/
+`showEvacPopup` in MapView.tsx, using `src/lib/evacuation/labels.ts`'s pure label functions directly
+client-side -- no server round-trip, since the clicked feature's own vector-tile properties are exactly
+the row shape those functions expect), then falls back to the same `poiLayerIds` check Map mode uses
+(safe because every *other* POI layer stays hidden while this mode is active) for the 6 supporting
+layers, and finally bare-sector (`evacFocus` + fly) vs. empty-area (clear selection). A clicked feature's
+exact geometry, or a search result's bbox-as-rectangle (results never carry full geometry, to keep that
+API response light), populates the `evac-selected` geojson source via a dedicated effect keyed on
+`evacSelection`, showing a **steady** highlight outline -- not the plan's pulse-then-settle animation,
+which is deferred polish.
+
+**A real bug from Phase 2, only caught here:** `classColors.ts` briefly had `hfl_area`/`hfl_line` entries
+in `POLYGON_LAYER_COLORS`/`LINE_LAYER_COLORS` (added during Phase 2, commented "not yet a Map-mode
+toggle") -- but `POI_LAYER_DEFS` in MapView.tsx is *auto-derived* from those maps' keys (see §9's own POI
+section), so the entries silently made Map mode's generic POI loop create a `kumbh.hfl_area` vector
+source of its own before `addEvacLayers` ever ran. `addEvacLayers`'s own idempotency guard then saw that
+source and silently returned, every time, meaning **no evac-\* layer existed at all** for the whole of
+Phases 2-4 despite no console error ever appearing -- nothing in that testing exercised a code path that
+would query an evac-\* layer id and surface the gap. Fixed by removing the 4 classColors.ts entries
+entirely (flood risk is Evacuation-mode-only; its colours live in `EVAC_COLORS`,
+`src/lib/evacuation/layers.ts`). If either map ever needs a flood-risk-adjacent entry again, remember
+that adding one there is equivalent to adding a Map-mode toggle, not a private reference value.
 
 ---
 
@@ -828,10 +853,10 @@ Branch `feat/heatmap` (not yet merged to `main`). Recent work (this may be stale
   with 21 extra hospitals, `sector_boundary.zone` backfilled — see §10's "Two source drops". Map
   mode's Emergency Exit toggle now draws real data again (its own `emergency-exit-line` layer/source,
   not a `road-line` filter).
-- Evacuation mode Phases 1-4 committed: mode plumbing, its map layers, search/summary APIs, and a
-  real `EvacuationModePanel` (search + working filter chips + layer toggles) — §9's "Evacuation mode"
-  subsection. `EvacuationPanel` (right side) is still a Phase 1 placeholder; Phase 5 (click/popups/
-  fly-in polish) and Phase 6 (the real right panel) haven't started.
+- Evacuation mode Phases 1-5 committed: mode plumbing, map layers (only genuinely live as of Phase 5 --
+  see §9's classColors.ts bug writeup), search/summary APIs, a real `EvacuationModePanel`, and click/
+  popup/selection-highlight handling — §9's "Evacuation mode" subsection. `EvacuationPanel` (right side)
+  is still a Phase 1 placeholder; Phase 6 (the real right panel, phone behaviour) hasn't started.
 
 Open items:
 
