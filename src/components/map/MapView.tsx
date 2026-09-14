@@ -119,6 +119,7 @@ import {
 } from '@/components/map/evacuation/evacLayers'
 import {
   defaultEvacVisibility,
+  EVAC_COLORS,
   EVAC_SUPPORT_KEYS,
   type EvacFocus,
   type EvacKey,
@@ -1112,10 +1113,10 @@ function FloatingLegend({
   filters,
   heatMetric,
 }: {
-  mode: Extract<MapMode, 'heatmap' | 'tickets'>
-  insightsData: InsightsTicketData
-  filters: InsightsFilters
-  heatMetric: HeatMetric
+  mode: Extract<MapMode, 'heatmap' | 'tickets' | 'evacuation'>
+  insightsData?: InsightsTicketData
+  filters?: InsightsFilters
+  heatMetric?: HeatMetric
 }) {
   const theme = useInsightTheme()
   const wrapperBaseClass =
@@ -1124,6 +1125,63 @@ function FloatingLegend({
     background: 'var(--map-panel-bg)',
     borderColor: 'var(--map-panel-border)',
     color: 'var(--map-fg-muted)',
+  }
+  if (mode === 'evacuation') {
+    // Compact key only -- no counts, unlike the Heatmap/Ticket legends above, since this has no
+    // per-mode data of its own to summarise (PLAN-evacuation.md §7.3's "EN · EXT · Emergency ·
+    // Peak/Normal key"). EVAC_COLORS drives every colour here so it can never drift from the
+    // actual evac-* layer paint (evacLayers.ts).
+    return (
+      <div
+        className={`${wrapperBaseClass} flex flex-wrap items-center gap-x-2.5 gap-y-1`}
+        style={wrapperStyle}
+      >
+        <span className="flex items-center gap-1">
+          <span
+            aria-hidden
+            className="inline-flex h-3.5 w-5 items-center justify-center rounded-full text-[6px] font-bold text-white"
+            style={{ background: EVAC_COLORS.entry[theme] }}
+          >
+            EN
+          </span>
+          Entry
+        </span>
+        <span className="flex items-center gap-1">
+          <span
+            aria-hidden
+            className="inline-flex h-3.5 w-5 items-center justify-center rounded-full text-[6px] font-bold text-white"
+            style={{ background: EVAC_COLORS.exit[theme] }}
+          >
+            EXT
+          </span>
+          Exit
+        </span>
+        <span className="flex items-center gap-1">
+          <span
+            aria-hidden
+            className="h-2 w-2 rounded-full"
+            style={{ background: EVAC_COLORS.emergencyExit[theme] }}
+          />
+          Emergency
+        </span>
+        <span className="flex items-center gap-1">
+          <span
+            aria-hidden
+            className="inline-block h-0 w-4 border-t-2"
+            style={{ borderColor: 'var(--map-section-blue-fg)' }}
+          />
+          Peak
+        </span>
+        <span className="flex items-center gap-1">
+          <span
+            aria-hidden
+            className="inline-block h-0 w-4 border-t-2 border-dashed"
+            style={{ borderColor: 'var(--map-section-blue-fg)' }}
+          />
+          Normal
+        </span>
+      </div>
+    )
   }
   if (mode === 'heatmap') {
     return (
@@ -1143,6 +1201,9 @@ function FloatingLegend({
       </div>
     )
   }
+  // Only the heatmap/evacuation branches above run without insightsData/filters -- both return
+  // before here, so this is always populated for the ticket-mode legend below.
+  if (!insightsData || !filters) return null
   const rollups = rollupBySector(
     insightsData.tickets,
     insightsData.statuses,
@@ -3967,6 +4028,10 @@ export default function MapView({
   // (PLAN-heatmap.md §6.3) can appear whenever the panel holding the "real" legend isn't visible,
   // on any viewport -- not just phones, since the panel can also be user-collapsed on desktop.
   const [insightsModeCollapsed, setInsightsModeCollapsed] = useState(false)
+  // Same "is the docked panel actually visible" tracker as insightsModeCollapsed above, but for
+  // EvacuationModePanel (the left panel) -- drives FloatingLegend's evacuation branch, which has
+  // no per-mode data dependency of its own so it doesn't need an insightsData-style guard.
+  const [evacModeCollapsed, setEvacModeCollapsed] = useState(false)
   const {
     data: insightsData,
     loading: insightsLoading,
@@ -6124,11 +6189,14 @@ export default function MapView({
           onSelectSector={selectEvacSector}
           onSelectZone={selectEvacZone}
           onSelectResult={selectEvacResult}
+          mapVisibility={visibility}
+          onToggleMapLayer={(key) => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
           forceCollapsed={expandedDockedPanel === 'stats'}
           onExpand={() => {
             if (isPhoneViewport()) setExpandedDockedPanel('search')
           }}
           onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'search' ? null : cur))}
+          onWidthChange={(w) => setEvacModeCollapsed(w === 0)}
         />
       ) : (
         <InsightsModePanel
@@ -6204,6 +6272,7 @@ export default function MapView({
           evacFocus={evacFocus}
           sectors={sectors}
           onClearFocus={() => setEvacFocus(null)}
+          onSelectResult={selectEvacResult}
           onWidthChange={(w) => {
             // Same "ignore the collapsed 0" rule as StatsPanel's onWidthChange above.
             if (w > 0) rightPanelWidthRef.current = w
@@ -6289,6 +6358,7 @@ export default function MapView({
           heatMetric={heatMetric}
         />
       )}
+      {mode === 'evacuation' && evacModeCollapsed && <FloatingLegend mode="evacuation" />}
     </div>
   )
 }

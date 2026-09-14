@@ -481,7 +481,7 @@ on any viewport, whenever `InsightsModePanel` is collapsed (tracked via its `onW
 even with the panel tucked away. It deliberately recomputes its own small rollup from
 `insightsData`/`filters`/`heatMetric` rather than reaching into the paint effects' internal refs.
 
-### Evacuation mode — `PLAN-evacuation.md` (Phase 5 of ~8, in progress)
+### Evacuation mode — `PLAN-evacuation.md` (Phase 6 of ~8, in progress)
 
 A 4th `ModeSwitcher` segment (amber, `--map-mode-evacuation`, key `4`), for crowd-flow/evacuation
 planning: entry/exit points and routes, direction signage, emergency exits, traffic routes, plus
@@ -547,9 +547,35 @@ booleans on the same pair of layers). **One filter is a known no-op:** Direction
 can't change cluster membership (see "Clustering" above) — doing this right needs a server-side
 `?remark=` refetch, not built yet.
 
-`EvacuationPanel` (right side) is still a Phase 1 placeholder, though it already shows the focused
-sector/zone's title and a working "Clear sector"/"Clear zone" link, since `evacFocus` already existed.
-The real hero/legend/feature-list content is Phase 6.
+**`EvacuationPanel` (real, Phase 6):** a hero tile row (Entry/exit points · Entry/exit routes ·
+Traffic routes · Direction signage · Emergency exits — five real `/api/evacuation/summary` counts,
+each as an `AnimatedBar` share-of-max bar, fed by a new `useEvacuationSummary` hook that refetches on
+`evacFocus` change), a "Nearby care" list (hospitals/police/fire, with bed counts already formatted
+server-side by `facilityLabel`) shown only when a sector/zone is focused, a static legend of every
+evac-\* style (EN/EXT badges, solid vs dashed route lines, emergency casing, flood fill/lines), and a
+per-focus "Features in view" list grouped by layer. Every care/feature row reuses `selectEvacResult`
+(now also passed to `EvacuationPanel` as `onSelectResult`) for the same fly-in/highlight/layer-on
+behaviour a search result gets — a summary-API feature (`id`/`label`/`sublabel`/`bbox`/`anchor`, no
+sector/zone/source fields) is adapted into `EvacSearchResult`'s shape by a small `asSearchResult`
+helper rather than widening the summary API to match search's response shape. All sections use
+`Reveal`/`pillEntranceDelayMs` from `insights/charts.tsx`, same cascade as Heatmap/Ticket panels.
+One deliberate scope note: the hero shows one combined "Entry/exit points" count rather than a
+separate entry/exit split — `kumbh.entry_exit` only carries direction per-row (`remark`), and
+`/api/evacuation/summary`'s `COUNTED_LAYERS` never aggregates by direction, so a true split needs a
+new query shape nothing else in the mode needs.
+
+`EvacuationModePanel` also gained a "Base layers" section this phase (sector plan/boundaries/names,
+bound to Map mode's own shared `visibility`/`setVisibility` via new `mapVisibility`/`onToggleMapLayer`
+props) — decision #6 always required this, but Phase 4's self-contained-search scope change dropped it
+by omission; and `Reveal` stagger on its own filter/layer sections, matching the right panel.
+
+`FloatingLegend` (module-private in MapView.tsx) gained a 3rd `mode === 'evacuation'` branch — a
+compact EN/EXT/Emergency/Peak/Normal key with no counts (this mode has no per-mode rollup the way
+Heatmap/Ticket do) — shown via a new `evacModeCollapsed` state tracking `EvacuationModePanel`'s own
+`onWidthChange` (mirroring `insightsModeCollapsed`). Rather than fork a second legend component, its
+`insightsData`/`filters`/`heatMetric` props were loosened to optional (with an early `if (!insightsData
+|| !filters) return null` guard before the ticket-mode branch that needs them) so one component still
+serves all three modes.
 
 **Click handling + popups (Phase 5):** a new mode-specific branch in `initMap`'s click handler (mirroring
 Heatmap/Ticket's own self-contained branches) checks entry/exit clusters (+3 zoom, same as every other
@@ -853,10 +879,12 @@ Branch `feat/heatmap` (not yet merged to `main`). Recent work (this may be stale
   with 21 extra hospitals, `sector_boundary.zone` backfilled — see §10's "Two source drops". Map
   mode's Emergency Exit toggle now draws real data again (its own `emergency-exit-line` layer/source,
   not a `road-line` filter).
-- Evacuation mode Phases 1-5 committed: mode plumbing, map layers (only genuinely live as of Phase 5 --
-  see §9's classColors.ts bug writeup), search/summary APIs, a real `EvacuationModePanel`, and click/
-  popup/selection-highlight handling — §9's "Evacuation mode" subsection. `EvacuationPanel` (right side)
-  is still a Phase 1 placeholder; Phase 6 (the real right panel, phone behaviour) hasn't started.
+- Evacuation mode Phases 1-6 committed: mode plumbing, map layers (only genuinely live as of Phase 5 --
+  see §9's classColors.ts bug writeup), search/summary APIs, a real `EvacuationModePanel` (now including
+  a "Base layers" section), click/popup/selection-highlight handling, and a real `EvacuationPanel` (hero
+  tiles, nearby care, legend, feature list) plus a `FloatingLegend` evacuation branch — §9's "Evacuation
+  mode" subsection. Verified live in both themes and at 375px. Phase 7 (polish/a11y, final verification)
+  hasn't started.
 
 Open items:
 

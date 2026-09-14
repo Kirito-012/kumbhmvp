@@ -2,7 +2,8 @@
 
 import { useMemo, useRef, useState } from 'react'
 import Panel from '@/components/map/Panel'
-import { EvacuationIcon, MapPinIcon, SearchIcon, XIcon } from '@/components/map/icons'
+import { EvacuationIcon, GridIcon, MapPinIcon, ParcelIcon, SearchIcon, TagIcon, XIcon } from '@/components/map/icons'
+import { Reveal } from '@/components/map/insights/charts'
 import {
   EVAC_CORE_KEYS,
   EVAC_FLOOD_KEYS,
@@ -98,6 +99,52 @@ function LayerToggleRow({
   )
 }
 
+/** The 3 base toggles Evacuation mode shares with Map mode (PLAN-evacuation.md §1 decision #6/
+ *  §7.2 item 6) -- same keys as MapView's own module-private `baseLayerRows`, duplicated here
+ *  rather than exported/shared since MapView's copy also carries its own `theme`/icon-in-a-chip
+ *  styling this panel doesn't use. */
+const BASE_LAYER_ROWS: Array<{
+  key: 'sector_plan' | 'sector_boundary' | 'sector_names'
+  label: string
+  icon: typeof ParcelIcon
+}> = [
+  { key: 'sector_plan', label: 'Sector plan', icon: ParcelIcon },
+  { key: 'sector_boundary', label: 'Boundaries', icon: GridIcon },
+  { key: 'sector_names', label: 'Sector names', icon: TagIcon },
+]
+
+function BaseLayerRow({
+  icon: Icon,
+  label,
+  on,
+  onToggle,
+}: {
+  icon: typeof ParcelIcon
+  label: string
+  on: boolean
+  onToggle: () => void
+}) {
+  return (
+    <div className="flex items-center gap-2 py-1 text-[12.5px]" style={{ color: 'var(--map-fg)' }}>
+      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+        <input type="checkbox" className="peer sr-only" checked={on} onChange={onToggle} />
+        <span
+          aria-hidden
+          className="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors"
+          style={{ background: on ? 'var(--map-accent)' : 'var(--map-switch-track)' }}
+        >
+          <span
+            className="absolute h-3 w-3 rounded-full bg-white shadow transition-transform"
+            style={{ transform: on ? 'translateX(14px)' : 'translateX(2px)' }}
+          />
+        </span>
+        <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--map-fg-faint)]" />
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+      </label>
+    </div>
+  )
+}
+
 function Chip({
   active,
   onClick,
@@ -143,6 +190,8 @@ export default function EvacuationModePanel({
   onSelectSector,
   onSelectZone,
   onSelectResult,
+  mapVisibility,
+  onToggleMapLayer,
   forceCollapsed,
   onExpand,
   onCollapse,
@@ -156,6 +205,11 @@ export default function EvacuationModePanel({
   onSelectSector: (sectorNo: number) => void
   onSelectZone: (zone: string, bbox: [number, number, number, number]) => void
   onSelectResult: (layer: string, result: EvacSearchResult) => void
+  /** The 3 base toggles' shared state -- Map mode's own `visibility`/`setVisibility`, passed
+   *  straight through rather than duplicated (decision #6: these two modes share one on/off
+   *  state). `mapVisibility` only ever needs to be read for these 3 keys here. */
+  mapVisibility: Record<string, boolean>
+  onToggleMapLayer: (key: string) => void
   forceCollapsed?: boolean
   onExpand?: () => void
   onCollapse?: () => void
@@ -434,80 +488,106 @@ export default function EvacuationModePanel({
           )}
         </div>
 
-        <div>
-          <SectionLabel>Scenario</SectionLabel>
-          <div className="flex gap-1.5">
-            {(['all', 'Normal day', 'Peak day'] as const).map((option) => {
-              const active = option === 'all' ? !evacFilters.plan : evacFilters.plan === option
-              return (
-                <Chip key={option} active={active} onClick={() => togglePlan(option)}>
-                  {option === 'all' ? 'All' : option}
-                </Chip>
-              )
-            })}
+        <Reveal index={0}>
+          <div>
+            <SectionLabel>Scenario</SectionLabel>
+            <div className="flex gap-1.5">
+              {(['all', 'Normal day', 'Peak day'] as const).map((option) => {
+                const active = option === 'all' ? !evacFilters.plan : evacFilters.plan === option
+                return (
+                  <Chip key={option} active={active} onClick={() => togglePlan(option)}>
+                    {option === 'all' ? 'All' : option}
+                  </Chip>
+                )
+              })}
+            </div>
           </div>
-        </div>
+        </Reveal>
 
-        <div>
-          <SectionLabel>Direction</SectionLabel>
-          <div className="flex gap-1.5">
-            <Chip active={evacFilters.direction === 'Entry'} onClick={() => toggleDirection('Entry')}>
-              Entry
-            </Chip>
-            <Chip active={evacFilters.direction === 'Exit'} onClick={() => toggleDirection('Exit')}>
-              Exit
-            </Chip>
-          </div>
-        </div>
-
-        <div>
-          <SectionLabel>Corridor</SectionLabel>
-          <div className="flex flex-wrap gap-1.5">
-            {nonEmptyCorridors.map((corridor) => (
-              <Chip
-                key={corridor}
-                active={Boolean(evacFilters.corridors?.includes(corridor))}
-                onClick={() => toggleCorridor(corridor)}
-              >
-                {EVAC_CORRIDOR_LABELS[corridor]}
+        <Reveal index={1}>
+          <div>
+            <SectionLabel>Direction</SectionLabel>
+            <div className="flex gap-1.5">
+              <Chip active={evacFilters.direction === 'Entry'} onClick={() => toggleDirection('Entry')}>
+                Entry
               </Chip>
+              <Chip active={evacFilters.direction === 'Exit'} onClick={() => toggleDirection('Exit')}>
+                Exit
+              </Chip>
+            </div>
+          </div>
+        </Reveal>
+
+        <Reveal index={2}>
+          <div>
+            <SectionLabel>Corridor</SectionLabel>
+            <div className="flex flex-wrap gap-1.5">
+              {nonEmptyCorridors.map((corridor) => (
+                <Chip
+                  key={corridor}
+                  active={Boolean(evacFilters.corridors?.includes(corridor))}
+                  onClick={() => toggleCorridor(corridor)}
+                >
+                  {EVAC_CORRIDOR_LABELS[corridor]}
+                </Chip>
+              ))}
+            </div>
+          </div>
+        </Reveal>
+
+        <Reveal index={3}>
+          <div>
+            <SectionLabel>Evacuation layers</SectionLabel>
+            {EVAC_CORE_KEYS.map((key) => (
+              <LayerToggleRow
+                key={key}
+                evacKey={key}
+                on={evacVisibility[key]}
+                onToggle={() => onToggleLayer(key)}
+              />
             ))}
           </div>
-        </div>
-
-        <div>
-          <SectionLabel>Evacuation layers</SectionLabel>
-          {EVAC_CORE_KEYS.map((key) => (
-            <LayerToggleRow
-              key={key}
-              evacKey={key}
-              on={evacVisibility[key]}
-              onToggle={() => onToggleLayer(key)}
-            />
-          ))}
-        </div>
-        <div>
-          <SectionLabel>Supporting layers</SectionLabel>
-          {EVAC_SUPPORT_KEYS.filter((k) => k !== 'zone_outline').map((key) => (
-            <LayerToggleRow
-              key={key}
-              evacKey={key}
-              on={evacVisibility[key]}
-              onToggle={() => onToggleLayer(key)}
-            />
-          ))}
-        </div>
-        <div>
-          <SectionLabel>Flood risk</SectionLabel>
-          {EVAC_FLOOD_KEYS.map((key) => (
-            <LayerToggleRow
-              key={key}
-              evacKey={key}
-              on={evacVisibility[key]}
-              onToggle={() => onToggleLayer(key)}
-            />
-          ))}
-        </div>
+        </Reveal>
+        <Reveal index={4}>
+          <div>
+            <SectionLabel>Supporting layers</SectionLabel>
+            {EVAC_SUPPORT_KEYS.filter((k) => k !== 'zone_outline').map((key) => (
+              <LayerToggleRow
+                key={key}
+                evacKey={key}
+                on={evacVisibility[key]}
+                onToggle={() => onToggleLayer(key)}
+              />
+            ))}
+          </div>
+        </Reveal>
+        <Reveal index={5}>
+          <div>
+            <SectionLabel>Flood risk</SectionLabel>
+            {EVAC_FLOOD_KEYS.map((key) => (
+              <LayerToggleRow
+                key={key}
+                evacKey={key}
+                on={evacVisibility[key]}
+                onToggle={() => onToggleLayer(key)}
+              />
+            ))}
+          </div>
+        </Reveal>
+        <Reveal index={6}>
+          <div>
+            <SectionLabel>Base layers</SectionLabel>
+            {BASE_LAYER_ROWS.map(({ key, label, icon }) => (
+              <BaseLayerRow
+                key={key}
+                icon={icon}
+                label={label}
+                on={mapVisibility[key]}
+                onToggle={() => onToggleMapLayer(key)}
+              />
+            ))}
+          </div>
+        </Reveal>
 
         {filtersActive && (
           <button
