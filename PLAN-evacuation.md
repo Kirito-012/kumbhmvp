@@ -1,4 +1,3 @@
-# PLAN-evacuation.md — Evacuation mode
 
 > A fourth map mode for crowd-flow and evacuation planning. It looks like the plain map but shows
 > only entry/exit points and routes, direction signage, emergency exits, traffic routes, a few
@@ -392,3 +391,39 @@ Length. Facility: Type, Category, Beds. Emergency exit / flood rows add a "Sourc
 
 Assembly areas / safe zones / capacities, live crowd density, routing ("nearest exit from here"), printable evacuation sheets,
 surveyor access, the 15 entry/exit points and 9 substations that exist only in the 25 Aug data, and `Zonal_Boundary.shp`.
+
+## 13. Post-launch fixes (2026-09-15, after Phase 7)
+
+User testing of the shipped mode surfaced 4 bugs, all fixed in the same session:
+
+1. **Layer toggles had no fly-in.** Turning on an Evacuation-layer checkbox just flipped visibility with
+   no zoom, unlike Map mode's own `togglePoiLayerFilter` (which flies to the layer's bbox). Fixed with a
+   new `toggleEvacLayer` in MapView.tsx, reusing the exact same `/api/poi/locate?layer=...` endpoint (it
+   already whitelists every table this mode's layers draw from) and `flyToBbox`, scoped to the focused
+   sector when one is set. No zone equivalent — `/api/poi/locate` has no `zone` param.
+2. **Selecting a sector showed no highlight/outline.** The `sector-selected-outline`/`-glow` layers'
+   filter effect only ever considered Map mode's `selectedSector` or Heatmap/Ticket's `insightSector` —
+   Evacuation's `evacFocus` was never wired in, so `highlightedSectorNo` was always `null` in this mode.
+   Fixed by adding an `evacFocus`-aware branch to that computation (and to the effect's own deps).
+3. **Right-click / clicking empty area didn't clear the selection.** Two separate gaps: (a) the
+   `contextmenu` handler only ever handled Map mode's `selectedSectorRef` — Evacuation mode fell through
+   to that branch's own early-return and did nothing; (b) the click handler's own "empty area" case
+   (step 5) cleared `evacSelection` but never `evacFocus`, so a focused sector/zone stuck around even
+   after clicking away from everything. Fixed by adding an evacuation branch to `contextmenu` (clears
+   both `evacFocus`/`evacSelection`, gated on a new `evacFocusRef`/`evacSelectionRef` pair mirroring
+   `selectedSectorRef` so the once-registered handler can read current state) and by also clearing
+   `evacFocus` in the empty-area click branch.
+4. **The Legend showed traffic routes/direction signage as blue/violet lines that never actually
+   appear.** Both `evac-traffic-route-*` and `evac-direction-line` are colored by direction (green =
+   entry, red = exit, via `entryExitColorExpr`/`directionLineColorExpr`) — solid vs. dashed is what
+   actually distinguishes peak vs. normal day, not color. `EvacuationPanel`'s Legend and `FloatingLegend`'s
+   compact key both used `var(--map-section-blue-fg)`/`-violet-fg` instead, which never appears on the
+   map. Fixed by switching those swatches to `EVAC_COLORS.entry[theme]` and adding a one-line caption
+   above the Legend list ("Routes and signage are colored green for entry, red for exit — solid vs.
+   dashed marks peak vs. normal day") so a single-color swatch per row doesn't read as a red/green
+   omission.
+
+All 4 verified live (fly-in confirmed via `/api/poi/locate` network requests; sector highlight and
+right-click/empty-click clearing confirmed via direct DOM-dispatched click events against `queryRenderedFeatures`,
+since the automated browser's pixel-coordinate clicks proved unreliable for isolating "genuinely empty
+area" at a given zoom/pan). `tsc`/`eslint`/`npm test` (85 tests) clean.

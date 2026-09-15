@@ -281,6 +281,10 @@ export default function EvacuationPanel({
 
         <Reveal index={focus ? 2 : 1}>
           <EvacSection title="Legend">
+            <p className="mb-1.5 text-[10.5px]" style={{ color: 'var(--map-fg-faint)' }}>
+              Routes and signage are colored green for entry, red for exit — solid vs. dashed marks
+              peak vs. normal day.
+            </p>
             <div className="flex flex-col">
               <LegendRow sample={<LegendBadge text="EN" color={EVAC_COLORS.entry[theme]} />} label="Entry point" />
               <LegendRow sample={<LegendBadge text="EXT" color={EVAC_COLORS.exit[theme]} />} label="Exit point" />
@@ -289,15 +293,15 @@ export default function EvacuationPanel({
                 label="Entry/exit route"
               />
               <LegendRow
-                sample={<LegendLine color="var(--map-section-blue-fg)" />}
+                sample={<LegendLine color={EVAC_COLORS.entry[theme]} />}
                 label="Traffic route · peak day"
               />
               <LegendRow
-                sample={<LegendLine color="var(--map-section-blue-fg)" dashed />}
+                sample={<LegendLine color={EVAC_COLORS.entry[theme]} dashed />}
                 label="Traffic route · normal day"
               />
               <LegendRow
-                sample={<LegendLine color="var(--map-section-violet-fg)" />}
+                sample={<LegendLine color={EVAC_COLORS.entry[theme]} />}
                 label="Direction signage"
               />
               <LegendRow

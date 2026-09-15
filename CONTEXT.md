@@ -611,6 +611,15 @@ carries `role="combobox"`/`aria-expanded`/`aria-controls`/`aria-activedescendant
 error/empty states) got `role="presentation"` to keep the tree valid. Both modes' panels, the shared
 search UI, and every layer toggle are covered; nothing else in the mode needed an a11y change.
 
+**Post-launch fixes (same day):** user testing surfaced 4 real bugs, all fixed — see
+`PLAN-evacuation.md` §13 for the full writeup. In short: layer toggles now fly-in like Map mode's own
+`togglePoiLayerFilter` (`toggleEvacLayer`, reusing `/api/poi/locate`); a focused sector now actually
+highlights (`sector-selected-outline`/`-glow`'s filter effect gained an `evacFocus` branch it never had);
+right-click and clicking empty area now clear `evacFocus`/`evacSelection` (new `evacFocusRef`/
+`evacSelectionRef` mirroring `selectedSectorRef`, plus the empty-area click branch clearing `evacFocus`
+too, not just `evacSelection`); and the Legend/`FloatingLegend` traffic-route/direction-signage swatches
+were corrected from an invented blue/violet to the actual rendered green/red direction colors.
+
 ---
 
 ## 10. The geospatial data

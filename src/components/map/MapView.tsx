@@ -120,6 +120,7 @@ import {
 import {
   defaultEvacVisibility,
   EVAC_COLORS,
+  EVAC_LAYER_LABELS,
   EVAC_SUPPORT_KEYS,
   type EvacFocus,
   type EvacKey,
@@ -1168,7 +1169,7 @@ function FloatingLegend({
           <span
             aria-hidden
             className="inline-block h-0 w-4 border-t-2"
-            style={{ borderColor: 'var(--map-section-blue-fg)' }}
+            style={{ borderColor: EVAC_COLORS.entry[theme] }}
           />
           Peak
         </span>
@@ -1176,7 +1177,7 @@ function FloatingLegend({
           <span
             aria-hidden
             className="inline-block h-0 w-4 border-t-2 border-dashed"
-            style={{ borderColor: 'var(--map-section-blue-fg)' }}
+            style={{ borderColor: EVAC_COLORS.entry[theme] }}
           />
           Normal
         </span>
@@ -1272,6 +1273,13 @@ export default function MapView({
   /** Mirrors `selectedSector` state for the same reason as measuringRef -- read by the
    *  once-registered 'contextmenu' handler to right-click-deselect the current sector. */
   const selectedSectorRef = useRef<number | 'all'>('all')
+  /** Mirrors `evacFocus`/`evacSelection` for the same reason as selectedSectorRef -- the
+   *  once-registered 'contextmenu' handler needs to know whether Evacuation mode currently has
+   *  anything focused/selected before deciding whether to intercept the right-click at all (same
+   *  "let the native menu open when there's nothing to clear" behaviour selectedSectorRef gives
+   *  Map mode). */
+  const evacFocusRef = useRef<EvacFocus>(null)
+  const evacSelectionRef = useRef<EvacSelection>(null)
   /** Last known *expanded* width of the right-docked Stats/Insights panel --
    *  read by reservedMapPadding (see below) so the map's centered area
    *  always leaves room for the panel at the width it would open to,
@@ -3590,13 +3598,16 @@ export default function MapView({
             return
           }
 
-          // 4/5. Bare sector -> evacFocus + fly-in. Empty area -> clear the selection.
+          // 4/5. Bare sector -> evacFocus + fly-in. Empty area -> clear both the selection and
+          // the focused sector/zone (clicking away from everything means "show me nothing", not
+          // just "close the highlight but keep browsing this sector's scoped view").
           const evacSectorHits = map.queryRenderedFeatures(e.point, {
             layers: ['sector-plan-fill', 'sector-plan-hit-target', 'sector-hit-target'],
           })
           popupRef.current?.remove()
           if (evacSectorHits.length === 0) {
             setEvacSelection(null)
+            setEvacFocus(null)
             return
           }
           const rawSectorNo = evacSectorHits[0]?.properties?.sector_no
@@ -3719,6 +3730,17 @@ export default function MapView({
           e.originalEvent?.preventDefault?.()
           undoMeasurePoint()
           clearPreview()
+          return
+        }
+        if (modeRef.current === 'evacuation') {
+          if (!evacFocusRef.current && !evacSelectionRef.current && !popupRef.current) return
+          e.preventDefault()
+          e.originalEvent?.preventDefault?.()
+          setEvacFocus(null)
+          setEvacSelection(null)
+          popupRef.current?.remove()
+          popupRef.current = null
+          popupParcelIdRef.current = null
           return
         }
         // A popup can be open with no sector selected (e.g. clicking a
@@ -3886,6 +3908,14 @@ export default function MapView({
   useEffect(() => {
     selectedSectorRef.current = selectedSector
   }, [selectedSector])
+
+  // Same mirroring as selectedSectorRef, for evacFocus/evacSelection.
+  useEffect(() => {
+    evacFocusRef.current = evacFocus
+  }, [evacFocus])
+  useEffect(() => {
+    evacSelectionRef.current = evacSelection
+  }, [evacSelection])
 
   // Keyboard shortcuts while measuring: Escape exits the mode entirely,
   // Ctrl/Cmd+Z undoes the last point, Ctrl+Y or Ctrl/Cmd+Shift+Z redoes.
@@ -4260,6 +4290,21 @@ export default function MapView({
     }
   }
 
+  /** Flips one evac-* layer's on/off toggle and, when turning it ON, flies to fit its real extent
+   *  -- same "turning a layer on flies you there" expectation Map mode's own togglePoiLayerFilter
+   *  gives, reusing the exact same /api/poi/locate endpoint (it already whitelists every table
+   *  this mode's layers draw from). Scoped to the focused sector when one is set, same as
+   *  Map mode's withSector -- there's no zone equivalent (/api/poi/locate has no `zone` param),
+   *  so a zone focus doesn't scope this fly-to. */
+  function toggleEvacLayer(key: EvacKey) {
+    const turningOn = !evacVisibility[key]
+    setEvacVisibility((v) => ({ ...v, [key]: turningOn }))
+    if (!turningOn) return
+    const params = new URLSearchParams({ layer: key })
+    if (evacFocus?.kind === 'sector') params.set('sector', String(evacFocus.sectorNo))
+    flyToBbox(`/api/poi/locate?${params}`, EVAC_LAYER_LABELS[key])
+  }
+
   // Mirrors mode/insightSector/evacFocus into the URL (?mode=&isector=/&esector=|&ezone=) so a
   // view can be shared or reloaded -- see PLAN-heatmap.md §4.1, extended by PLAN-evacuation.md
   // §5.1. router.replace (not push) so switching modes doesn't spam browser history. Preserves
@@ -4440,9 +4485,11 @@ export default function MapView({
         ? selectedSector === 'all'
           ? null
           : selectedSector
-        : typeof insightSector === 'number'
-          ? insightSector
-          : null
+        : mode === 'evacuation'
+          ? (evacFocus?.kind === 'sector' ? evacFocus.sectorNo : null)
+          : typeof insightSector === 'number'
+            ? insightSector
+            : null
     const selectedSectorFilter = (
       highlightedSectorNo === null
         ? ['==', ['get', 'sector_no'], -1]
@@ -4472,7 +4519,16 @@ export default function MapView({
         )
       }
     }
-  }, [selectedSector, classFilter, subclassFilter, sectors, visibility, mode, insightSector])
+  }, [
+    selectedSector,
+    classFilter,
+    subclassFilter,
+    sectors,
+    visibility,
+    mode,
+    insightSector,
+    evacFocus,
+  ])
 
   // POI sub-class filter -- narrows individual POI layers to a subset of
   // their subclass values, for the 4 layers that have one (see
@@ -6182,7 +6238,7 @@ export default function MapView({
       ) : mode === 'evacuation' ? (
         <EvacuationModePanel
           evacVisibility={evacVisibility}
-          onToggleLayer={(key) => setEvacVisibility((v) => ({ ...v, [key]: !v[key] }))}
+          onToggleLayer={toggleEvacLayer}
           evacFilters={evacFilters}
           onFiltersChange={setEvacFilters}
           sectors={sectors}
