@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AreaChart, Area, PieChart, Pie, Cell, ResponsiveContainer, Tooltip, XAxis } from 'recharts'
 import {
@@ -19,15 +19,23 @@ import type { SectorTrendDay } from '@/lib/insights/types'
  * BUCKET_COLORS ... don't invent a second palette"), so a parcel's colour on the map and its
  * swatch here always match; this hook is the one place in the panels that needs the theme as a
  * JS value instead of leaving it to the cascade.
+ *
+ * Initial state is always 'dark', matching the root layout's hardcoded `data-theme="dark"` -- NOT
+ * a peek at `document.documentElement`'s actual attribute, even though that would often be "more
+ * correct" on first render. THEME_INIT_SCRIPT (src/lib/theme.ts) is a blocking inline script that
+ * corrects `data-theme` to the user's real stored preference before the page paints, but it runs
+ * before React hydrates, not before this component's initial render -- so a `useState(() => ...)`
+ * initializer that reads `document` here sees the ALREADY-CORRECTED attribute during hydration,
+ * while the server (no DOM, no localStorage) always rendered assuming dark. For a light-themed
+ * visitor that's a real value mismatch (e.g. this hook feeding a badge's `backgroundColor`), not a
+ * formatting quirk -- React warns and never patches it up. Starting from the same hardcoded 'dark'
+ * both server and client render keeps the first pass identical; `useLayoutEffect` (not `useEffect`)
+ * then corrects it synchronously before the browser paints, so a light-themed visitor never even
+ * sees the wrong color flash.
  */
 export function useInsightTheme(): Theme {
-  const [theme, setTheme] = useState<Theme>(() =>
-    typeof document !== 'undefined' &&
-    document.documentElement.getAttribute('data-theme') === 'light'
-      ? 'light'
-      : 'dark',
-  )
-  useEffect(() => {
+  const [theme, setTheme] = useState<Theme>('dark')
+  useLayoutEffect(() => {
     const root = document.documentElement
     const read = () => setTheme(root.getAttribute('data-theme') === 'light' ? 'light' : 'dark')
     read()

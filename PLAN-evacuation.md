@@ -628,3 +628,25 @@ point gets when it's a real mix of both -- verified by sampling rendered pixel c
 eyeballing, since the mixed-cluster slate and Exit-cluster rose read similarly small and desaturated
 against a dark basemap) for three real clusters in both themes: an Exit-only pair painted rose, two
 genuinely-mixed pairs painted slate. `tsc`/`eslint`/`npm test` (85 tests) clean.
+
+**Legend hydration + overlapping badge fixes (2026-09-15):** a follow-up screenshot showed a real
+(not cosmetic) hydration error on `EvacuationPanel`'s `LegendBadge`/`LegendLine`/`LegendSwatch`, and
+separately that EN/EXT badges sometimes don't render at all near each other. Two unrelated causes:
+(1) `useInsightTheme()` (`charts.tsx`) initialized its `useState` by peeking at
+`document.documentElement`'s `data-theme` attribute -- but `THEME_INIT_SCRIPT` (`src/lib/theme.ts`)
+is a blocking inline script that corrects that attribute to the visitor's real stored theme BEFORE
+React hydrates, so for anyone whose stored theme is light, the hook's first client render already
+saw 'light' while the server (no DOM, no localStorage) always rendered assuming the root layout's
+hardcoded `data-theme="dark"` -- a genuine value mismatch, not a formatting quirk like the earlier
+`background` shorthand fixes above. Fixed by always starting from `'dark'` (matching the server
+exactly) and correcting via `useLayoutEffect` instead of reading `document` in the initializer, so
+the first render is identical on both sides and the real theme applies before paint. (2) A real
+Entry point and its paired Exit point are often only 10-30m apart on the ground (confirmed via the
+same real-cluster investigation as the cluster-color fix above); `evac-entry-exit-badge`'s
+`icon-allow-overlap: false` meant MapLibre's collision detection silently dropped one of the two
+badges whenever they were close enough to overlap on screen -- exactly the "EN/EXT not visible at
+all" symptom, with no indication a second point existed underneath. Changed to
+`icon-allow-overlap: true`, matching the arrow layers' own setting; both badges now always render
+regardless of proximity. Verified live: no hydration warning after a fresh load with a light stored
+theme, and both EN and EXT badges rendering stacked together at the same NH34 location used for the
+cluster-color fix. `tsc`/`eslint`/`npm test` (85 tests) clean.

@@ -550,7 +550,15 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
         ensureBadgeImage(map, 'EXT', colorPair(EVAC_COLORS.exit, theme)),
         ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.unknown, theme)),
       ] as unknown as ExpressionSpecification,
-      'icon-allow-overlap': false,
+      // An Entry and its paired Exit point are often only 10-30m apart on the ground (real data,
+      // not a hypothetical -- see the tagProperty comment on clusterPoints in poiClustering.ts),
+      // close enough that their badges overlap on screen well past the zoom where they've split
+      // out of a cluster into individual points. With allow-overlap false, MapLibre's collision
+      // detection was silently dropping one of the two -- reading as "the EXT/EN badge just isn't
+      // there" with no visual hint a second point exists underneath, exactly the "not visible at
+      // all" bug this was reported as. True for both badge layers so neither the arrow/route glyphs
+      // above nor these compete for whichever wins collision priority.
+      'icon-allow-overlap': true,
     },
   })
 
