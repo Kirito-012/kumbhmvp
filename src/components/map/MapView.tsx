@@ -118,6 +118,7 @@ import {
   applyEvacTheme,
   setEvacArrowsData,
   setEvacLayersVisible,
+  setEvacZonesData,
 } from '@/components/map/evacuation/evacLayers'
 import {
   defaultEvacVisibility,
@@ -140,6 +141,7 @@ import {
   trafficRouteLabel,
 } from '@/lib/evacuation/labels'
 import type { EvacSearchResult } from '@/components/map/evacuation/useEvacuationSearch'
+import { useEvacuationSummary } from '@/components/map/evacuation/useEvacuationSummary'
 
 type Sector = {
   sector_no: number
@@ -573,6 +575,27 @@ const SECTOR_FILL_OPACITY: { light: ExpressionSpecification; dark: ExpressionSpe
 // MapLibre antialiases them into a faint thread rather than dropping them, so
 // dense sectors keep their internal structure legible instead of silting up
 // into one solid mass of edges.
+// Evacuation mode dims sector-plan-fill to ~40% of its Map-mode opacity (PLAN-evacuation.md §6.2
+// item 1/§14) -- context, not the focus, in a mode about routes and exits rather than parcel
+// classes. A second interpolate expression with each stop pre-multiplied by 0.4, not a runtime
+// `['*', SECTOR_FILL_OPACITY[theme], 0.4]` wrapping it -- MapLibre only allows a `zoom` expression
+// to appear directly under `step`/`interpolate` (or nested in `let`/`case`/`coalesce`), so wrapping
+// one in `*` fails style validation ("\"zoom\" expression may only be used as input to a top-level
+// \"step\" or \"interpolate\" expression") and silently drops the whole layer -- the exact same
+// class of bug `trafficRouteWidthExpr` in evacLayers.ts works around for the hover-width arrows.
+const SECTOR_FILL_OPACITY_DIMMED: { light: ExpressionSpecification; dark: ExpressionSpecification } = {
+  light: ['interpolate', ['linear'], ['zoom'], 11, 0.16 * 0.4, 15, 0.4 * 0.4] as unknown as ExpressionSpecification,
+  dark: ['interpolate', ['linear'], ['zoom'], 11, 0.1 * 0.4, 15, 0.3 * 0.4] as unknown as ExpressionSpecification,
+}
+
+// Two call sites need this (the theme-swap effect AND the class-filter effect below both write
+// sector-plan-fill's fill-opacity), so a shared mode-aware picker keeps them from fighting each
+// other's value on a theme toggle mid-mode -- exactly what Phase 2's own note flagged as the
+// reason this was skipped originally.
+function sectorFillOpacityForMode(theme: 'light' | 'dark', mode: MapMode): ExpressionSpecification {
+  return mode === 'evacuation' ? SECTOR_FILL_OPACITY_DIMMED[theme] : SECTOR_FILL_OPACITY[theme]
+}
+
 const SECTOR_OUTLINE_WIDTH = [
   'interpolate',
   ['linear'],
@@ -797,6 +820,7 @@ const APP_SOURCE_IDS = new Set([
   // evac-selected above.
   'evac-traffic-route-arrows',
   'evac-direction-line-arrows',
+  'evac-zone-outline',
   'measure-line',
   'measure-label',
   'measure-preview',
@@ -1292,6 +1316,13 @@ export default function MapView({
    *  when a new selection arrives mid-animation, without that cancellation itself being a
    *  re-render trigger. */
   const evacPulseFrameRef = useRef<number | null>(null)
+  /** The evac-* line feature currently under the cursor (post-launch fix, PLAN-evacuation.md §14
+   *  -- hover feature-state on evac lines). Tracked so the mousemove handler below can clear the
+   *  PREVIOUS feature's `hover` flag before setting the new one, the same "diff against what was
+   *  last set" shape hoveredSectorRef uses for Map mode's own sector hover. */
+  const hoveredEvacFeatureRef = useRef<{ source: string; sourceLayer?: string; id: string | number } | null>(
+    null,
+  )
   /** Last known *expanded* width of the right-docked Stats/Insights panel --
    *  read by reservedMapPadding (see below) so the map's centered area
    *  always leaves room for the panel at the width it would open to,
@@ -1559,6 +1590,10 @@ export default function MapView({
   // meant to be a momentary narrowing while looking at the map, not something that survives a
   // reload or gets shared, same as Map mode's own classFilter/subclassFilter above.
   const [evacFilters, setEvacFilters] = useState<EvacFilters>({})
+  // Lifted out of EvacuationPanel (which used to call this hook itself) so EvacuationModePanel's
+  // Corridor chips can also read the same summary's corridor counts without a second fetch --
+  // one fetch per evacFocus change, shared by both docked panels.
+  const evacSummaryState = useEvacuationSummary(evacFocus)
   // Initialized to the plain defaults (not loadStoredVisibility) so the first
   // client render matches what the server rendered -- localStorage doesn't
   // exist during SSR, and reading it in the initializer here would make the
@@ -1690,6 +1725,15 @@ export default function MapView({
       .then((data) => setEvacArrowsData(map, data))
       .catch(() => {})
   }, [canUseInsights, mapReady])
+
+  // Feeds the zone-outline source whenever /api/evacuation/summary resolves -- it always returns
+  // all 5 zones regardless of focus, so this doesn't need its own fetch (post-launch fix,
+  // PLAN-evacuation.md §14).
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady || !evacSummaryState.summary) return
+    setEvacZonesData(map, evacSummaryState.summary.zones)
+  }, [evacSummaryState.summary, mapReady])
 
   // One-time initial fit to the real extent of every sector, once sector
   // data (with each one's xmin/ymin/xmax/ymax) has loaded. The map
@@ -1887,7 +1931,11 @@ export default function MapView({
           'fill-color',
           matchExpr('class_group', fillColors, fillColors.Other),
         )
-        map.setPaintProperty('sector-plan-fill', 'fill-opacity', SECTOR_FILL_OPACITY[theme])
+        map.setPaintProperty(
+          'sector-plan-fill',
+          'fill-opacity',
+          sectorFillOpacityForMode(theme, modeRef.current),
+        )
       }
       if (map.getLayer('sector-plan-class-outline')) {
         const fillColors = theme === 'dark' ? CLASS_GROUP_COLORS_DARK : CLASS_GROUP_COLORS
@@ -2254,6 +2302,11 @@ export default function MapView({
           ['Direction', p.entry_exit],
           ['Plan', p.plan],
           ['Corridors', corridors.length ? corridors.join(', ') : undefined],
+          // Both computed in the tiles route (kumbh.traffic_route has neither column directly)
+          // -- Sector via a nearest-sector-centroid spatial join, same technique
+          // /api/evacuation/arrows uses for its bearing calculation.
+          ['Sector', typeof p.sector_no === 'number' ? p.sector_no : undefined],
+          ['Length', typeof p.length_m === 'number' ? formatDistance(p.length_m) : undefined],
         ],
       }
     }
@@ -3285,6 +3338,48 @@ export default function MapView({
         setHoverFilter(null)
         map.getCanvas().style.cursor = ''
       })
+
+      // Evacuation mode's own hover (§6.2 item 12/§14) -- real feature-state (`withHoverWidth` in
+      // evacLayers.ts reads it), not a filter-swap overlay like sector hover above: these are 5
+      // separate line layers rather than one polygon layer, so a shared filter-based approach
+      // would need 5x the bookkeeping for no real benefit once feature-state is available (every
+      // source here already sets `promoteId: 'id'`, see the POI-source loop above).
+      function setEvacHover(feature: typeof hoveredEvacFeatureRef.current) {
+        const prev = hoveredEvacFeatureRef.current
+        if (prev) {
+          map.setFeatureState({ source: prev.source, sourceLayer: prev.sourceLayer, id: prev.id }, { hover: false })
+        }
+        if (feature) {
+          map.setFeatureState(
+            { source: feature.source, sourceLayer: feature.sourceLayer, id: feature.id },
+            { hover: true },
+          )
+        }
+        hoveredEvacFeatureRef.current = feature
+      }
+      const EVAC_HOVERABLE_LAYERS = [
+        'evac-traffic-route-peak',
+        'evac-traffic-route-normal',
+        'evac-entry-exit-line',
+        'evac-direction-line',
+        'evac-emergency-exit',
+      ]
+      for (const layerId of EVAC_HOVERABLE_LAYERS) {
+        map.on('mousemove', layerId, (e: MapLayerMouseEvent) => {
+          if (measuringRef.current || modeRef.current !== 'evacuation') return
+          const f = e.features?.[0]
+          if (!f || f.id === undefined) return
+          if (hoveredEvacFeatureRef.current?.id !== f.id || hoveredEvacFeatureRef.current?.source !== f.source) {
+            setEvacHover({ source: f.source, sourceLayer: f.sourceLayer, id: f.id })
+          }
+          map.getCanvas().style.cursor = 'pointer'
+        })
+        map.on('mouseleave', layerId, () => {
+          if (measuringRef.current || modeRef.current !== 'evacuation') return
+          setEvacHover(null)
+          map.getCanvas().style.cursor = ''
+        })
+      }
 
       // Every POI geometry layer, PLUS: the wider invisible -hit circle
       // (points render at 2.5-6px, too small a target to reliably click)
@@ -4388,6 +4483,21 @@ export default function MapView({
     popupParcelIdRef.current = null
   }, [mode])
 
+  // Clears a stuck evac hover feature-state on leaving Evacuation mode -- the mousemove/mouseleave
+  // handlers already guard on `modeRef.current === 'evacuation'`, so switching modes mid-hover
+  // (e.g. via the `4`/mode-switcher shortcut while the cursor sits still) would otherwise leave
+  // that one feature's `hover` flag set forever, since no further mouse event over it will ever
+  // fire the clear.
+  useEffect(() => {
+    if (mode === 'evacuation') return
+    const map = mapRef.current
+    const feature = hoveredEvacFeatureRef.current
+    if (map && feature) {
+      map.setFeatureState({ source: feature.source, sourceLayer: feature.sourceLayer, id: feature.id }, { hover: false })
+    }
+    hoveredEvacFeatureRef.current = null
+  }, [mode])
+
   // Sector filter (also drives fly-to when a single sector is chosen)
   useEffect(() => {
     const map = mapRef.current
@@ -4471,13 +4581,23 @@ export default function MapView({
     // even if a class filter would otherwise force them on -- Heatmap's own
     // density glow and Ticket mode's insight-ticket-fill/-outline (status
     // colour) are each the only area colour their mode should show, per user
-    // request. Only plain Map mode lets a class filter force the wash back on
-    // over the toggle. sector-plan-hit-target stays governed by the
+    // request. Evacuation mode is the other exception (like Map mode, but
+    // dimmed -- see sectorFillOpacityForMode below): it has no class filters
+    // of its own (emphasisActive is always false there), so this only ever
+    // means "show it when the shared Sector plan toggle is on", exactly
+    // decision #6's "sector_plan/sector_boundary/sector_names share Map
+    // mode's toggle state". sector-plan-hit-target stays governed by the
     // toggle/emphasis as before since it's invisible either way (fill-opacity
     // 0) and clicks still need it queryable.
-    const showClassWash = mode === 'map' && (emphasisActive || visibility.sector_plan)
+    const showClassWash =
+      (mode === 'map' || mode === 'evacuation') && (emphasisActive || visibility.sector_plan)
     if (map.getLayer('sector-plan-fill')) {
       map.setLayoutProperty('sector-plan-fill', 'visibility', showClassWash ? 'visible' : 'none')
+      map.setPaintProperty(
+        'sector-plan-fill',
+        'fill-opacity',
+        sectorFillOpacityForMode(readMapTheme(), mode),
+      )
     }
     if (map.getLayer('sector-plan-class-outline')) {
       map.setLayoutProperty(
@@ -4583,6 +4703,15 @@ export default function MapView({
     mode,
     insightSector,
     evacFocus,
+    // Without this, a cold load straight into Evacuation mode (?mode=evacuation) could run this
+    // effect's only pre-mapReady pass before `sector-plan-fill` exists (early-returns on
+    // !map.getLayer(...)), then never re-run again if no OTHER dependency happens to change after
+    // the map becomes ready -- leaving sectorFillOpacityForMode's dimmed value never applied and
+    // the layer-creation-time undimmed value stuck in place. This gap was invisible before the
+    // dimming feature existed: every write this effect ever made to sector-plan-fill's opacity was
+    // identical to the layer's creation-time value in every mode, so whether the effect ran once
+    // or many times made no visible difference. Discovered live -- see PLAN-evacuation.md §14.
+    mapReady,
   ])
 
   // POI sub-class filter -- narrows individual POI layers to a subset of
@@ -6247,6 +6376,7 @@ export default function MapView({
           onSelectResult={selectEvacResult}
           mapVisibility={visibility}
           onToggleMapLayer={(key) => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
+          corridorCounts={evacSummaryState.summary?.corridors ?? null}
           forceCollapsed={expandedDockedPanel === 'stats'}
           onExpand={() => {
             if (isPhoneViewport()) setExpandedDockedPanel('search')
@@ -6329,6 +6459,9 @@ export default function MapView({
           sectors={sectors}
           onClearFocus={() => setEvacFocus(null)}
           onSelectResult={selectEvacResult}
+          summary={evacSummaryState.summary}
+          loading={evacSummaryState.loading}
+          error={evacSummaryState.error}
           onWidthChange={(w) => {
             // Same "ignore the collapsed 0" rule as StatsPanel's onWidthChange above.
             if (w > 0) rightPanelWidthRef.current = w

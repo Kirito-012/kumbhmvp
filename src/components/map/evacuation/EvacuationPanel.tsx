@@ -5,7 +5,7 @@ import Panel from '@/components/map/Panel'
 import { EvacuationIcon, MapPinIcon } from '@/components/map/icons'
 import { useInsightTheme, Reveal, AnimatedBar, pillEntranceDelayMs } from '@/components/map/insights/charts'
 import { EVAC_COLORS, type EvacFocus } from '@/lib/evacuation/layers'
-import { useEvacuationSummary, type EvacSummaryFeature } from './useEvacuationSummary'
+import type { EvacSummary, EvacSummaryFeature } from './useEvacuationSummary'
 import { EVAC_LAYER_LABELS } from '@/lib/evacuation/layers'
 import type { EvacSearchResult } from './useEvacuationSearch'
 
@@ -152,7 +152,9 @@ function LegendRow({ sample, label }: { sample: ReactNode; label: string }) {
  * the 5 core layers, sized as share-of-max bars -- same AnimatedBar/pillEntranceDelayMs pattern
  * as the Heatmap/Ticket panels' own hero), a "Nearby care" list of hospitals/police/fire when a
  * sector or zone is focused, a static legend of every evac-* style, and a per-focus feature list
- * grouped by layer. All fed by /api/evacuation/summary via useEvacuationSummary.
+ * grouped by layer. All fed by /api/evacuation/summary, fetched once in MapView (useEvacuationSummary)
+ * and passed down as `summary`/`loading`/`error` -- lifted there so EvacuationModePanel's Corridor
+ * chips can share the same fetch for its counts instead of duplicating it.
  *
  * The hero shows "Entry/exit points" as one combined count rather than splitting Entry vs Exit --
  * the underlying kumbh.entry_exit table only carries direction on individual rows (`remark`), and
@@ -166,6 +168,9 @@ export default function EvacuationPanel({
   sectors,
   onClearFocus,
   onSelectResult,
+  summary,
+  loading,
+  error,
   forceCollapsed,
   onExpand,
   onCollapse,
@@ -175,13 +180,17 @@ export default function EvacuationPanel({
   sectors: SectorSummary[]
   onClearFocus: () => void
   onSelectResult: (layer: string, result: EvacSearchResult) => void
+  /** Lifted to MapView (see its own comment) so EvacuationModePanel's Corridor chips can share
+   *  the same /api/evacuation/summary fetch instead of a second one. */
+  summary: EvacSummary | null
+  loading: boolean
+  error: string | null
   forceCollapsed?: boolean
   onExpand?: () => void
   onCollapse?: () => void
   onWidthChange?: (width: number) => void
 }) {
   const theme = useInsightTheme()
-  const { summary, loading, error } = useEvacuationSummary(evacFocus)
 
   const title =
     evacFocus?.kind === 'sector'

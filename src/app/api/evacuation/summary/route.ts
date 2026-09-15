@@ -132,6 +132,17 @@ export async function GET(req: NextRequest) {
     }),
   )
 
+  // Per-corridor traffic_route counts for the Corridor filter chips (PLAN-evacuation.md §7.2 item
+  // 4 -- "chips for the non-empty corridors, with counts"). naj_dir excluded: it's never offered
+  // as a chip (§2.2 -- Najibabad has 0 routes region-wide).
+  const corridorCountsPromise = pool.query<{ deh_dir: string; sah_dir: string; meer_dir: string }>(`
+    SELECT count(*) FILTER (WHERE deh_dir = 1) AS deh_dir,
+           count(*) FILTER (WHERE sah_dir = 1) AS sah_dir,
+           count(*) FILTER (WHERE meer_dir = 1) AS meer_dir
+    FROM kumbh.traffic_route t
+    ${whereClause};
+  `, areaParams)
+
   // Zone outlines (§8.2) -- always returned, regardless of focus, since the "Zone outlines"
   // supporting layer can be toggled independently of any sector/zone being focused.
   const zonesPromise = pool.query(`
@@ -200,13 +211,20 @@ export async function GET(req: NextRequest) {
         ])
       : null
 
-  const [countsEntries, zonesResult, focusResult] = await Promise.all([
+  const [countsEntries, corridorCountsResult, zonesResult, focusResult] = await Promise.all([
     countsPromise,
+    corridorCountsPromise,
     zonesPromise,
     focusPromise,
   ])
 
   const counts = Object.fromEntries(countsEntries)
+  const corridorRow = corridorCountsResult.rows[0]
+  const corridors = {
+    deh_dir: Number(corridorRow.deh_dir),
+    sah_dir: Number(corridorRow.sah_dir),
+    meer_dir: Number(corridorRow.meer_dir),
+  }
   const zones = zonesResult.rows.map((row) => ({
     zone: row.zone,
     geojson: JSON.parse(row.geojson),
@@ -232,7 +250,7 @@ export async function GET(req: NextRequest) {
     : null
 
   return Response.json(
-    { counts, zones, focus },
+    { counts, corridors, zones, focus },
     { headers: { 'Cache-Control': 'public, max-age=60, s-maxage=300' } },
   )
 }

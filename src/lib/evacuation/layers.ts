@@ -96,6 +96,10 @@ export const EVAC_COLORS = {
   floodArea: { light: '#2563eb', dark: '#60a5fa' },
   floodLine: { light: '#1d4ed8', dark: '#93c5fd' },
   unknown: { light: '#64748b', dark: '#94a3b8' },
+  /** The 5-zone outline/label (§2.4/§6.2 item 3) -- amber to match this mode's own
+   *  `--map-mode-evacuation` accent, distinct from every other line color here so a zone boundary
+   *  is never mistaken for a route or flood line. */
+  zoneOutline: { light: '#b45309', dark: '#fbbf24' },
 } as const
 
 export type EvacTheme = 'light' | 'dark'

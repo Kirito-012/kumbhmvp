@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import type { Geometry } from 'geojson'
 import type { EvacFocus } from '@/lib/evacuation/layers'
 
 export type EvacSummaryFeature = {
@@ -18,9 +19,14 @@ export type EvacSummaryFocus = {
   care: EvacSummaryFeature[]
 }
 
+export type EvacZone = { zone: string; geojson: Geometry; bbox: [number, number, number, number] }
+
 export type EvacSummary = {
   counts: Record<string, number>
-  zones: { zone: string; geojson: unknown; bbox: [number, number, number, number] }[]
+  /** Per-corridor traffic_route counts for the Corridor filter chips (deh_dir/sah_dir/meer_dir
+   *  only -- naj_dir is never offered as a chip, see EvacuationModePanel's own comment). */
+  corridors: { deh_dir: number; sah_dir: number; meer_dir: number }
+  zones: EvacZone[]
   focus: EvacSummaryFocus | null
 }
 

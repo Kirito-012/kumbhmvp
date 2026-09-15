@@ -195,6 +195,7 @@ export default function EvacuationModePanel({
   onSelectResult,
   mapVisibility,
   onToggleMapLayer,
+  corridorCounts,
   forceCollapsed,
   onExpand,
   onCollapse,
@@ -213,6 +214,9 @@ export default function EvacuationModePanel({
    *  state). `mapVisibility` only ever needs to be read for these 3 keys here. */
   mapVisibility: Record<string, boolean>
   onToggleMapLayer: (key: string) => void
+  /** From the same /api/evacuation/summary fetch EvacuationPanel uses (lifted to MapView) --
+   *  null until it resolves, in which case the Corridor chips just show no count yet. */
+  corridorCounts: { deh_dir: number; sah_dir: number; meer_dir: number } | null
   forceCollapsed?: boolean
   onExpand?: () => void
   onCollapse?: () => void
@@ -506,6 +510,7 @@ export default function EvacuationModePanel({
                   onClick={() => toggleCorridor(corridor)}
                 >
                   {EVAC_CORRIDOR_LABELS[corridor]}
+                  {corridorCounts && ` (${corridorCounts[corridor]})`}
                 </Chip>
               ))}
             </div>
@@ -528,7 +533,7 @@ export default function EvacuationModePanel({
         <Reveal index={4}>
           <div>
             <SectionLabel>Supporting layers</SectionLabel>
-            {EVAC_SUPPORT_KEYS.filter((k) => k !== 'zone_outline').map((key) => (
+            {EVAC_SUPPORT_KEYS.map((key) => (
               <LayerToggleRow
                 key={key}
                 evacKey={key}

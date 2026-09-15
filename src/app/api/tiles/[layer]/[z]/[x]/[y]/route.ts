@@ -26,6 +26,11 @@ const LAYERS: Record<
     filterBelowZoom?: number
     /** Simplify geometry (in tile units, post-clip) to shrink dense layers. */
     simplify?: boolean
+    /** A literal SQL join clause (authored here, never request input) appended after the FROM
+     *  table -- for a computed column that needs a second table, e.g. traffic_route's nearest-
+     *  sector lookup. Can reference the base table's own columns unqualified (there's no alias on
+     *  it), same as `columns`/`lowZoomWhere` already do. */
+    extraJoin?: string
   }
 > = {
   road: {
@@ -122,8 +127,15 @@ const LAYERS: Record<
   },
   traffic_route: {
     table: 'kumbh.traffic_route',
+    // length_m/sector_no are computed, not real columns -- kumbh.traffic_route has neither
+    // (see CONTEXT.md §9's Evacuation mode notes on why "Sector" needs a spatial join rather than
+    // a plain column, same nearest-sector-centroid technique /api/evacuation/arrows already uses
+    // for its bearing calculation). Both feed evacPopupContent's traffic-route popup rows.
     columns:
-      'id, name, entry_exit, plan, direction, weekend, normal, peak_day, deh_dir, naj_dir, sah_dir, meer_dir',
+      'id, name, entry_exit, plan, direction, weekend, normal, peak_day, deh_dir, naj_dir, sah_dir, meer_dir, ' +
+      'ROUND(ST_Length(geom::geography))::int AS length_m, sb.sector_no',
+    extraJoin:
+      'LEFT JOIN LATERAL (SELECT b.sector_no FROM kumbh.sector_boundary b ORDER BY b.geom <-> geom LIMIT 1) sb ON TRUE',
   },
   tentcity: {
     table: 'kumbh.tentcity',
@@ -295,6 +307,7 @@ export async function GET(
       SELECT ${def.columns},
              ${geomExpr} AS geom
       FROM ${def.table}
+      ${def.extraJoin ?? ''}
       WHERE geom && ST_Transform(ST_TileEnvelope($2, $3, $4, margin => (64.0 / 4096)), 4326)
       ${extraWhere}
     ) t

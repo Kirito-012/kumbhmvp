@@ -1,5 +1,5 @@
 import type { Map as MLMap, ExpressionSpecification, FilterSpecification, GeoJSONSource } from 'maplibre-gl'
-import type { FeatureCollection, Point } from 'geojson'
+import type { FeatureCollection, Point, Geometry } from 'geojson'
 import { badgeIconId, makeBadgeIcon, chevronIconId, makeChevronIcon } from '@/lib/mapBadgeIcon'
 import { EVAC_COLORS, type EvacKey, type EvacTheme } from '@/lib/evacuation/layers'
 import { buildEvacFilters, trafficRoutePlanVisible, type EvacFilters } from '@/lib/evacuation/filters'
@@ -16,13 +16,10 @@ import { buildEvacFilters, trafficRoutePlanVisible, type EvacFilters } from '@/l
 // Map mode's own styling is never touched -- these are new layer ids, not edits to `poi-*`/
 // `road-line`/`emergency-exit-line`.
 //
-// Deliberately NOT implemented (see PLAN-evacuation.md §10's phase notes): traffic-route/
-// direction-signage arrows (drawing-order-dependent, needs visual verification against the real
-// routes first -- shipping a wrong arrow is worse than no arrow), zone outlines/labels (their
-// geometry comes from /api/evacuation/summary but nothing renders it yet), and hover feature-state.
-// The selected-feature highlight (evac-selected-glow/-line/-point) IS populated now (Phase 5, see
-// MapView's evacSelection effect) but as a steady outline, not the plan's pulse-then-settle
-// animation -- that's deferred polish, not missing functionality.
+// Originally deferred (see PLAN-evacuation.md §10's phase notes), since implemented as follow-ups:
+// traffic-route/direction-signage arrows (§13/§14 -- bearing-driven points, not line-following
+// chevrons, once real data showed vertex order is unreliable), the selected-feature pulse-then-
+// settle animation (§14), zone outlines/labels (below), and hover feature-state (below).
 
 const FLOOD_AREA_SOURCE = 'hfl_area'
 const FLOOD_LINE_SOURCE = 'hfl_line'
@@ -37,12 +34,15 @@ const SELECTED_SOURCE = 'evac-selected'
  *  file's own header comment on why these are bearing-driven points, not line-following chevrons. */
 const TRAFFIC_ROUTE_ARROWS_SOURCE = 'evac-traffic-route-arrows'
 const DIRECTION_LINE_ARROWS_SOURCE = 'evac-direction-line-arrows'
+/** Zone outlines -- populated via setEvacZonesData once /api/evacuation/summary resolves (it
+ *  always returns all 5 zones' unioned geometry, regardless of focus, per PLAN-evacuation.md
+ *  §2.4/§8.2). */
+const ZONE_OUTLINE_SOURCE = 'evac-zone-outline'
 const EMPTY_FEATURE_COLLECTION: FeatureCollection = { type: 'FeatureCollection', features: [] }
 
 /** Every layer id this module creates, grouped by which `evacVisibility` key controls it -- the
- *  single source of truth `setEvacLayersVisible` and the theme-swap pass both iterate. Keys not
- *  listed here (`zone_outline` -- no geometry until Phase 3) have nothing to toggle yet. */
-const LAYERS_BY_KEY: Record<Exclude<EvacKey, 'zone_outline'>, string[]> = {
+ *  single source of truth `setEvacLayersVisible` and the theme-swap pass both iterate. */
+const LAYERS_BY_KEY: Record<EvacKey, string[]> = {
   hfl_area: ['evac-hfl-area-fill', 'evac-hfl-area-outline'],
   hfl_line: ['evac-hfl-line'],
   traffic_route: [
@@ -70,6 +70,7 @@ const LAYERS_BY_KEY: Record<Exclude<EvacKey, 'zone_outline'>, string[]> = {
   footpath: [],
   fh_location: [],
   public_service_facilities: [],
+  zone_outline: ['evac-zone-outline-line', 'evac-zone-outline-label'],
 }
 
 function colorPair(pair: { light: string; dark: string }, theme: EvacTheme): string {
@@ -137,6 +138,40 @@ const PEAK_DAY_FILTER: FilterSpecification = ['==', ['get', 'plan'], 'Peak day']
 const NOT_PEAK_DAY_FILTER: FilterSpecification = ['!=', ['get', 'plan'], 'Peak day']
 const UNCLUSTERED_FILTER: FilterSpecification = ['!', ['has', 'point_count']]
 const CLUSTERED_FILTER: FilterSpecification = ['has', 'point_count']
+
+const HOVER_CONDITION = ['boolean', ['feature-state', 'hover'], false] as unknown as ExpressionSpecification
+
+/** Widens a hoverable evac-* line by `boost` px while MapLibre's native feature-state `hover` flag
+ *  is set on it (see MapView's evac hover mousemove/mouseleave handlers) -- shared by the 3
+ *  constant-width hoverable line layers (entry/exit routes, direction signage, emergency exits).
+ *  `base` must be a plain number, not a zoom expression -- MapLibre only allows a `zoom` input to
+ *  appear directly under `step`/`interpolate` or nested in `let`/`case`/`coalesce`, and wrapping
+ *  one in `+` (as an earlier version of this helper did) fails style validation with "Only step,
+ *  interpolate, let, and case expressions may be used in an expression that is compared against a
+ *  zoom" -- silently leaving the whole layer uncreated. `trafficRouteWidthExpr` below handles the
+ *  one hoverable layer that IS zoom-interpolated instead. Requires the source's `promoteId`
+ *  (already set for every layer this applies to -- see MapView's POI-source-creation loop) so a
+ *  feature's feature-state can be looked up by its real `id` rather than an internal tile-local
+ *  one. */
+function withHoverWidth(base: number, boost: number): ExpressionSpecification {
+  return ['case', HOVER_CONDITION, base + boost, base] as unknown as ExpressionSpecification
+}
+
+/** Same hover-boost idea as `withHoverWidth`, but for traffic_route's zoom-interpolated width --
+ *  the `case` has to live INSIDE each interpolation stop's output value, not wrap the whole
+ *  `interpolate` expression, since `zoom` may only appear directly under `step`/`interpolate` (see
+ *  `withHoverWidth`'s own comment for the validation error this avoids). */
+function trafficRouteWidthExpr(boost: number): ExpressionSpecification {
+  return [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    8,
+    ['case', HOVER_CONDITION, 2.5 + boost, 2.5],
+    14,
+    ['case', HOVER_CONDITION, 4 + boost, 4],
+  ] as unknown as ExpressionSpecification
+}
 
 function ensureBadgeImage(map: MLMap, text: string, color: string): string {
   const id = badgeIconId(text, color)
@@ -210,6 +245,7 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
   // creation, same "layers exist, data arrives async" shape as SELECTED_SOURCE.
   map.addSource(TRAFFIC_ROUTE_ARROWS_SOURCE, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
   map.addSource(DIRECTION_LINE_ARROWS_SOURCE, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+  map.addSource(ZONE_OUTLINE_SOURCE, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
 
   // --- Flood risk (off by default; hfl_area/hfl_line are 25-Aug-2026-only, see CONTEXT.md §10) --
   map.addLayer({
@@ -261,6 +297,43 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
     },
   })
 
+  // --- Zone outlines (supporting; off by default) -----------------------------------------------
+  // Thick dashed outline + a name label -- geometry is the ST_Union of each zone's member sectors,
+  // fed by setEvacZonesData once /api/evacuation/summary resolves (§2.4/§8.2). A `line` layer on
+  // Polygon/MultiPolygon geometry renders its ring automatically, same as a `symbol` layer picks a
+  // reasonable label point inside it -- no separate point source needed, unlike sector labels
+  // elsewhere in the app (those come from a real per-sector centroid source because they also need
+  // to line up with individual sector polygons at every zoom, not just look roughly centered).
+  map.addLayer({
+    id: 'evac-zone-outline-line',
+    type: 'line',
+    source: ZONE_OUTLINE_SOURCE,
+    layout: { visibility: 'none', 'line-join': 'round' },
+    paint: {
+      'line-color': colorPair(EVAC_COLORS.zoneOutline, theme),
+      'line-width': 3,
+      'line-dasharray': [3, 2],
+      'line-opacity': 0.8,
+    },
+  })
+  map.addLayer({
+    id: 'evac-zone-outline-label',
+    type: 'symbol',
+    source: ZONE_OUTLINE_SOURCE,
+    layout: {
+      visibility: 'none',
+      'text-field': ['get', 'label'],
+      'text-font': ['Noto Sans Bold'],
+      'text-size': 13,
+      'text-letter-spacing': 0.05,
+    },
+    paint: {
+      'text-color': colorPair(EVAC_COLORS.zoneOutline, theme),
+      'text-halo-color': theme === 'light' ? '#ffffff' : '#0b0f19',
+      'text-halo-width': 1.5,
+    },
+  })
+
   // --- Traffic routes (core layer; on by default) ---------------------------------------------
   map.addLayer({
     id: 'evac-traffic-route-casing',
@@ -284,7 +357,7 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
       layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' },
       paint: {
         'line-color': entryExitColorExpr('entry_exit', theme),
-        'line-width': ['interpolate', ['linear'], ['zoom'], 8, 2.5, 14, 4] as unknown as ExpressionSpecification,
+        'line-width': trafficRouteWidthExpr(1.5),
         ...(dashed ? { 'line-dasharray': [2, 1.5] } : {}),
       },
     })
@@ -333,7 +406,7 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
     layout: { visibility: 'none' },
     paint: {
       'line-color': entryExitColorExpr('remark', theme),
-      'line-width': 2.5,
+      'line-width': withHoverWidth(2.5, 1.5),
     },
   })
 
@@ -346,7 +419,7 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
     layout: { visibility: 'none' },
     paint: {
       'line-color': directionLineColorExpr(theme),
-      'line-width': 2,
+      'line-width': withHoverWidth(2, 1.5),
     },
   })
   // Same bearing-driven arrow point as traffic_route's above -- only the 89 ENTRY/EXIT wayfinding
@@ -399,7 +472,7 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
     layout: { visibility: 'none' },
     paint: {
       'line-color': colorPair(EVAC_COLORS.emergencyExit, theme),
-      'line-width': 2,
+      'line-width': withHoverWidth(2, 1.5),
     },
   })
 
@@ -617,6 +690,30 @@ export function setEvacArrowsData(
   directionSource?.setData(data.directionLine)
 }
 
+/** Feeds the zone-outline geojson source its data -- called from MapView whenever
+ *  /api/evacuation/summary resolves (it always returns all 5 zones, regardless of focus). Each
+ *  zone becomes one Feature carrying its own display label so the layer's `text-field` expression
+ *  never has to reformat the raw `ZONE NAME`-cased value itself. */
+export function setEvacZonesData(map: MLMap, zones: { zone: string; geojson: Geometry }[]): void {
+  const source = map.getSource(ZONE_OUTLINE_SOURCE) as GeoJSONSource | undefined
+  if (!source) return
+  source.setData({
+    type: 'FeatureCollection',
+    features: zones.map((z) => ({
+      type: 'Feature',
+      properties: { label: zoneDisplayLabel(z.zone) },
+      geometry: z.geojson,
+    })),
+  })
+}
+
+/** 'BAIRAGICAMP ZONE' -> 'Bairagicamp zone' -- same transform EvacuationModePanel's own
+ *  `zoneTitleCase` applies to search results, duplicated here (not exported/shared) since this is
+ *  the only other place a raw zone name reaches the UI. */
+function zoneDisplayLabel(zone: string): string {
+  return zone.charAt(0) + zone.slice(1).toLowerCase()
+}
+
 /** Re-applies every evac-* colour paint property and regenerates the EN/EXT badge images for the
  *  new theme -- called from MapView's one shared theme-swap effect (PLAN-evacuation.md §6.4).
  *  Images are coloured when created (`makeBadgeIcon` bakes the fill in), so unlike a plain
@@ -637,6 +734,16 @@ export function applyEvacTheme(map: MLMap, theme: EvacTheme): void {
     colorPair(EVAC_COLORS.floodArea, theme),
   )
   map.setPaintProperty('evac-hfl-line', 'line-color', colorPair(EVAC_COLORS.floodLine, theme))
+
+  if (map.getLayer('evac-zone-outline-line')) {
+    map.setPaintProperty('evac-zone-outline-line', 'line-color', colorPair(EVAC_COLORS.zoneOutline, theme))
+    map.setPaintProperty('evac-zone-outline-label', 'text-color', colorPair(EVAC_COLORS.zoneOutline, theme))
+    map.setPaintProperty(
+      'evac-zone-outline-label',
+      'text-halo-color',
+      theme === 'light' ? '#ffffff' : '#0b0f19',
+    )
+  }
 
   map.setPaintProperty(
     'evac-traffic-route-casing',

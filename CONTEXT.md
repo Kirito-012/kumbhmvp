@@ -633,6 +633,26 @@ Evacuation's whole dropdown — narrower than the original "extract everything" 
 sector-classes/POI subclass trees stayed put in MapView.tsx) to keep the regression risk Phase 4 flagged
 near zero, verified via live before/after checks in both themes.
 
+**Second deferred-item follow-up (same day):** 5 more — see `PLAN-evacuation.md` §15. **Zone outlines**
+now actually render (`evac-zone-outline-line`/`-label` + `setEvacZonesData`, fed by
+`/api/evacuation/summary`'s already-returned zone geometry) — the toggle existed since Phase 1 but had
+no layers behind it. **Hover feature-state** on the 5 hoverable evac-\* lines. **`sector-plan-fill`
+dims to ~40% in Evacuation mode** — this uncovered two real pre-existing bugs while implementing it:
+`showClassWash`'s mode check was hardcoded to `'map'`, so the wash literally could never show in
+Evacuation mode at all regardless of the shared toggle (contradicting decision #6), and the class-filter
+effect that writes this opacity was missing `mapReady` from its dependency array, so a cold
+`?mode=evacuation` load's only pre-ready pass could early-return and never re-run — invisible until now
+because every value that effect ever wrote matched the layer's creation-time default in every mode.
+**Corridor chips now show counts** (a new `corridors` field on `/api/evacuation/summary`, with
+`useEvacuationSummary` lifted from `EvacuationPanel` to `MapView` so both docked panels share one
+fetch). **Traffic-route popups gained Sector/Length rows** (`kumbh.traffic_route` has neither column;
+both are computed in the tiles route — length via `ST_Length`, sector via the same nearest-centroid
+`LEFT JOIN LATERAL` technique `/api/evacuation/arrows` already uses). Two separate MapLibre "zoom
+expression" style-validation errors were hit and fixed while building hover and dimming (a zoom-based
+paint value can only be wrapped by `step`/`interpolate`/`let`/`case` directly, never by an arbitrary
+runtime operator like `+`/`*` around the whole expression) — worth remembering for any future evac-\*
+paint property that combines a zoom-interpolated base with a runtime modifier.
+
 ---
 
 ## 10. The geospatial data

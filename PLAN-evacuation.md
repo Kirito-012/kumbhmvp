@@ -477,3 +477,65 @@ Verified live in both themes; `tsc`/`eslint`/`npm test` (85 tests) clean. A stra
 defined" runtime error surfaced mid-session and turned out to be a stale Turbopack chunk cache on a dev
 server that had been hot-reloading for the entire multi-hour session — restarting it (not a code change)
 resolved it; noted here in case it recurs and looks like a real regression.
+
+## 15. Second deferred-item follow-up (2026-09-15) — zone outlines, hover, dimming, chip counts, popup rows
+
+The remaining 5 items from §11's original design (§10's Phase 2 note, §7.2 item 4, §9's popup spec):
+
+1. **Zone outlines never rendered.** `zone_outline` had an `EvacKey` entry and a default (off), but
+   no layers existed for it in `evacLayers.ts` and `EvacuationModePanel` filtered it out of the toggle
+   list entirely. Added `evac-zone-outline-line`/`-label` (a `line`+`symbol` pair on a new
+   `evac-zone-outline` geojson source, fed by a new `setEvacZonesData` whenever
+   `/api/evacuation/summary` resolves -- it already returns all 5 zones' unioned geometry regardless
+   of focus), a new `EVAC_COLORS.zoneOutline` (amber, matching this mode's own accent), and un-filtered
+   the toggle. Verified live: turning it on shows a dashed amber outline with a "Rishikesh zone" label.
+2. **Hover feature-state.** Added real MapLibre feature-state hover (not a filter-swap overlay like
+   Map mode's own sector hover -- 5 separate line layers would need 5x the filter bookkeeping for no
+   benefit once feature-state is available, and every source here already sets `promoteId: 'id'`).
+   `mousemove`/`mouseleave` on the 5 hoverable line layers (traffic routes, entry/exit routes,
+   direction signage, emergency exits) toggle `feature-state.hover`, read by each layer's `line-width`
+   via a `case` expression. **Hit a real MapLibre validation error while wiring this up**: wrapping
+   traffic_route's zoom-interpolated width in `['case', ..., ['+', interpolateExpr, boost], ...]`
+   fails style validation ("zoom expression may only be used as input to a top-level step/interpolate
+   expression") and silently drops the whole layer -- fixed with a dedicated `trafficRouteWidthExpr`
+   that puts the `case` inside each interpolation stop's OUTPUT instead of wrapping the `interpolate`
+   itself. Verified live via direct `queryRenderedFeatures`/`getFeatureState` checks: cursor becomes a
+   pointer and `hover` flips true/false correctly on enter/leave.
+3. **Context dimming (`sector-plan-fill` to ~40% in Evacuation mode).** Discovered while implementing
+   this that the wash **couldn't show in Evacuation mode at all**, dimmed or not: `showClassWash`'s
+   mode check was hardcoded to `mode === 'map'`, contradicting decision #6/§5.3 ("sector_plan
+   ... share Map mode's toggle state") for every mode except Map itself. Fixed by widening that check
+   to `mode === 'map' || mode === 'evacuation'` (Heatmap/Ticket are untouched; Evacuation has no class
+   filters of its own, so `emphasisActive` is always false there, meaning the toggle alone decides
+   it) -- then added `SECTOR_FILL_OPACITY_DIMMED` (a second interpolate expression, each stop
+   pre-multiplied by 0.4, **not** a runtime `['*', SECTOR_FILL_OPACITY[theme], 0.4]` -- that hit the
+   exact same "zoom expression" validation error as item 2 above) and a shared
+   `sectorFillOpacityForMode` picker used by both the theme-swap effect and the class-filter effect
+   (so a theme toggle mid-evac-mode can't reset it back to full strength). **Also found and fixed a
+   latent "runs before mapReady" gap** in the class-filter effect itself while chasing why the dimmed
+   value wasn't applying on a cold `?mode=evacuation` load: its dependency array never included
+   `mapReady`, so its only pre-map-ready pass could early-return (layer doesn't exist yet) and never
+   re-run if no other dependency happened to change afterward -- invisible before now because every
+   value that effect ever wrote to `sector-plan-fill`'s opacity was identical to the layer's creation-
+   time value in every mode, so it never mattered whether the effect ran once or many times. Verified
+   live via `getPaintProperty`: evacuation mode reads `interpolate(...,0.04,...,0.12)` (dark theme),
+   exactly 0.4x Map mode's `0.1`/`0.3`.
+4. **Corridor chips had no counts.** Added a `corridors` field to `/api/evacuation/summary` (a
+   `count(*) FILTER (WHERE deh_dir = 1)`-style query per corridor, scoped by the same sector/zone
+   focus as every other count) and lifted `useEvacuationSummary` from `EvacuationPanel` up to
+   `MapView` (passed down as `summary`/`loading`/`error` props) so `EvacuationModePanel`'s Corridor
+   chips can read `summary.corridors` from the same fetch instead of a second one. Verified live:
+   chips read "Dehradun (3)", "Saharanpur (8)", "Meerut (5)".
+5. **Traffic-route popup was missing Sector and Length.** `kumbh.traffic_route` has neither column
+   directly, so both are computed in the tiles route: `length_m` via `ST_Length(geom::geography)`
+   inline in the column list, `sector_no` via a `LEFT JOIN LATERAL` nearest-sector lookup (same
+   technique `/api/evacuation/arrows` already uses for its bearing calculation) -- added a small
+   `extraJoin` field to the tiles route's per-layer config to support it generically. Verified live:
+   clicking a route now shows "Sector 21" / "Length 10.43 km" alongside the existing Direction/Plan/
+   Corridors rows.
+
+All 5 verified live (both themes where relevant); `tsc`/`eslint`/`npm test` (85 tests) clean. Two of
+the five (hover, dimming) hit the same class of MapLibre "zoom expression" style-validation error --
+worth remembering for any future evac-\* paint property that tries to combine a zoom-interpolated base
+value with a runtime math/case wrapper: the wrapper has to live *inside* the interpolation stops, not
+around the whole expression.
