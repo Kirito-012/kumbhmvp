@@ -121,7 +121,7 @@ function LegendBadge({ text, color }: { text: string; color: string }) {
     <span
       aria-hidden
       className="inline-flex h-4 w-6 shrink-0 items-center justify-center rounded-full text-[7px] font-bold text-white"
-      style={{ background: color }}
+      style={{ backgroundColor: color }}
     >
       {text}
     </span>
