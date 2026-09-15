@@ -481,7 +481,7 @@ on any viewport, whenever `InsightsModePanel` is collapsed (tracked via its `onW
 even with the panel tucked away. It deliberately recomputes its own small rollup from
 `insightsData`/`filters`/`heatMetric` rather than reaching into the paint effects' internal refs.
 
-### Evacuation mode — `PLAN-evacuation.md` (Phase 6 of ~8, in progress)
+### Evacuation mode — `PLAN-evacuation.md` (complete, Phases 0-7)
 
 A 4th `ModeSwitcher` segment (amber, `--map-mode-evacuation`, key `4`), for crowd-flow/evacuation
 planning: entry/exit points and routes, direction signage, emergency exits, traffic routes, plus
@@ -601,6 +601,15 @@ would query an evac-\* layer id and surface the gap. Fixed by removing the 4 cla
 entirely (flood risk is Evacuation-mode-only; its colours live in `EVAC_COLORS`,
 `src/lib/evacuation/layers.ts`). If either map ever needs a flood-risk-adjacent entry again, remember
 that adding one there is equivalent to adding a Map-mode toggle, not a private reference value.
+
+**Phase 6/7 (final polish):** see "`EvacuationPanel` (real, Phase 6)" above for the right panel's hero/
+nearby-care/legend/feature-list content and the `FloatingLegend` evacuation branch. Phase 7's one real
+a11y fix: `EvacuationModePanel`'s search implements genuine roving-highlight keyboard nav (arrow keys
+move a `highlightIndex`, Enter activates) but never exposed that to assistive tech — the input now
+carries `role="combobox"`/`aria-expanded`/`aria-controls`/`aria-activedescendant`, and every
+`role="option"` row has a matching `id`. The listbox's non-option children (group headers, loading/
+error/empty states) got `role="presentation"` to keep the tree valid. Both modes' panels, the shared
+search UI, and every layer toggle are covered; nothing else in the mode needed an a11y change.
 
 ---
 
@@ -879,12 +888,12 @@ Branch `feat/heatmap` (not yet merged to `main`). Recent work (this may be stale
   with 21 extra hospitals, `sector_boundary.zone` backfilled — see §10's "Two source drops". Map
   mode's Emergency Exit toggle now draws real data again (its own `emergency-exit-line` layer/source,
   not a `road-line` filter).
-- Evacuation mode Phases 1-6 committed: mode plumbing, map layers (only genuinely live as of Phase 5 --
-  see §9's classColors.ts bug writeup), search/summary APIs, a real `EvacuationModePanel` (now including
-  a "Base layers" section), click/popup/selection-highlight handling, and a real `EvacuationPanel` (hero
-  tiles, nearby care, legend, feature list) plus a `FloatingLegend` evacuation branch — §9's "Evacuation
-  mode" subsection. Verified live in both themes and at 375px. Phase 7 (polish/a11y, final verification)
-  hasn't started.
+- Evacuation mode (`PLAN-evacuation.md`) **complete, all 8 phases (0-7) committed**: mode plumbing, map
+  layers (only genuinely live as of Phase 5 -- see §9's classColors.ts bug writeup), search/summary APIs,
+  a real `EvacuationModePanel` (including a "Base layers" section) and `EvacuationPanel` (hero tiles,
+  nearby care, legend, feature list), click/popup/selection-highlight handling, a `FloatingLegend`
+  evacuation branch, and a Phase 7 a11y pass on the search combobox — §9's "Evacuation mode" subsection.
+  Verified live in both themes and at 375px; `tsc`/`eslint`/`npm test` (85 tests) clean.
 
 Open items:
 

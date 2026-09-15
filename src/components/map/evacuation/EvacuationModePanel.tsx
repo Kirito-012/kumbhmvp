@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { Fragment, useMemo, useRef, useState } from 'react'
 import Panel from '@/components/map/Panel'
 import { EvacuationIcon, GridIcon, MapPinIcon, ParcelIcon, SearchIcon, TagIcon, XIcon } from '@/components/map/icons'
 import { Reveal } from '@/components/map/insights/charts'
@@ -338,6 +338,13 @@ export default function EvacuationModePanel({
             onKeyDown={onInputKeyDown}
             placeholder="Search exits, routes, signage, sectors, zones…"
             aria-label="Search evacuation layers, sectors and zones"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={dropdownOpen && trimmed.length > 0}
+            aria-controls="evac-search-listbox"
+            aria-activedescendant={
+              dropdownOpen && flatRows[highlightIndex] ? `evac-option-${highlightIndex}` : undefined
+            }
             style={{
               borderColor: 'var(--map-border)',
               background: 'var(--map-input-bg)',
@@ -361,29 +368,30 @@ export default function EvacuationModePanel({
 
           {dropdownOpen && trimmed.length > 0 && (
             <ul
+              id="evac-search-listbox"
               role="listbox"
               aria-label="Search results"
               style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface)' }}
               className="kumbh-scroll absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border py-1 shadow-lg"
             >
               {loading && flatRows.length === 0 && (
-                <li className="relative h-1 overflow-hidden">
+                <li role="presentation" className="relative h-1 overflow-hidden">
                   <div className="absolute inset-y-0 w-1/3 animate-[loading-sweep_1.1s_ease-in-out_infinite] rounded-full bg-[var(--map-accent)]" />
                 </li>
               )}
               {error && (
-                <li className="px-3 py-2 text-[12px]" style={{ color: 'var(--danger)' }}>
+                <li role="presentation" className="px-3 py-2 text-[12px]" style={{ color: 'var(--danger)' }}>
                   {error}
                 </li>
               )}
               {!loading && !error && flatRows.length === 0 && (
-                <li className="px-3 py-3 text-[12.5px]" style={{ color: 'var(--map-fg-faint)' }}>
+                <li role="presentation" className="px-3 py-3 text-[12.5px]" style={{ color: 'var(--map-fg-faint)' }}>
                   No evacuation features match &ldquo;{query}&rdquo;
                 </li>
               )}
               {matchedSectors.length > 0 && (
                 <>
-                  <li className="px-3 pt-1.5" style={{ color: 'var(--map-fg-faint)' }}>
+                  <li role="presentation" className="px-3 pt-1.5" style={{ color: 'var(--map-fg-faint)' }}>
                     <span className="text-[10.5px] font-semibold uppercase tracking-wide">
                       Jump to sector
                     </span>
@@ -396,6 +404,7 @@ export default function EvacuationModePanel({
                       <li key={`sector-${sector.sector_no}`}>
                         <button
                           type="button"
+                          id={`evac-option-${index}`}
                           role="option"
                           aria-selected={index === highlightIndex}
                           onMouseEnter={() => setHighlightIndex(index)}
@@ -416,7 +425,7 @@ export default function EvacuationModePanel({
               )}
               {matchedZones.length > 0 && (
                 <>
-                  <li className="px-3 pt-1.5" style={{ color: 'var(--map-fg-faint)' }}>
+                  <li role="presentation" className="px-3 pt-1.5" style={{ color: 'var(--map-fg-faint)' }}>
                     <span className="text-[10.5px] font-semibold uppercase tracking-wide">Zones</span>
                   </li>
                   {matchedZones.map((entry) => {
@@ -427,6 +436,7 @@ export default function EvacuationModePanel({
                       <li key={`zone-${entry.zone}`}>
                         <button
                           type="button"
+                          id={`evac-option-${index}`}
                           role="option"
                           aria-selected={index === highlightIndex}
                           onMouseEnter={() => setHighlightIndex(index)}
@@ -446,8 +456,8 @@ export default function EvacuationModePanel({
                 </>
               )}
               {groups.map((group) => (
-                <div key={group.layer}>
-                  <li className="px-3 pt-1.5" style={{ color: 'var(--map-fg-faint)' }}>
+                <Fragment key={group.layer}>
+                  <li role="presentation" className="px-3 pt-1.5" style={{ color: 'var(--map-fg-faint)' }}>
                     <span className="text-[10.5px] font-semibold uppercase tracking-wide">
                       {EVAC_LAYER_LABELS[group.layer as EvacKey] ?? group.layer}
                     </span>
@@ -460,6 +470,7 @@ export default function EvacuationModePanel({
                       <li key={`${group.layer}-${result.id}`}>
                         <button
                           type="button"
+                          id={`evac-option-${index}`}
                           role="option"
                           aria-selected={index === highlightIndex}
                           onMouseEnter={() => setHighlightIndex(index)}
@@ -482,7 +493,7 @@ export default function EvacuationModePanel({
                       </li>
                     )
                   })}
-                </div>
+                </Fragment>
               ))}
             </ul>
           )}
