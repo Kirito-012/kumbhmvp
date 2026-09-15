@@ -572,3 +572,18 @@ and rotated on the map. Replaced with a plain isoceles triangle (rounded base co
 `quadraticCurveTo`, stroke drawn first and slightly wider than needed so it reads as a clean halo rather
 than bisecting the fill). Verified live in both themes: a solid, crisply-outlined arrowhead, no zigzag.
 `tsc`/`eslint`/`npm test` (85 tests) clean.
+
+**⚠️ Second correction, same day:** the "plain triangle with rounded base" fix above still didn't hold
+up -- its `quadraticCurveTo` control point sat *outside* the base line (further down/out than the two
+base corners), bulging the bottom edge outward into a lopsided blob instead of a clean flat or gently
+concave base; the user still called it "weird" and asked for "a professional-looking arrow." Rather than
+reason about a third path description in the abstract, built a throwaway test page
+(`public/arrow-test.html`, deleted before committing) rendering several candidate shapes side by side at
+real map sizes (20-64px) with the browser tool, compared them visually, then ported the best one back --
+a sharp tip with the curve's control point pulled *inward* (toward the tip) instead of outward, the
+detail that actually makes a shape read as "arrow" rather than "flag" or "blob". This is the third
+attempt at this one icon; the lesson for any future map icon that isn't a plain rectangle/circle:
+render actual candidates at actual sizes before trusting a path description, rather than iterating
+blind and shipping on code review alone. Verified live in both themes at the same location the earlier
+screenshots came from: a clean, sharp arrowhead, correctly rotated, no blob. `tsc`/`eslint`/`npm test`
+(85 tests) clean.

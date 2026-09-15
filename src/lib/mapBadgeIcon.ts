@@ -57,32 +57,36 @@ export function chevronIconId(color: string, strokeColor: string): string {
   return `map-chevron-${color.replace('#', '')}-${strokeColor.replace('#', '')}`
 }
 
-/** A solid, rounded-tip arrowhead pointing "up" (0 rotation), for `symbol` layers that set
- *  `icon-rotate` per-feature (PLAN-evacuation.md §6.2 items 5/7 -- traffic-route/direction-signage
- *  arrows). Deliberately not a `symbol-placement: 'line'` chevron-along-the-path (the plan's
- *  original sketch): that draws in the line's own vertex order, which checked-against-real-data
- *  has no reliable relationship to Entry/Exit (see the arrows API route's own comment) -- these
- *  render as a single point per feature instead, with `icon-rotate` driven by a bearing computed
- *  from reliable geometry (distance to the nearest sector), never from vertex order.
+/** A solid arrowhead pointing "up" (0 rotation), for `symbol` layers that set `icon-rotate` per-
+ *  feature (PLAN-evacuation.md §6.2 items 5/7 -- traffic-route/direction-signage arrows).
+ *  Deliberately not a `symbol-placement: 'line'` chevron-along-the-path (the plan's original
+ *  sketch): that draws in the line's own vertex order, which checked-against-real-data has no
+ *  reliable relationship to Entry/Exit (see the arrows API route's own comment) -- these render
+ *  as a single point per feature instead, with `icon-rotate` driven by a bearing computed from
+ *  reliable geometry (distance to the nearest sector), never from vertex order.
  *
- *  A plain isoceles triangle, not a chevron/ribbon shape with a notch cut into its trailing edge
- *  -- an earlier version's notch went deep enough (30% of the shape's height) to visually split
- *  the arrowhead into two thin points, reading as an ugly zigzag/"W" once filled and stroked at
- *  the small sizes this renders at (a user screenshot caught this; the notched version had looked
- *  fine only in code review, never actually viewed rendered on the map). `strokeColor` outlines
- *  the triangle in a basemap-contrasting color (reuses `EVAC_COLORS.emergencyExitCasing` -- white
- *  on the light basemap, near-black on the dark one, same "cut a border against whatever's
- *  underneath" idea as emergency exits' own casing line) so a same-hue fill doesn't disappear
- *  against a same-colored route line underneath it. Stroked first and slightly wider than the
- *  fill's own line width so the outline reads as a clean halo around the shape rather than
- *  bisecting it, then the fill on top keeps the interior a solid block of color. */
+ *  A sharp tip with a gently concave back edge (like a paper-airplane/navigation-arrow silhouette,
+ *  the same family as Google/Apple Maps' own direction-of-travel indicator) -- tuned by rendering
+ *  actual candidate shapes at real map sizes (20-64px) side by side rather than reasoning about
+ *  path coordinates in the abstract, after two earlier versions each looked fine as a path
+ *  description but rendered wrong once actually on the map: a too-deep notch that split the tip
+ *  into two points (a zigzag/"W"), then a curve whose control point bulged the back edge outward
+ *  instead of inward (a lopsided blob). The concave curve here bows gently INWARD, toward the tip,
+ *  which is what actually reads as "arrow" rather than "flag" or "blob" at a glance.
+ *
+ *  `strokeColor` outlines the shape in a basemap-contrasting color (reuses
+ *  `EVAC_COLORS.emergencyExitCasing` -- white on the light basemap, near-black on the dark one,
+ *  same "cut a border against whatever's underneath" idea as emergency exits' own casing line) so
+ *  a same-hue fill doesn't disappear against a same-colored route line underneath it. Stroked
+ *  first, filled on top, so the outline reads as a clean halo rather than bisecting the fill. */
 export function makeChevronIcon(color: string, strokeColor: string): ImageData {
   const scale = 4
-  const size = 14 * scale
+  const size = 16 * scale
   const cx = size / 2
   const tipY = size * 0.1
-  const baseY = size * 0.88
-  const halfWidth = size * 0.32
+  const wingY = size * 0.68
+  const notchY = size * 0.52
+  const halfWidth = size * 0.3
 
   const canvas = document.createElement('canvas')
   canvas.width = size
@@ -90,12 +94,12 @@ export function makeChevronIcon(color: string, strokeColor: string): ImageData {
   const ctx = canvas.getContext('2d')!
   ctx.beginPath()
   ctx.moveTo(cx, tipY)
-  ctx.lineTo(cx + halfWidth, baseY)
-  ctx.quadraticCurveTo(cx, baseY + scale * 0.6, cx - halfWidth, baseY)
+  ctx.lineTo(cx + halfWidth, wingY)
+  ctx.quadraticCurveTo(cx, notchY, cx - halfWidth, wingY)
   ctx.closePath()
 
   ctx.lineJoin = 'round'
-  ctx.lineWidth = scale * 1.6
+  ctx.lineWidth = size * 0.035
   ctx.strokeStyle = strokeColor
   ctx.stroke()
 
