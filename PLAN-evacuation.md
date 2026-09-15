@@ -560,3 +560,15 @@ pair together. `icon-size` raised to 1.3 (traffic routes) / 1.1 (direction signa
 smaller since its underlying segments are shorter). Verified live in both themes at a normal viewing
 zoom (15) with no camera trickery needed: a chevron is now clearly visible mid-route, correctly rotated
 and colored, with a crisp contrasting outline. `tsc`/`eslint`/`npm test` (85 tests) clean.
+
+**⚠️ Correction, same day:** §16's fix made the arrows *findable*, but a user screenshot at that same
+zoom showed them rendering as an ugly red zigzag/"W" outline, not a clean triangle -- the shape itself
+was the remaining problem, not just its size/contrast. The original `makeChevronIcon` drew a chevron
+with a notch cut into its trailing edge (a flag/ribbon-tail shape) rather than a plain triangle, and the
+notch went deep enough (30% of the shape's height) to visually split the arrowhead into two thin points
+once filled and stroked at map scale -- something code review alone never caught, since the shape looks
+fine as a standalone SVG-style path description and only reads as broken once actually rendered small
+and rotated on the map. Replaced with a plain isoceles triangle (rounded base corners via
+`quadraticCurveTo`, stroke drawn first and slightly wider than needed so it reads as a clean halo rather
+than bisecting the fill). Verified live in both themes: a solid, crisply-outlined arrowhead, no zigzag.
+`tsc`/`eslint`/`npm test` (85 tests) clean.

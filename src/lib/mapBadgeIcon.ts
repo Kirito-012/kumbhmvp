@@ -57,43 +57,50 @@ export function chevronIconId(color: string, strokeColor: string): string {
   return `map-chevron-${color.replace('#', '')}-${strokeColor.replace('#', '')}`
 }
 
-/** A solid triangle pointing "up" (0 rotation), for `symbol` layers that set `icon-rotate`
- *  per-feature (PLAN-evacuation.md §6.2 items 5/7 -- traffic-route/direction-signage arrows).
- *  Deliberately not a `symbol-placement: 'line'` chevron-along-the-path (the plan's original
- *  sketch): that draws in the line's own vertex order, which checked-against-real-data has no
- *  reliable relationship to Entry/Exit (see the arrows API route's own comment) -- these render
- *  as a single point per feature instead, with `icon-rotate` driven by a bearing computed from
- *  reliable geometry (distance to the nearest sector), never from vertex order.
+/** A solid, rounded-tip arrowhead pointing "up" (0 rotation), for `symbol` layers that set
+ *  `icon-rotate` per-feature (PLAN-evacuation.md §6.2 items 5/7 -- traffic-route/direction-signage
+ *  arrows). Deliberately not a `symbol-placement: 'line'` chevron-along-the-path (the plan's
+ *  original sketch): that draws in the line's own vertex order, which checked-against-real-data
+ *  has no reliable relationship to Entry/Exit (see the arrows API route's own comment) -- these
+ *  render as a single point per feature instead, with `icon-rotate` driven by a bearing computed
+ *  from reliable geometry (distance to the nearest sector), never from vertex order.
  *
- *  `strokeColor` outlines the triangle in a basemap-contrasting color (reuses
- *  `EVAC_COLORS.emergencyExitCasing` -- white on the light basemap, near-black on the dark one,
- *  same "cut a border against whatever's underneath" idea as emergency exits' own casing line).
- *  A same-hue fill with no outline all but disappeared against a same-color route line underneath
- *  it at the sizes/zooms this mode actually gets viewed at -- caught only by checking rendered
- *  pixels directly (`queryRenderedFeatures` said the feature was there; a screenshot at normal
- *  zoom couldn't find it) after a user report that signage arrows weren't visible. Canvas size
- *  bumped from 10 to 16 units alongside this so the stroke doesn't eat a big share of a still-tiny
- *  icon at typical `icon-size` values. */
+ *  A plain isoceles triangle, not a chevron/ribbon shape with a notch cut into its trailing edge
+ *  -- an earlier version's notch went deep enough (30% of the shape's height) to visually split
+ *  the arrowhead into two thin points, reading as an ugly zigzag/"W" once filled and stroked at
+ *  the small sizes this renders at (a user screenshot caught this; the notched version had looked
+ *  fine only in code review, never actually viewed rendered on the map). `strokeColor` outlines
+ *  the triangle in a basemap-contrasting color (reuses `EVAC_COLORS.emergencyExitCasing` -- white
+ *  on the light basemap, near-black on the dark one, same "cut a border against whatever's
+ *  underneath" idea as emergency exits' own casing line) so a same-hue fill doesn't disappear
+ *  against a same-colored route line underneath it. Stroked first and slightly wider than the
+ *  fill's own line width so the outline reads as a clean halo around the shape rather than
+ *  bisecting it, then the fill on top keeps the interior a solid block of color. */
 export function makeChevronIcon(color: string, strokeColor: string): ImageData {
   const scale = 4
-  const size = 16 * scale
+  const size = 14 * scale
+  const cx = size / 2
+  const tipY = size * 0.1
+  const baseY = size * 0.88
+  const halfWidth = size * 0.32
 
   const canvas = document.createElement('canvas')
   canvas.width = size
   canvas.height = size
   const ctx = canvas.getContext('2d')!
   ctx.beginPath()
-  ctx.moveTo(size / 2, scale)
-  ctx.lineTo(size - scale, size - scale)
-  ctx.lineTo(size / 2, size * 0.7)
-  ctx.lineTo(scale, size - scale)
+  ctx.moveTo(cx, tipY)
+  ctx.lineTo(cx + halfWidth, baseY)
+  ctx.quadraticCurveTo(cx, baseY + scale * 0.6, cx - halfWidth, baseY)
   ctx.closePath()
+
+  ctx.lineJoin = 'round'
+  ctx.lineWidth = scale * 1.6
+  ctx.strokeStyle = strokeColor
+  ctx.stroke()
+
   ctx.fillStyle = color
   ctx.fill()
-  ctx.lineWidth = scale * 1.25
-  ctx.strokeStyle = strokeColor
-  ctx.lineJoin = 'round'
-  ctx.stroke()
 
   return ctx.getImageData(0, 0, size, size)
 }
