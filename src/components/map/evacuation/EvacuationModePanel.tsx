@@ -2,8 +2,11 @@
 
 import { Fragment, useMemo, useRef, useState } from 'react'
 import Panel from '@/components/map/Panel'
-import { EvacuationIcon, GridIcon, MapPinIcon, ParcelIcon, SearchIcon, TagIcon, XIcon } from '@/components/map/icons'
+import { EvacuationIcon, GridIcon, MapPinIcon, ParcelIcon, TagIcon } from '@/components/map/icons'
 import { Reveal } from '@/components/map/insights/charts'
+import SearchInput from '@/components/map/search/SearchInput'
+import SearchGroupHeader from '@/components/map/search/SearchGroupHeader'
+import SearchResultRow from '@/components/map/search/SearchResultRow'
 import {
   EVAC_CORE_KEYS,
   EVAC_FLOOD_KEYS,
@@ -173,13 +176,13 @@ function Chip({
 
 /**
  * Left-docked panel for Evacuation mode -- search, scenario/direction/corridor filters, and
- * layer toggles (PLAN-evacuation.md §7.2). Phase 4: the search UI here is self-contained rather
- * than extracted from/shared with Map mode's own unified search (the plan's original §7.1
- * "shared search UI" sketch) -- refactoring MapView's ~700-line search block carried real
- * regression risk for zero behaviour change to Map mode, so this ships its own equivalent
- * instead, following the same visual conventions (rounded input, grouped dropdown, checkbox
- * rows) without touching that code. Revisit as a follow-up cleanup if the two ever need to
- * change in lockstep.
+ * layer toggles (PLAN-evacuation.md §7.2). The search input, group headers, and result rows use
+ * the shared `src/components/map/search/*` components (§7.1/§13's post-launch follow-up) --
+ * Map mode's own search still has its own bespoke rendering for the pieces that don't have a
+ * clean shared shape (the sector-classes/POI subclass trees, the "Jump to sector" rows), but the
+ * input chrome and group-header styling now come from the same components. The keyboard-nav
+ * state machine (highlightIndex/flatRows/activateRow) and the actual query matching stay entirely
+ * local to this file -- only the presentational leaf pieces moved.
  */
 export default function EvacuationModePanel({
   evacVisibility,
@@ -324,47 +327,29 @@ export default function EvacuationModePanel({
     >
       <div className="flex flex-col gap-4">
         <div className="relative">
-          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--map-fg-faint)]" />
-          <input
+          <SearchInput
             ref={inputRef}
-            type="text"
             value={query}
-            onChange={(e) => {
-              setQuery(e.target.value)
+            onChange={(value) => {
+              setQuery(value)
               setDropdownOpen(true)
               setHighlightIndex(0)
             }}
             onFocus={() => setDropdownOpen(true)}
             onKeyDown={onInputKeyDown}
             placeholder="Search exits, routes, signage, sectors, zones…"
-            aria-label="Search evacuation layers, sectors and zones"
-            role="combobox"
-            aria-autocomplete="list"
-            aria-expanded={dropdownOpen && trimmed.length > 0}
-            aria-controls="evac-search-listbox"
-            aria-activedescendant={
-              dropdownOpen && flatRows[highlightIndex] ? `evac-option-${highlightIndex}` : undefined
-            }
-            style={{
-              borderColor: 'var(--map-border)',
-              background: 'var(--map-input-bg)',
-              color: 'var(--map-fg)',
+            ariaLabel="Search evacuation layers, sectors and zones"
+            combobox={{
+              expanded: dropdownOpen && trimmed.length > 0,
+              controls: 'evac-search-listbox',
+              activeDescendant:
+                dropdownOpen && flatRows[highlightIndex] ? `evac-option-${highlightIndex}` : undefined,
             }}
-            className="w-full rounded-xl border py-2.5 pl-9 pr-8 text-[14px] placeholder:text-[var(--map-fg-faint)] outline-none transition-shadow focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
+            onClear={() => {
+              setQuery('')
+              inputRef.current?.focus()
+            }}
           />
-          {query && (
-            <button
-              type="button"
-              onClick={() => {
-                setQuery('')
-                inputRef.current?.focus()
-              }}
-              aria-label="Clear search"
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer text-[var(--map-fg-faint)] hover:text-[var(--map-fg-muted)]"
-            >
-              <XIcon className="h-3.5 w-3.5" />
-            </button>
-          )}
 
           {dropdownOpen && trimmed.length > 0 && (
             <ul
@@ -391,10 +376,13 @@ export default function EvacuationModePanel({
               )}
               {matchedSectors.length > 0 && (
                 <>
-                  <li role="presentation" className="px-3 pt-1.5" style={{ color: 'var(--map-fg-faint)' }}>
-                    <span className="text-[10.5px] font-semibold uppercase tracking-wide">
-                      Jump to sector
-                    </span>
+                  <li role="presentation">
+                    <SearchGroupHeader
+                      label="Jump to sector"
+                      icon={MapPinIcon}
+                      theme="blue"
+                      count={matchedSectors.length}
+                    />
                   </li>
                   {matchedSectors.map((sector) => {
                     const index = flatRows.findIndex(
@@ -402,22 +390,14 @@ export default function EvacuationModePanel({
                     )
                     return (
                       <li key={`sector-${sector.sector_no}`}>
-                        <button
-                          type="button"
+                        <SearchResultRow
                           id={`evac-option-${index}`}
-                          role="option"
-                          aria-selected={index === highlightIndex}
+                          label={formatSectorLabel(sector)}
+                          icon={MapPinIcon}
+                          highlighted={index === highlightIndex}
                           onMouseEnter={() => setHighlightIndex(index)}
                           onClick={() => activateRow({ kind: 'sector', sector })}
-                          style={{
-                            background:
-                              index === highlightIndex ? 'var(--map-surface-hover)' : 'transparent',
-                          }}
-                          className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-[12.5px]"
-                        >
-                          <MapPinIcon className="h-3.5 w-3.5 shrink-0 text-[var(--map-fg-faint)]" />
-                          {formatSectorLabel(sector)}
-                        </button>
+                        />
                       </li>
                     )
                   })}
@@ -425,8 +405,13 @@ export default function EvacuationModePanel({
               )}
               {matchedZones.length > 0 && (
                 <>
-                  <li role="presentation" className="px-3 pt-1.5" style={{ color: 'var(--map-fg-faint)' }}>
-                    <span className="text-[10.5px] font-semibold uppercase tracking-wide">Zones</span>
+                  <li role="presentation">
+                    <SearchGroupHeader
+                      label="Zones"
+                      icon={MapPinIcon}
+                      theme="teal"
+                      count={matchedZones.length}
+                    />
                   </li>
                   {matchedZones.map((entry) => {
                     const index = flatRows.findIndex(
@@ -434,22 +419,14 @@ export default function EvacuationModePanel({
                     )
                     return (
                       <li key={`zone-${entry.zone}`}>
-                        <button
-                          type="button"
+                        <SearchResultRow
                           id={`evac-option-${index}`}
-                          role="option"
-                          aria-selected={index === highlightIndex}
+                          label={zoneTitleCase(entry.zone)}
+                          icon={MapPinIcon}
+                          highlighted={index === highlightIndex}
                           onMouseEnter={() => setHighlightIndex(index)}
                           onClick={() => activateRow({ kind: 'zone', entry })}
-                          style={{
-                            background:
-                              index === highlightIndex ? 'var(--map-surface-hover)' : 'transparent',
-                          }}
-                          className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-[12.5px]"
-                        >
-                          <MapPinIcon className="h-3.5 w-3.5 shrink-0 text-[var(--map-fg-faint)]" />
-                          {zoneTitleCase(entry.zone)}
-                        </button>
+                        />
                       </li>
                     )
                   })}
@@ -457,10 +434,13 @@ export default function EvacuationModePanel({
               )}
               {groups.map((group) => (
                 <Fragment key={group.layer}>
-                  <li role="presentation" className="px-3 pt-1.5" style={{ color: 'var(--map-fg-faint)' }}>
-                    <span className="text-[10.5px] font-semibold uppercase tracking-wide">
-                      {EVAC_LAYER_LABELS[group.layer as EvacKey] ?? group.layer}
-                    </span>
+                  <li role="presentation">
+                    <SearchGroupHeader
+                      label={EVAC_LAYER_LABELS[group.layer as EvacKey] ?? group.layer}
+                      icon={MapPinIcon}
+                      theme="violet"
+                      count={group.results.length}
+                    />
                   </li>
                   {group.results.map((result) => {
                     const index = flatRows.findIndex(
@@ -468,28 +448,14 @@ export default function EvacuationModePanel({
                     )
                     return (
                       <li key={`${group.layer}-${result.id}`}>
-                        <button
-                          type="button"
+                        <SearchResultRow
                           id={`evac-option-${index}`}
-                          role="option"
-                          aria-selected={index === highlightIndex}
+                          label={result.label}
+                          sublabel={[result.sublabel, result.sectorName].filter(Boolean).join(' · ') || null}
+                          highlighted={index === highlightIndex}
                           onMouseEnter={() => setHighlightIndex(index)}
                           onClick={() => activateRow({ kind: 'result', layer: group.layer, result })}
-                          style={{
-                            background:
-                              index === highlightIndex ? 'var(--map-surface-hover)' : 'transparent',
-                          }}
-                          className="flex w-full cursor-pointer flex-col items-start px-3 py-1.5 text-left"
-                        >
-                          <span className="text-[12.5px]" style={{ color: 'var(--map-fg)' }}>
-                            {result.label}
-                          </span>
-                          {(result.sublabel || result.sectorName) && (
-                            <span className="text-[11px]" style={{ color: 'var(--map-fg-faint)' }}>
-                              {[result.sublabel, result.sectorName].filter(Boolean).join(' · ')}
-                            </span>
-                          )}
-                        </button>
+                        />
                       </li>
                     )
                   })}

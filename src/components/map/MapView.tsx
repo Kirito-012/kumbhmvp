@@ -104,17 +104,19 @@ import {
   RedoIcon,
   RoadIcon,
   RulerIcon,
-  SearchIcon,
   TagIcon,
   UndoIcon,
   XIcon,
 } from '@/components/map/icons'
 import EvacuationModePanel from '@/components/map/evacuation/EvacuationModePanel'
 import EvacuationPanel from '@/components/map/evacuation/EvacuationPanel'
+import SearchInput from '@/components/map/search/SearchInput'
+import SearchGroupHeader from '@/components/map/search/SearchGroupHeader'
 import {
   addEvacLayers,
   applyEvacFilters,
   applyEvacTheme,
+  setEvacArrowsData,
   setEvacLayersVisible,
 } from '@/components/map/evacuation/evacLayers'
 import {
@@ -790,6 +792,11 @@ const APP_SOURCE_IDS = new Set([
   'hfl_area',
   'hfl_line',
   'evac-selected',
+  // Client-populated geojson sources for the traffic-route/direction-signage arrows (post-launch
+  // fix, see PLAN-evacuation.md §13) -- same "client-populated, not a basemap source" reasoning as
+  // evac-selected above.
+  'evac-traffic-route-arrows',
+  'evac-direction-line-arrows',
   'measure-line',
   'measure-label',
   'measure-preview',
@@ -1280,6 +1287,11 @@ export default function MapView({
    *  Map mode). */
   const evacFocusRef = useRef<EvacFocus>(null)
   const evacSelectionRef = useRef<EvacSelection>(null)
+  /** The in-flight pulse-then-settle rAF loop for evac-selected (see that effect below) -- kept
+   *  in a ref (not state) purely so the effect's own cleanup can cancel a still-running pulse
+   *  when a new selection arrives mid-animation, without that cancellation itself being a
+   *  re-render trigger. */
+  const evacPulseFrameRef = useRef<number | null>(null)
   /** Last known *expanded* width of the right-docked Stats/Insights panel --
    *  read by reservedMapPadding (see below) so the map's centered area
    *  always leaves room for the panel at the width it would open to,
@@ -1664,6 +1676,20 @@ export default function MapView({
       .then(setSectors)
       .catch(() => {})
   }, [])
+
+  // One-time fetch of the arrow midpoints/bearings for evac-traffic-route-arrows/
+  // evac-direction-line-arrows (post-launch fix, PLAN-evacuation.md §13) -- fed into the two
+  // geojson sources addEvacLayers already created (empty) once both the map and the data are
+  // ready. Never refetched: the underlying tables are static reference data, same as sectors.
+  useEffect(() => {
+    if (!canUseInsights || !mapReady) return
+    const map = mapRef.current
+    if (!map) return
+    fetch('/api/evacuation/arrows')
+      .then((r) => r.json())
+      .then((data) => setEvacArrowsData(map, data))
+      .catch(() => {})
+  }, [canUseInsights, mapReady])
 
   // One-time initial fit to the real extent of every sector, once sector
   // data (with each one's xmin/ymin/xmax/ymax) has loaded. The map
@@ -4014,10 +4040,10 @@ export default function MapView({
   // Paints Evacuation mode's selected-feature highlight (PLAN-evacuation.md §6.2 item 11/§9) --
   // pushes evacSelection's geometry into the evac-selected geojson source (created empty in
   // evacLayers.ts's addEvacLayers) and shows whichever of the line/point pair matches its
-  // geometry type, hiding both when nothing is selected. A steady outline rather than the plan's
-  // pulse-then-settle animation -- the rAF tween is a nice-to-have polish step, not core
-  // functionality, and this phase's budget went to making the highlight/popup loop itself work
-  // for every evac layer type first (see evacPopupContent above).
+  // geometry type, hiding both when nothing is selected. A fresh selection pulses from an
+  // exaggerated peak down to its steady resting size/opacity over ~2.4s (ease-out), so it draws
+  // the eye before quieting to a plain outline -- the plan's original pulse-then-settle animation,
+  // added as a post-launch fix (§13) after shipping a steady highlight first.
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady || !map.getSource('evac-selected')) return
@@ -4037,6 +4063,35 @@ export default function MapView({
     map.setLayoutProperty('evac-selected-glow', 'visibility', isPoint ? 'none' : 'visible')
     map.setLayoutProperty('evac-selected-line', 'visibility', isPoint ? 'none' : 'visible')
     map.setLayoutProperty('evac-selected-point', 'visibility', isPoint ? 'visible' : 'none')
+
+    const m = map
+    const PULSE_DURATION_MS = 2400
+    const start = performance.now()
+    const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / PULSE_DURATION_MS)
+      const e = easeOutCubic(t)
+      if (isPoint) {
+        m.setPaintProperty('evac-selected-point', 'circle-radius', 22 - 10 * e) // 22 -> 12 (steady)
+        m.setPaintProperty('evac-selected-point', 'circle-opacity', 0.7 - 0.35 * e) // 0.7 -> 0.35
+      } else {
+        m.setPaintProperty('evac-selected-glow', 'line-width', 22 - 12 * e) // 22 -> 10 (steady)
+        m.setPaintProperty('evac-selected-glow', 'line-opacity', 0.85 - 0.35 * e) // 0.85 -> 0.5
+        m.setPaintProperty('evac-selected-line', 'line-width', 6 - 3 * e) // 6 -> 3 (steady)
+      }
+      evacPulseFrameRef.current = t < 1 ? requestAnimationFrame(tick) : null
+    }
+    evacPulseFrameRef.current = requestAnimationFrame(tick)
+
+    // Cancels a still-running pulse the instant a new selection arrives (or the mode/selection is
+    // cleared) -- without this, two overlapping rAF loops would fight over the same paint
+    // properties, visibly stuttering between two different pulse curves.
+    return () => {
+      if (evacPulseFrameRef.current !== null) {
+        cancelAnimationFrame(evacPulseFrameRef.current)
+        evacPulseFrameRef.current = null
+      }
+    }
   }, [evacSelection, mapReady])
 
   // Keeps the double-stroke selected-sector highlight in sync with insightSector while Heatmap is
@@ -5505,35 +5560,22 @@ export default function MapView({
                 </div>
               )}
               <div className="relative">
-                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--map-fg-faint)]" />
-                <input
-                  type="text"
+                {/* No `combobox` prop here: this is a plain textbox filtering a group below it,
+                    not a combobox owning a listbox (see the dropdown's own comment) -- claiming
+                    role="combobox" without implementing its roving-focus contract would be a
+                    false promise a screen reader takes at face value. */}
+                <SearchInput
                   value={query}
-                  onFocus={() => setPanelDropdownOpen(true)}
-                  onChange={(e) => {
-                    setQuery(e.target.value)
+                  onChange={(value) => {
+                    setQuery(value)
                     setPanelDropdownOpen(true)
                   }}
+                  onFocus={() => setPanelDropdownOpen(true)}
                   onKeyDown={(e) => {
                     if (e.key === 'Escape') setPanelDropdownOpen(false)
                   }}
                   placeholder="What do you want to see?"
-                  // The placeholder is not an accessible name -- it disappears
-                  // the moment the user types, leaving a screen reader to
-                  // announce "edit, blank".
-                  //
-                  // No aria-expanded here: that belongs to role="combobox", and
-                  // this input is a plain textbox filtering a group below it,
-                  // not a combobox owning a listbox (see the dropdown's own
-                  // comment). Claiming the attribute without the role is the
-                  // same false promise that role removed.
-                  aria-label="Search sectors, classes, POI layers and roads"
-                  style={{
-                    borderColor: 'var(--map-border)',
-                    background: 'var(--map-input-bg)',
-                    color: 'var(--map-fg)',
-                  }}
-                  className="w-full rounded-xl border py-2.5 pl-9 pr-3 text-[14px] placeholder:text-[var(--map-fg-faint)] outline-none transition-shadow focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
+                  ariaLabel="Search sectors, classes, POI layers and roads"
                 />
               </div>
               {/* Collapsed, this panel is just a placeholder and two toggles, which
@@ -5580,65 +5622,23 @@ export default function MapView({
                     const collapsed = isGroupCollapsed(group)
                     return (
                       <li key={group} role="presentation">
-                        {/* A plain row holding two SIBLING buttons -- the
-                          disclosure and "All" -- rather than one interactive
-                          header with the other nested inside it. Nesting one
-                          button inside another (in either direction) is
-                          invalid: a screen reader cannot say which of the two
-                          the user is on, and the inner one needed
-                          stopPropagation to avoid firing both. Native buttons
-                          also bring their own Enter/Space handling, so the
-                          hand-rolled onKeyDown is gone. */}
-                        <div className="flex w-full items-center gap-1.5 px-2.5 py-1.5 hover:bg-[var(--map-surface-hover)]">
-                          <button
-                            type="button"
-                            onClick={() => toggleCollapsedGroup(group)}
-                            aria-expanded={!collapsed}
-                            className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--map-accent)]"
-                          >
-                            <ChevronDownIcon
-                              className={`h-3 w-3 shrink-0 text-[var(--map-fg-faint)] transition-transform ${collapsed ? '-rotate-90' : ''}`}
-                            />
-                            <span
-                              className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px]"
-                              style={{
-                                background: `var(--map-section-${theme}-bg)`,
-                                color: `var(--map-section-${theme}-fg)`,
-                              }}
-                            >
-                              <GroupIcon className="h-2.5 w-2.5" />
-                            </span>
-                            <span
-                              className="flex-1 truncate text-[10.5px] font-bold uppercase tracking-wide"
-                              style={{ color: 'var(--map-fg-muted)' }}
-                            >
-                              {group}
-                            </span>
-                          </button>
-                          {(group === 'Sector classes' ||
-                            group === 'Roads' ||
-                            group === 'POI layers') && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (group === 'Sector classes') selectAllClasses()
-                                else if (group === 'Roads') selectAllRoads()
-                                else selectAllPois()
-                              }}
-                              aria-label={`Select all ${group}`}
-                              style={{ color: 'var(--map-accent)' }}
-                              className="shrink-0 cursor-pointer px-1 text-[10.5px] font-semibold hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--map-accent)]"
-                            >
-                              All
-                            </button>
-                          )}
-                          <span
-                            className="shrink-0 text-[10.5px] tabular-nums"
-                            style={{ color: 'var(--map-fg-faint)' }}
-                          >
-                            {rows}
-                          </span>
-                        </div>
+                        <SearchGroupHeader
+                          label={group}
+                          icon={GroupIcon}
+                          theme={theme}
+                          count={rows}
+                          collapsed={collapsed}
+                          onToggleCollapsed={() => toggleCollapsedGroup(group)}
+                          onSelectAll={
+                            group === 'Sector classes'
+                              ? selectAllClasses
+                              : group === 'Roads'
+                                ? selectAllRoads
+                                : group === 'POI layers'
+                                  ? selectAllPois
+                                  : undefined
+                          }
+                        />
                         {!collapsed && group === 'Jump to sector' && (
                           <ul>
                             {matchedSectors.map((s) => (

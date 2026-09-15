@@ -620,6 +620,19 @@ right-click and clicking empty area now clear `evacFocus`/`evacSelection` (new `
 too, not just `evacSelection`); and the Legend/`FloatingLegend` traffic-route/direction-signage swatches
 were corrected from an invented blue/violet to the actual rendered green/red direction colors.
 
+**Deferred-item follow-up (same day):** 3 more items from the original design, previously deferred or
+explicitly decided against, were implemented on request — see `PLAN-evacuation.md` §14. Traffic-route/
+direction-signage **arrows**: real data showed the source geometry's vertex order has no reliable
+relationship to Entry/Exit (checked via a nearest-sector-centroid distance comparison before writing any
+code — roughly 60/40 either way), so arrows are a new `/api/evacuation/arrows`-fed bearing computed from
+each route's midpoint to/from its nearest sector centroid instead of following the line itself, rendered
+as rotated chevron `symbol` layers. The selected-feature highlight now **pulses then settles** (~2.4s
+ease-out rAF) instead of a steady outline. And a **shared search UI** (`src/components/map/search/`:
+`SearchInput`/`SearchGroupHeader`/`SearchResultRow`) now backs both Map mode's input/group-headers and
+Evacuation's whole dropdown — narrower than the original "extract everything" sketch (the bespoke
+sector-classes/POI subclass trees stayed put in MapView.tsx) to keep the regression risk Phase 4 flagged
+near zero, verified via live before/after checks in both themes.
+
 ---
 
 ## 10. The geospatial data

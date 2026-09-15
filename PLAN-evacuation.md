@@ -427,3 +427,53 @@ All 4 verified live (fly-in confirmed via `/api/poi/locate` network requests; se
 right-click/empty-click clearing confirmed via direct DOM-dispatched click events against `queryRenderedFeatures`,
 since the automated browser's pixel-coordinate clicks proved unreliable for isolating "genuinely empty
 area" at a given zoom/pan). `tsc`/`eslint`/`npm test` (85 tests) clean.
+
+## 14. Deferred-item follow-up (2026-09-15) — arrows, pulse highlight, shared search UI
+
+Three items §11's original design called for but every phase deferred (§10's Phase 2/5 notes) or explicitly
+decided against (§10's Phase 4 note) were implemented as a follow-up, once the user asked for them directly:
+
+1. **Traffic-route / direction-signage arrows (§6.2 items 5/7).** The original sketch was a
+   `symbol-placement: 'line'` chevron following each line's own vertex direction — deferred every phase
+   because "arrow direction depends on drawing order in the source file" (§11) and shipping a wrong one is
+   worse than none. **Checked against real data before implementing anything**: for both `traffic_route`
+   and `direction_line`, comparing each row's start/end vertex distance to its nearest sector centroid
+   splits roughly 60/40 either way for both Entry and Exit rows — meaning the stored vertex order has no
+   reliable relationship to the row's actual Entry/Exit label at all (surveyors traced these lines in
+   whatever order was convenient in the source GIS software). Trusting or reversing that order would have
+   pointed a large, undetectable fraction of arrows backwards.
+
+   Shipped instead: a new `/api/evacuation/arrows` route computes, for each row with a resolvable
+   Entry/Exit direction, a single point at the line's midpoint and a bearing derived from geometry that
+   *is* reliable — the azimuth from that midpoint to (Entry) or from (Exit) its nearest sector's centroid,
+   i.e. "into the sector" / "away from the sector". This never depends on vertex order, so it can't inherit
+   that unreliability. Rendered as two new `symbol` layers (`evac-traffic-route-arrows`,
+   `evac-direction-line-arrows`) on new client-populated geojson sources, using a new chevron icon
+   generator (`makeChevronIcon` in `mapBadgeIcon.ts`) colored/rotated per feature (`icon-rotate` bound to
+   the computed bearing), shown from z12, filtered by the same `applyEvacFilters` logic as their base
+   lines. Verified live in both themes: a green chevron renders at the expected angle next to a sector-12
+   route, matching the entry/exit color scheme.
+2. **Selected-feature pulse animation (§6.2 item 11).** Phase 5 shipped a steady highlight instead of the
+   plan's pulse-then-settle animation ("polish, not core function"). Added: the `evac-selected` effect now
+   runs a ~2.4s ease-out rAF loop from an exaggerated peak (glow width 22/opacity 0.85, or point radius
+   22/opacity 0.7) down to the original steady values (width 10/opacity 0.5, or radius 12/opacity 0.35),
+   cancelled via the effect's own cleanup if a new selection arrives mid-pulse.
+3. **Shared search UI (§7.1).** Phase 4 explicitly decided against extracting Map mode's ~700-line unified
+   search, judging the regression risk to Map mode's most-used control disproportionate to the payoff for
+   an autonomous pass. Re-scoped narrower once asked to do it: three genuinely reusable presentational
+   pieces went into `src/components/map/search/` — `SearchInput` (icon + input, with optional combobox
+   aria wiring and an optional clear button), `SearchGroupHeader` (icon chip + label + count, optional
+   collapse/expand and "select all"), and `SearchResultRow` (icon+label or label+sublabel, extracted from
+   Evacuation's own 3x-duplicated result-row markup). Map mode's input and every group header (Jump to
+   sector / Sector classes / Roads / POI layers / Base layers) now render through the first two, verified
+   byte-identical via before/after screenshots in both themes plus a live toggle-and-filter-chip check;
+   the genuinely bespoke pieces (the sector-classes/POI subclass trees, the plain "Jump to sector" rows)
+   were deliberately left as Map mode's own code rather than forced into a shared shape that didn't fit,
+   keeping the actual regression risk near zero. `EvacuationModePanel` now uses all three components,
+   including a real upgrade (icon-chip group headers with counts, where it previously had plain uppercase
+   text labels) — verified live with no behavioural change to search, keyboard nav, or fly-in/highlight.
+
+Verified live in both themes; `tsc`/`eslint`/`npm test` (85 tests) clean. A stray "SearchIcon is not
+defined" runtime error surfaced mid-session and turned out to be a stale Turbopack chunk cache on a dev
+server that had been hot-reloading for the entire multi-hour session — restarting it (not a code change)
+resolved it; noted here in case it recurs and looks like a real regression.

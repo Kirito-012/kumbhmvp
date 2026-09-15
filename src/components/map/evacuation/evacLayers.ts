@@ -1,5 +1,6 @@
-import type { Map as MLMap, ExpressionSpecification, FilterSpecification } from 'maplibre-gl'
-import { badgeIconId, makeBadgeIcon } from '@/lib/mapBadgeIcon'
+import type { Map as MLMap, ExpressionSpecification, FilterSpecification, GeoJSONSource } from 'maplibre-gl'
+import type { FeatureCollection, Point } from 'geojson'
+import { badgeIconId, makeBadgeIcon, chevronIconId, makeChevronIcon } from '@/lib/mapBadgeIcon'
 import { EVAC_COLORS, type EvacKey, type EvacTheme } from '@/lib/evacuation/layers'
 import { buildEvacFilters, trafficRoutePlanVisible, type EvacFilters } from '@/lib/evacuation/filters'
 
@@ -31,6 +32,12 @@ const FLOOD_LINE_SOURCE = 'hfl_line'
  *  renders a Point one; the same empty source backs both, so whichever geometry Phase 5 puts in
  *  paints on the layer that actually matches it. */
 const SELECTED_SOURCE = 'evac-selected'
+/** Arrow midpoints (one point per traffic_route/direction_line row that has a resolvable Entry/
+ *  Exit direction), populated once via setEvacArrowsData -- see /api/evacuation/arrows and this
+ *  file's own header comment on why these are bearing-driven points, not line-following chevrons. */
+const TRAFFIC_ROUTE_ARROWS_SOURCE = 'evac-traffic-route-arrows'
+const DIRECTION_LINE_ARROWS_SOURCE = 'evac-direction-line-arrows'
+const EMPTY_FEATURE_COLLECTION: FeatureCollection = { type: 'FeatureCollection', features: [] }
 
 /** Every layer id this module creates, grouped by which `evacVisibility` key controls it -- the
  *  single source of truth `setEvacLayersVisible` and the theme-swap pass both iterate. Keys not
@@ -38,9 +45,14 @@ const SELECTED_SOURCE = 'evac-selected'
 const LAYERS_BY_KEY: Record<Exclude<EvacKey, 'zone_outline'>, string[]> = {
   hfl_area: ['evac-hfl-area-fill', 'evac-hfl-area-outline'],
   hfl_line: ['evac-hfl-line'],
-  traffic_route: ['evac-traffic-route-casing', 'evac-traffic-route-peak', 'evac-traffic-route-normal'],
+  traffic_route: [
+    'evac-traffic-route-casing',
+    'evac-traffic-route-peak',
+    'evac-traffic-route-normal',
+    'evac-traffic-route-arrows',
+  ],
   entry_exit_line: ['evac-entry-exit-line-glow', 'evac-entry-exit-line'],
-  direction_line: ['evac-direction-line'],
+  direction_line: ['evac-direction-line', 'evac-direction-line-arrows'],
   emergency_exit: ['evac-emergency-exit-glow', 'evac-emergency-exit-casing', 'evac-emergency-exit'],
   entry_exit: [
     'evac-entry-exit-cluster',
@@ -133,6 +145,31 @@ function ensureBadgeImage(map: MLMap, text: string, color: string): string {
   return id
 }
 
+function ensureChevronImage(map: MLMap, color: string): string {
+  const id = chevronIconId(color)
+  if (map.hasImage(id)) map.removeImage(id)
+  map.addImage(id, makeChevronIcon(color), { pixelRatio: 4 })
+  return id
+}
+
+/** icon-image match expression shared by both arrow layers -- 'Entry'/'Exit' (traffic_route's
+ *  `entry_exit`) or upper-cased 'ENTRY'/'EXIT' (direction_line's `remark`) both normalise to the
+ *  same 3-way match since MapLibre's `match` does a strict equality check, not case-insensitive. */
+function arrowIconExpr(map: MLMap, field: string, theme: EvacTheme, upcase: boolean): ExpressionSpecification {
+  const getField = upcase ? (['upcase', ['get', field]] as const) : (['get', field] as const)
+  const entryValue = upcase ? 'ENTRY' : 'Entry'
+  const exitValue = upcase ? 'EXIT' : 'Exit'
+  return [
+    'match',
+    getField,
+    entryValue,
+    ensureChevronImage(map, colorPair(EVAC_COLORS.entry, theme)),
+    exitValue,
+    ensureChevronImage(map, colorPair(EVAC_COLORS.exit, theme)),
+    ensureChevronImage(map, colorPair(EVAC_COLORS.unknown, theme)),
+  ] as unknown as ExpressionSpecification
+}
+
 /** Creates every evac-* source/layer once, hidden. Call from initMap's `load` handler, gated on
  *  `canUseInsights`, AFTER MapView's own POI-layer loop has created the `traffic_route`/
  *  `entry_exit_line`/`direction_line`/`entry_exit`/`location_entry` sources this reuses (order
@@ -169,6 +206,10 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
   })
+  // Populated later via setEvacArrowsData once /api/evacuation/arrows resolves -- empty at
+  // creation, same "layers exist, data arrives async" shape as SELECTED_SOURCE.
+  map.addSource(TRAFFIC_ROUTE_ARROWS_SOURCE, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+  map.addSource(DIRECTION_LINE_ARROWS_SOURCE, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
 
   // --- Flood risk (off by default; hfl_area/hfl_line are 25-Aug-2026-only, see CONTEXT.md §10) --
   map.addLayer({
@@ -251,6 +292,24 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
   // PLAN-evacuation.md §6.2 item 4 on why this is 2 layers rather than a data-driven dasharray.
   trafficRouteCore('evac-traffic-route-peak', PEAK_DAY_FILTER, false)
   trafficRouteCore('evac-traffic-route-normal', NOT_PEAK_DAY_FILTER, true)
+  // Arrows -- a bearing-driven point per route, not a line-following chevron (see this file's own
+  // header comment + /api/evacuation/arrows for why). Shown from z12 so region-wide zoom stays
+  // uncluttered; `entry_exit`/`plan`/corridor properties on the source feature let
+  // applyEvacFilters filter this exactly like the peak/normal lines above.
+  map.addLayer({
+    id: 'evac-traffic-route-arrows',
+    type: 'symbol',
+    source: TRAFFIC_ROUTE_ARROWS_SOURCE,
+    minzoom: 12,
+    layout: {
+      visibility: 'none',
+      'icon-image': arrowIconExpr(map, 'entry_exit', theme, false),
+      'icon-rotate': ['get', 'bearing'],
+      'icon-rotation-alignment': 'map',
+      'icon-allow-overlap': true,
+      'icon-size': 0.9,
+    },
+  })
 
   // --- Entry/exit routes (on by default) ------------------------------------------------------
   map.addLayer({
@@ -288,6 +347,22 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
     paint: {
       'line-color': directionLineColorExpr(theme),
       'line-width': 2,
+    },
+  })
+  // Same bearing-driven arrow point as traffic_route's above -- only the 89 ENTRY/EXIT wayfinding
+  // signs get one (the 4 destination signs have no resolvable direction, see /api/evacuation/arrows).
+  map.addLayer({
+    id: 'evac-direction-line-arrows',
+    type: 'symbol',
+    source: DIRECTION_LINE_ARROWS_SOURCE,
+    minzoom: 12,
+    layout: {
+      visibility: 'none',
+      'icon-image': arrowIconExpr(map, 'remark', theme, true),
+      'icon-rotate': ['get', 'bearing'],
+      'icon-rotation-alignment': 'map',
+      'icon-allow-overlap': true,
+      'icon-size': 0.75,
     },
   })
 
@@ -507,10 +582,14 @@ export function applyEvacFilters(map: MLMap, filters: EvacFilters): void {
   const casingParts = [plain.traffic_route, filters.plan ? ['==', ['get', 'plan'], filters.plan] : null].filter(
     (p): p is FilterSpecification => Boolean(p),
   )
-  map.setFilter(
-    'evac-traffic-route-casing',
-    casingParts.length === 0 ? null : casingParts.length === 1 ? casingParts[0] : (['all', ...casingParts] as unknown as FilterSpecification),
-  )
+  const casingFilter =
+    casingParts.length === 0 ? null : casingParts.length === 1 ? casingParts[0] : (['all', ...casingParts] as unknown as FilterSpecification)
+  map.setFilter('evac-traffic-route-casing', casingFilter)
+  // Arrows aren't split into peak/normal layers (one point per route, unlike the 2 line layers
+  // below), so they take the same combined direction+corridor+plan filter as the casing.
+  if (map.getLayer('evac-traffic-route-arrows')) {
+    map.setFilter('evac-traffic-route-arrows', casingFilter)
+  }
 
   const peak = buildEvacFilters(filters, { traffic_route: PEAK_DAY_FILTER })
   const normal = buildEvacFilters(filters, { traffic_route: NOT_PEAK_DAY_FILTER })
@@ -521,6 +600,21 @@ export function applyEvacFilters(map: MLMap, filters: EvacFilters): void {
   map.setFilter('evac-entry-exit-line', asFilter(plain.entry_exit_line))
 
   map.setFilter('evac-direction-line', asFilter(plain.direction_line))
+  if (map.getLayer('evac-direction-line-arrows')) {
+    map.setFilter('evac-direction-line-arrows', asFilter(plain.direction_line))
+  }
+}
+
+/** Feeds the two arrow geojson sources their data -- called once from MapView after
+ *  `/api/evacuation/arrows` resolves (mirrors how evac-selected is fed via setData). */
+export function setEvacArrowsData(
+  map: MLMap,
+  data: { trafficRoute: FeatureCollection<Point>; directionLine: FeatureCollection<Point> },
+): void {
+  const trafficSource = map.getSource(TRAFFIC_ROUTE_ARROWS_SOURCE) as GeoJSONSource | undefined
+  const directionSource = map.getSource(DIRECTION_LINE_ARROWS_SOURCE) as GeoJSONSource | undefined
+  trafficSource?.setData(data.trafficRoute)
+  directionSource?.setData(data.directionLine)
 }
 
 /** Re-applies every evac-* colour paint property and regenerates the EN/EXT badge images for the
@@ -556,11 +650,17 @@ export function applyEvacTheme(map: MLMap, theme: EvacTheme): void {
   )
   map.setPaintProperty('evac-traffic-route-peak', 'line-color', entryExitColorExpr('entry_exit', theme))
   map.setPaintProperty('evac-traffic-route-normal', 'line-color', entryExitColorExpr('entry_exit', theme))
+  if (map.getLayer('evac-traffic-route-arrows')) {
+    map.setLayoutProperty('evac-traffic-route-arrows', 'icon-image', arrowIconExpr(map, 'entry_exit', theme, false))
+  }
 
   map.setPaintProperty('evac-entry-exit-line-glow', 'line-color', entryExitColorExpr('remark', theme))
   map.setPaintProperty('evac-entry-exit-line', 'line-color', entryExitColorExpr('remark', theme))
 
   map.setPaintProperty('evac-direction-line', 'line-color', directionLineColorExpr(theme))
+  if (map.getLayer('evac-direction-line-arrows')) {
+    map.setLayoutProperty('evac-direction-line-arrows', 'icon-image', arrowIconExpr(map, 'remark', theme, true))
+  }
 
   map.setPaintProperty(
     'evac-emergency-exit-glow',

@@ -49,3 +49,36 @@ export function makeBadgeIcon(text: string, color: string): ImageData {
 
   return ctx.getImageData(0, 0, width, height)
 }
+
+/** A stable MapLibre image id for one chevron color -- same `hasImage()`-before-`addImage()`
+ *  pattern as badgeIconId. */
+export function chevronIconId(color: string): string {
+  return `map-chevron-${color.replace('#', '')}`
+}
+
+/** A small solid triangle pointing "up" (0 rotation), for `symbol` layers that set `icon-rotate`
+ *  per-feature (PLAN-evacuation.md §6.2 items 5/7 -- traffic-route/direction-signage arrows).
+ *  Deliberately not a `symbol-placement: 'line'` chevron-along-the-path (the plan's original
+ *  sketch): that draws in the line's own vertex order, which checked-against-real-data has no
+ *  reliable relationship to Entry/Exit (see the arrows API route's own comment) -- these render
+ *  as a single point per feature instead, with `icon-rotate` driven by a bearing computed from
+ *  reliable geometry (distance to the nearest sector), never from vertex order. */
+export function makeChevronIcon(color: string): ImageData {
+  const scale = 4
+  const size = 10 * scale
+
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = color
+  ctx.beginPath()
+  ctx.moveTo(size / 2, 0)
+  ctx.lineTo(size, size)
+  ctx.lineTo(size / 2, size * 0.7)
+  ctx.lineTo(0, size)
+  ctx.closePath()
+  ctx.fill()
+
+  return ctx.getImageData(0, 0, size, size)
+}
