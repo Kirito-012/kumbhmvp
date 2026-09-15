@@ -180,10 +180,11 @@ function ensureBadgeImage(map: MLMap, text: string, color: string): string {
   return id
 }
 
-function ensureChevronImage(map: MLMap, color: string): string {
-  const id = chevronIconId(color)
+function ensureChevronImage(map: MLMap, color: string, theme: EvacTheme): string {
+  const strokeColor = colorPair(EVAC_COLORS.emergencyExitCasing, theme)
+  const id = chevronIconId(color, strokeColor)
   if (map.hasImage(id)) map.removeImage(id)
-  map.addImage(id, makeChevronIcon(color), { pixelRatio: 4 })
+  map.addImage(id, makeChevronIcon(color, strokeColor), { pixelRatio: 4 })
   return id
 }
 
@@ -198,10 +199,10 @@ function arrowIconExpr(map: MLMap, field: string, theme: EvacTheme, upcase: bool
     'match',
     getField,
     entryValue,
-    ensureChevronImage(map, colorPair(EVAC_COLORS.entry, theme)),
+    ensureChevronImage(map, colorPair(EVAC_COLORS.entry, theme), theme),
     exitValue,
-    ensureChevronImage(map, colorPair(EVAC_COLORS.exit, theme)),
-    ensureChevronImage(map, colorPair(EVAC_COLORS.unknown, theme)),
+    ensureChevronImage(map, colorPair(EVAC_COLORS.exit, theme), theme),
+    ensureChevronImage(map, colorPair(EVAC_COLORS.unknown, theme), theme),
   ] as unknown as ExpressionSpecification
 }
 
@@ -380,7 +381,11 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
       'icon-rotate': ['get', 'bearing'],
       'icon-rotation-alignment': 'map',
       'icon-allow-overlap': true,
-      'icon-size': 0.9,
+      // 0.9 (matching the chevron's original 10-unit canvas) rendered at ~9 logical px -- easy to
+      // lose against a same-colored route line underneath it. 1.3 against the new 16-unit canvas
+      // (see makeChevronIcon) plus its stroke outline is what actually reads as an arrow at the
+      // zoom levels this mode gets viewed at.
+      'icon-size': 1.3,
     },
   })
 
@@ -435,7 +440,8 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
       'icon-rotate': ['get', 'bearing'],
       'icon-rotation-alignment': 'map',
       'icon-allow-overlap': true,
-      'icon-size': 0.75,
+      // Same visibility fix as evac-traffic-route-arrows above -- see that layer's own comment.
+      'icon-size': 1.1,
     },
   })
 

@@ -653,6 +653,15 @@ paint value can only be wrapped by `step`/`interpolate`/`let`/`case` directly, n
 runtime operator like `+`/`*` around the whole expression) — worth remembering for any future evac-\*
 paint property that combines a zoom-interpolated base with a runtime modifier.
 
+**Direction-signage arrow visibility fix (same day):** §15's direction-line arrows were confirmed via
+`queryRenderedFeatures` but turned out to be genuinely invisible in practice — a same-hue, ~8px chevron
+with no outline sitting on top of a same-colored route line (both green for Entry, both red for Exit)
+disappeared at any normal viewing zoom; only found by jumping the camera directly to a known arrow's
+coordinates up to z19 until it appeared. Fixed in `mapBadgeIcon.ts`'s `makeChevronIcon`: bigger canvas
+(10→16 units) plus a contrasting stroke outline (`EVAC_COLORS.emergencyExitCasing`, the same white/
+near-black pair emergency exits' own casing already uses), `icon-size` raised to 1.3/1.1. See
+`PLAN-evacuation.md` §16.
+
 ---
 
 ## 10. The geospatial data

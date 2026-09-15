@@ -539,3 +539,24 @@ the five (hover, dimming) hit the same class of MapLibre "zoom expression" style
 worth remembering for any future evac-\* paint property that tries to combine a zoom-interpolated base
 value with a runtime math/case wrapper: the wrapper has to live *inside* the interpolation stops, not
 around the whole expression.
+
+## 16. Direction-signage arrow visibility fix (2026-09-15)
+
+§15 item 2 built `evac-direction-line-arrows` and confirmed it via `queryRenderedFeatures`, but a user
+report ("I want to show the arrows on the signage as well") turned out to mean the arrows genuinely
+weren't *visible*, not that they were missing outright -- `queryRenderedFeatures` said the feature was
+there; a screenshot at a normal viewing zoom (13-16) couldn't find it on screen. Root cause: the chevron
+icon's base canvas was 10 units, and at `icon-size` 0.75/0.9 (direction-line/traffic-route) the rendered
+size was ~7-9 logical px -- and with no outline, a same-hue chevron sitting on top of a same-colored
+route line (both green for Entry, both red for Exit) was close to invisible at typical zoom. Confirmed
+only by jumping the camera directly to a known arrow's coordinates at progressively higher zoom (z19)
+until it became visible, then working back down.
+
+Fixed in `mapBadgeIcon.ts`'s `makeChevronIcon`: canvas bumped from 10 to 16 units, and every chevron now
+gets a stroke outline in `EVAC_COLORS.emergencyExitCasing` (white on the light basemap, near-black on
+the dark one -- the same "cut a border against whatever's underneath" pair emergency exits' own casing
+line already uses, not a new color). `chevronIconId`/`ensureChevronImage` now key on the (fill, stroke)
+pair together. `icon-size` raised to 1.3 (traffic routes) / 1.1 (direction signage, kept slightly
+smaller since its underlying segments are shorter). Verified live in both themes at a normal viewing
+zoom (15) with no camera trickery needed: a chevron is now clearly visible mid-route, correctly rotated
+and colored, with a crisp contrasting outline. `tsc`/`eslint`/`npm test` (85 tests) clean.

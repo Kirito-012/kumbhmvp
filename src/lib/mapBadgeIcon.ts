@@ -50,35 +50,50 @@ export function makeBadgeIcon(text: string, color: string): ImageData {
   return ctx.getImageData(0, 0, width, height)
 }
 
-/** A stable MapLibre image id for one chevron color -- same `hasImage()`-before-`addImage()`
- *  pattern as badgeIconId. */
-export function chevronIconId(color: string): string {
-  return `map-chevron-${color.replace('#', '')}`
+/** A stable MapLibre image id for one chevron (fill, stroke) pair -- same `hasImage()`-before-
+ *  `addImage()` pattern as badgeIconId. Both colors are keyed since the stroke changes per theme
+ *  independently of the fill (see makeChevronIcon's own comment). */
+export function chevronIconId(color: string, strokeColor: string): string {
+  return `map-chevron-${color.replace('#', '')}-${strokeColor.replace('#', '')}`
 }
 
-/** A small solid triangle pointing "up" (0 rotation), for `symbol` layers that set `icon-rotate`
+/** A solid triangle pointing "up" (0 rotation), for `symbol` layers that set `icon-rotate`
  *  per-feature (PLAN-evacuation.md §6.2 items 5/7 -- traffic-route/direction-signage arrows).
  *  Deliberately not a `symbol-placement: 'line'` chevron-along-the-path (the plan's original
  *  sketch): that draws in the line's own vertex order, which checked-against-real-data has no
  *  reliable relationship to Entry/Exit (see the arrows API route's own comment) -- these render
  *  as a single point per feature instead, with `icon-rotate` driven by a bearing computed from
- *  reliable geometry (distance to the nearest sector), never from vertex order. */
-export function makeChevronIcon(color: string): ImageData {
+ *  reliable geometry (distance to the nearest sector), never from vertex order.
+ *
+ *  `strokeColor` outlines the triangle in a basemap-contrasting color (reuses
+ *  `EVAC_COLORS.emergencyExitCasing` -- white on the light basemap, near-black on the dark one,
+ *  same "cut a border against whatever's underneath" idea as emergency exits' own casing line).
+ *  A same-hue fill with no outline all but disappeared against a same-color route line underneath
+ *  it at the sizes/zooms this mode actually gets viewed at -- caught only by checking rendered
+ *  pixels directly (`queryRenderedFeatures` said the feature was there; a screenshot at normal
+ *  zoom couldn't find it) after a user report that signage arrows weren't visible. Canvas size
+ *  bumped from 10 to 16 units alongside this so the stroke doesn't eat a big share of a still-tiny
+ *  icon at typical `icon-size` values. */
+export function makeChevronIcon(color: string, strokeColor: string): ImageData {
   const scale = 4
-  const size = 10 * scale
+  const size = 16 * scale
 
   const canvas = document.createElement('canvas')
   canvas.width = size
   canvas.height = size
   const ctx = canvas.getContext('2d')!
-  ctx.fillStyle = color
   ctx.beginPath()
-  ctx.moveTo(size / 2, 0)
-  ctx.lineTo(size, size)
+  ctx.moveTo(size / 2, scale)
+  ctx.lineTo(size - scale, size - scale)
   ctx.lineTo(size / 2, size * 0.7)
-  ctx.lineTo(0, size)
+  ctx.lineTo(scale, size - scale)
   ctx.closePath()
+  ctx.fillStyle = color
   ctx.fill()
+  ctx.lineWidth = scale * 1.25
+  ctx.strokeStyle = strokeColor
+  ctx.lineJoin = 'round'
+  ctx.stroke()
 
   return ctx.getImageData(0, 0, size, size)
 }
