@@ -46,11 +46,21 @@ type ClusterableFeature = Feature<Point>
  * unchanged (so its popup/properties still work normally); 2+ points become
  * one synthetic cluster feature carrying `cluster: true`, `point_count`, and
  * a stable `cluster_id` (a hash of the cell's bounds) for click-to-zoom.
+ *
+ * `tagProperty`, when given, copies that property onto the synthetic cluster
+ * IF every member point shares the same value for it (left unset otherwise,
+ * i.e. a "mixed" cluster) -- lets a caller whose points carry a meaningful
+ * categorical field (e.g. Evacuation's entry_exit `remark`: 'Entry'/'Exit')
+ * style a cluster circle the same way it styles an individual point, rather
+ * than every cluster rendering in one hardcoded color regardless of what it
+ * actually contains (see evacLayers.ts's `evac-entry-exit-cluster`, which
+ * used to always paint green even for an all-Exit or mixed cluster).
  */
 export function clusterPoints(
   features: ClusterableFeature[],
   zoom: number,
   cellPx = 40,
+  tagProperty?: string,
 ): FeatureCollection<Point> {
   if (zoom >= CLUSTER_MAX_ZOOM) {
     return { type: 'FeatureCollection', features }
@@ -84,14 +94,21 @@ export function clusterPoints(
       const cx = sumX / pts.length
       const cy = sumY / pts.length
       const [lng, lat] = worldPixelToLngLat(cx, cy, zoom)
+      const properties: Record<string, unknown> = {
+        cluster: true,
+        cluster_id: `${zoom}:${x0.toFixed(1)}:${y0.toFixed(1)}:${depth}`,
+        point_count: pts.length,
+        point_count_abbreviated: String(pts.length),
+      }
+      if (tagProperty) {
+        const values = new Set(pts.map((p) => p.feature.properties?.[tagProperty]))
+        if (values.size === 1) {
+          properties[tagProperty] = [...values][0]
+        }
+      }
       out.push({
         type: 'Feature',
-        properties: {
-          cluster: true,
-          cluster_id: `${zoom}:${x0.toFixed(1)}:${y0.toFixed(1)}:${depth}`,
-          point_count: pts.length,
-          point_count_abbreviated: String(pts.length),
-        },
+        properties,
         geometry: { type: 'Point', coordinates: [lng, lat] },
       })
       return

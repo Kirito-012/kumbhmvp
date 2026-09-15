@@ -608,3 +608,23 @@ two tangent directions is "forward" (preserving the reliable Entry/Exit semantic
 design, since raw vertex order is still not trustworthy on its own). Verified live in both themes at
 the exact NH34 location from the user's screenshot, and on a traffic-route arrow elsewhere: arrows now
 sit directly on their lines and follow the route's curve. `tsc`/`eslint`/`npm test` (85 tests) clean.
+
+**Entry/exit cluster color fix (2026-09-15):** a user screenshot showed entry/exit points as
+unlabeled green dots until zoomed in past the cluster threshold, at which point one turned out to
+be an Exit point -- `evac-entry-exit-cluster`'s `circle-color` was a hardcoded flat green
+regardless of what the cluster actually contained, so an all-Exit or mixed Entry+Exit cluster was
+visually indistinguishable from an all-Entry one. Root cause: `entry_exit` (like every other point
+POI layer) is clustered client-side by `clusterPoints()` (`src/lib/poiClustering.ts`), whose
+synthetic cluster features never carried any of the source points' own properties, only a count --
+there was no `remark` value left for a paint expression to read even if one had been written.
+Fixed by giving `clusterPoints()` an optional `tagProperty` parameter: when a cluster's member
+points all share the same value for that property, it's copied onto the cluster feature (left
+unset for a genuinely mixed cluster); MapView passes `'remark'` for the `entry_exit` layer only
+(`CLUSTER_TAG_PROPERTY`, keyed by layer so this doesn't affect the other 15 POI layers' clustering).
+`evac-entry-exit-cluster`'s `circle-color` now reuses the exact same `entryExitColorExpr('remark',
+theme)` an individual unclustered point's badge already used, so a cluster reads green/rose exactly
+when it's genuinely all-Entry/all-Exit and falls to the same neutral slate an ambiguous individual
+point gets when it's a real mix of both -- verified by sampling rendered pixel colors (not just
+eyeballing, since the mixed-cluster slate and Exit-cluster rose read similarly small and desaturated
+against a dark basemap) for three real clusters in both themes: an Exit-only pair painted rose, two
+genuinely-mixed pairs painted slate. `tsc`/`eslint`/`npm test` (85 tests) clean.

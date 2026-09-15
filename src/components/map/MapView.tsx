@@ -768,6 +768,15 @@ type PoiLayerDef = {
   isThirdPartyOsm?: boolean
 }
 
+// Which clustered point layers carry a categorical property worth preserving on their synthetic
+// cluster features (see clusterPoints' tagProperty in src/lib/poiClustering.ts) -- currently just
+// entry_exit's `remark` ('Entry'/'Exit'), so evacLayers.ts's evac-entry-exit-cluster circle can be
+// colored the same way an individual point's badge is, instead of always rendering green
+// regardless of whether the points it's hiding are Entry, Exit, or a mix of both.
+const CLUSTER_TAG_PROPERTY: Record<string, string> = {
+  entry_exit: 'remark',
+}
+
 // Single source of truth for the 16 POI layers: drives sources/layers on the
 // map, the LAYERS panel toggles, and stays in sync with StatsPanel's legend
 // since all three read the same POINT_/LINE_/POLYGON_LAYER_* maps.
@@ -969,7 +978,7 @@ async function refetchClusteredPoiSource(
     const data: { features: Feature<Point>[] } = await res.json()
     if (poiSourceFetchTokens[layerKey] !== token) return // superseded by a newer request
     rawFeaturesRef.current[layerKey] = data.features
-    source.setData(clusterPoints(data.features, map.getZoom()))
+    source.setData(clusterPoints(data.features, map.getZoom(), 40, CLUSTER_TAG_PROPERTY[layerKey]))
   } catch {
     // Network hiccup -- leave the source showing its last-known data rather
     // than clearing it out from under the user.
@@ -3067,7 +3076,7 @@ export default function MapView({
           const raw = poiRawFeaturesRef.current[def.key]
           if (!raw) continue
           const source = map.getSource(def.key) as GeoJSONSource | undefined
-          source?.setData(clusterPoints(raw, zoom))
+          source?.setData(clusterPoints(raw, zoom, 40, CLUSTER_TAG_PROPERTY[def.key]))
         }
       }
       Promise.all(

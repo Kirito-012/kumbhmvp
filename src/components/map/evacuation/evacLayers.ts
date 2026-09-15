@@ -488,6 +488,14 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
   // POI_LAYER_DEFS key off), so reusing them would mean un-hiding specific Map-mode layers from
   // evacuation-mode code, coupling the two. A dedicated layer set on the SAME already-clustered
   // `entry_exit` source costs one extra paint definition, not an extra request.
+  //
+  // circle-color reuses entryExitColorExpr('remark', ...) rather than a flat color: MapView's
+  // clusterPoints() copies `remark` onto a cluster feature only when every point it hides shares
+  // the same value (see its own tagProperty comment), so a cluster paints green/rose exactly when
+  // it's all-Entry/all-Exit and falls to the same neutral slate a lone ambiguous point gets when
+  // it's a mix of both -- a cluster used to always paint green regardless of what was inside it,
+  // which is what actually made an Exit cluster impossible to tell apart from an Entry one until
+  // zoomed in past the cluster threshold.
   map.addLayer({
     id: 'evac-entry-exit-cluster',
     type: 'circle',
@@ -495,7 +503,7 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
     filter: CLUSTERED_FILTER,
     layout: { visibility: 'none' },
     paint: {
-      'circle-color': colorPair(EVAC_COLORS.entry, theme),
+      'circle-color': entryExitColorExpr('remark', theme),
       'circle-opacity': 0.8,
       'circle-radius': ['step', ['get', 'point_count'], 9, 10, 14, 50, 19] as unknown as ExpressionSpecification,
     },
@@ -787,7 +795,7 @@ export function applyEvacTheme(map: MLMap, theme: EvacTheme): void {
   )
   map.setPaintProperty('evac-emergency-exit', 'line-color', colorPair(EVAC_COLORS.emergencyExit, theme))
 
-  map.setPaintProperty('evac-entry-exit-cluster', 'circle-color', colorPair(EVAC_COLORS.entry, theme))
+  map.setPaintProperty('evac-entry-exit-cluster', 'circle-color', entryExitColorExpr('remark', theme))
   map.setLayoutProperty('evac-entry-exit-badge', 'icon-image', [
     'match',
     ['get', 'remark'],
