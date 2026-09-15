@@ -587,3 +587,24 @@ render actual candidates at actual sizes before trusting a path description, rat
 blind and shipping on code review alone. Verified live in both themes at the same location the earlier
 screenshots came from: a clean, sharp arrowhead, correctly rotated, no blob. `tsc`/`eslint`/`npm test`
 (85 tests) clean.
+
+**⚠️ Third correction, same day:** the shape itself was fine, but a follow-up screenshot at the NH34
+highway (sector 20/Chandidevi) showed the arrows still "doesn't merge well with the line... looks like
+it is offset" -- disconnected zigzag/"V" shapes that looked unrelated to the route beneath them. This
+was never a *position* bug: `/api/evacuation/arrows`'s `ST_LineInterpolatePoint(geom, 0.5)` midpoint is
+computed from the same full, untiled geometry the line itself is drawn from, so the arrow always sits
+exactly on the line -- confirmed by comparing the API's raw output against the rendered line's
+coordinates (an earlier apparent ~110m mismatch traced back to `queryRenderedFeatures` returning only a
+vector-tile-clipped fragment of a longer line, not a real discrepancy). The actual bug was *rotation*:
+each arrow's bearing was the azimuth straight from the line's midpoint to (Entry) or from (Exit) its
+nearest sector centroid -- a direction with no relationship to the line's own local heading at that
+point, so an arrow sitting exactly on the line could point off at an angle unrelated to the line's
+visible slope, reading as "doesn't merge with the line" even though it was numerically centered on it.
+Fixed by computing the line's own local tangent bearing (azimuth between points just before/after the
+midpoint, i.e. the two headings the line could be pointing there) and picking whichever of those two
+matches the old centroid-azimuth's general side (within 90 degrees) -- so the rendered arrow always
+follows the line's own visual direction, using the centroid azimuth only to disambiguate which of the
+two tangent directions is "forward" (preserving the reliable Entry/Exit semantics from §16's original
+design, since raw vertex order is still not trustworthy on its own). Verified live in both themes at
+the exact NH34 location from the user's screenshot, and on a traffic-route arrow elsewhere: arrows now
+sit directly on their lines and follow the route's curve. `tsc`/`eslint`/`npm test` (85 tests) clean.
