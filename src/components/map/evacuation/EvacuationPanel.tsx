@@ -133,7 +133,7 @@ function LegendSwatch({ color, opacity = 1 }: { color: string; opacity?: number 
     <span
       aria-hidden
       className="inline-block h-3 w-6 shrink-0 rounded-[3px]"
-      style={{ background: color, opacity }}
+      style={{ backgroundColor: color, opacity }}
     />
   )
 }
@@ -219,7 +219,7 @@ export default function EvacuationPanel({
     >
       <div className="flex flex-col gap-4">
         {loading && !summary && (
-          <div className="relative h-1 overflow-hidden rounded-full" style={{ background: 'var(--map-border)' }}>
+          <div className="relative h-1 overflow-hidden rounded-full" style={{ backgroundColor: 'var(--map-border)' }}>
             <div className="absolute inset-y-0 w-1/3 animate-[loading-sweep_1.1s_ease-in-out_infinite] rounded-full bg-[var(--map-accent)]" />
           </div>
         )}

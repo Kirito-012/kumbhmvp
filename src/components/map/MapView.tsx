@@ -1154,7 +1154,7 @@ function FloatingLegend({
   const wrapperBaseClass =
     'pointer-events-none absolute bottom-8 left-3 z-10 rounded-lg border px-2.5 py-1.5 text-[10.5px] backdrop-blur-md shadow-lg'
   const wrapperStyle = {
-    background: 'var(--map-panel-bg)',
+    backgroundColor: 'var(--map-panel-bg)',
     borderColor: 'var(--map-panel-border)',
     color: 'var(--map-fg-muted)',
   }
@@ -1172,7 +1172,7 @@ function FloatingLegend({
           <span
             aria-hidden
             className="inline-flex h-3.5 w-5 items-center justify-center rounded-full text-[6px] font-bold text-white"
-            style={{ background: EVAC_COLORS.entry[theme] }}
+            style={{ backgroundColor: EVAC_COLORS.entry[theme] }}
           >
             EN
           </span>
@@ -1182,7 +1182,7 @@ function FloatingLegend({
           <span
             aria-hidden
             className="inline-flex h-3.5 w-5 items-center justify-center rounded-full text-[6px] font-bold text-white"
-            style={{ background: EVAC_COLORS.exit[theme] }}
+            style={{ backgroundColor: EVAC_COLORS.exit[theme] }}
           >
             EXT
           </span>
@@ -1192,7 +1192,7 @@ function FloatingLegend({
           <span
             aria-hidden
             className="h-2 w-2 rounded-full"
-            style={{ background: EVAC_COLORS.emergencyExit[theme] }}
+            style={{ backgroundColor: EVAC_COLORS.emergencyExit[theme] }}
           />
           Emergency
         </span>
@@ -1256,7 +1256,7 @@ function FloatingLegend({
         <span key={bucket} className="flex items-center gap-1 whitespace-nowrap">
           <span
             className="h-2 w-2 shrink-0 rounded-full"
-            style={{ background: BUCKET_COLORS[bucket][theme] }}
+            style={{ backgroundColor: BUCKET_COLORS[bucket][theme] }}
             aria-hidden
           />
           {BUCKET_LABELS[bucket]} {counts[bucket]}
@@ -2126,7 +2126,7 @@ export default function MapView({
 
     return `
       <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 16px 12px;border-bottom:1px solid var(--map-popup-row-border)">
-        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;background:${iconBg};color:${iconFg}">
+        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;backgroundColor:${iconBg};color:${iconFg}">
           <svg viewBox="0 0 24 24" fill="none" width="17" height="17">${POPUP_ICON_PATHS[kind]}</svg>
         </span>
         <div style="min-width:0">
@@ -2216,9 +2216,9 @@ export default function MapView({
     priority: { name: string; color: string } | null
   }) {
     const badge = (label: string, color: string) =>
-      `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;background:${color}18;color:${color};font-size:10.5px;font-weight:700">${
+      `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;backgroundColor:${color}18;color:${color};font-size:10.5px;font-weight:700">${
         label === ticket.status?.name
-          ? `<span style="width:5px;height:5px;border-radius:999px;background:${color}"></span>`
+          ? `<span style="width:5px;height:5px;border-radius:999px;backgroundColor:${color}"></span>`
           : ''
       }${escapeHtml(label)}</span>`
 
@@ -2353,7 +2353,7 @@ export default function MapView({
     const visibleRows = rows.filter(([, v]) => v !== undefined)
     const headerHtml = `
       <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 16px 12px;${visibleRows.length ? 'border-bottom:1px solid var(--map-popup-row-border)' : ''}">
-        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;background:color-mix(in srgb, var(--map-accent) 9%, transparent);color:var(--map-accent)">
+        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;backgroundColor:color-mix(in srgb, var(--map-accent) 9%, transparent);color:var(--map-accent)">
           <svg viewBox="0 0 24 24" fill="none" width="17" height="17">${POPUP_ICON_PATHS.evac}</svg>
         </span>
         <div style="min-width:0">
@@ -3547,7 +3547,7 @@ export default function MapView({
             const headerSubtitle = single ? `Ticket #${single.number}` : null
             const headerHtml = `
               <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 16px 12px;border-bottom:1px solid var(--map-popup-row-border)">
-                <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;background:color-mix(in srgb, var(--map-accent) 9%, transparent);color:var(--map-accent)">
+                <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;backgroundColor:color-mix(in srgb, var(--map-accent) 9%, transparent);color:var(--map-accent)">
                   <svg viewBox="0 0 24 24" fill="none" width="17" height="17">${POPUP_ICON_PATHS.ticket}</svg>
                 </span>
                 <div style="min-width:0">
@@ -5376,7 +5376,7 @@ export default function MapView({
           role="status"
           className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12.5px] font-medium shadow-lg"
           style={{
-            background: 'var(--map-surface)',
+            backgroundColor: 'var(--map-surface)',
             color: 'var(--map-fg)',
             border: '1px solid var(--map-border)',
           }}
@@ -5409,12 +5409,12 @@ export default function MapView({
             measuring
               ? {
                   borderColor: 'var(--danger-soft)',
-                  background: 'var(--danger-soft)',
+                  backgroundColor: 'var(--danger-soft)',
                   color: 'var(--danger)',
                 }
               : {
                   borderColor: 'var(--map-panel-border)',
-                  background: 'var(--map-panel-bg)',
+                  backgroundColor: 'var(--map-panel-bg)',
                   color: 'var(--map-fg-muted)',
                 }
           }
@@ -5446,7 +5446,7 @@ export default function MapView({
               title="Undo point (Ctrl+Z or right-click)"
               style={{
                 borderColor: 'var(--map-panel-border)',
-                background: 'var(--map-panel-bg)',
+                backgroundColor: 'var(--map-panel-bg)',
                 color: 'var(--map-fg-muted)',
               }}
               className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border shadow-lg backdrop-blur-md transition-colors hover:brightness-95 disabled:pointer-events-none disabled:opacity-40"
@@ -5461,7 +5461,7 @@ export default function MapView({
               title="Redo point (Ctrl+Y)"
               style={{
                 borderColor: 'var(--map-panel-border)',
-                background: 'var(--map-panel-bg)',
+                backgroundColor: 'var(--map-panel-bg)',
                 color: 'var(--map-fg-muted)',
               }}
               className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border shadow-lg backdrop-blur-md transition-colors hover:brightness-95 disabled:pointer-events-none disabled:opacity-40"
@@ -5496,7 +5496,7 @@ export default function MapView({
               {selectedSector !== 'all' && (
                 <div
                   style={{
-                    background: 'var(--map-accent-bg)',
+                    backgroundColor: 'var(--map-accent-bg)',
                     borderColor: 'var(--map-accent-bg-hover)',
                     color: 'var(--map-accent-fg)',
                   }}
@@ -5551,14 +5551,14 @@ export default function MapView({
                             : `Clear ${c}`
                         }
                         style={{
-                          background: 'var(--map-accent-bg)',
+                          backgroundColor: 'var(--map-accent-bg)',
                           color: 'var(--map-accent-fg)',
                         }}
                         className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
                       >
                         <span
                           className="h-2 w-2 shrink-0 rounded-full"
-                          style={{ background: CLASS_GROUP_COLORS[c] }}
+                          style={{ backgroundColor: CLASS_GROUP_COLORS[c] }}
                         />
                         <span className="truncate max-w-[9rem]">{c}</span>
                         <XIcon className="h-2.5 w-2.5 shrink-0" />
@@ -5599,14 +5599,14 @@ export default function MapView({
                                 : `Clear all ${subs.length} ${c} sub-classes (${subs.join(', ')})`
                             }
                             style={{
-                              background: 'var(--map-accent-bg)',
+                              backgroundColor: 'var(--map-accent-bg)',
                               color: 'var(--map-accent-fg)',
                             }}
                             className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
                           >
                             <span
                               className="h-2 w-2 shrink-0 rounded-full"
-                              style={{ background: CLASS_GROUP_COLORS[c] }}
+                              style={{ backgroundColor: CLASS_GROUP_COLORS[c] }}
                             />
                             <span className="truncate max-w-[9rem]">{label}</span>
                             <XIcon className="h-2.5 w-2.5 shrink-0" />
@@ -5619,7 +5619,7 @@ export default function MapView({
                         type="button"
                         onClick={() => setVisibility((v) => ({ ...v, [d.key]: false }))}
                         style={{
-                          background: 'var(--map-accent-bg)',
+                          backgroundColor: 'var(--map-accent-bg)',
                           color: 'var(--map-accent-fg)',
                         }}
                         className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
@@ -5671,14 +5671,14 @@ export default function MapView({
                               : `Hide ${d.label}`
                           }
                           style={{
-                            background: 'var(--map-accent-bg)',
+                            backgroundColor: 'var(--map-accent-bg)',
                             color: 'var(--map-accent-fg)',
                           }}
                           className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
                         >
                           <span
                             className="h-2 w-2 shrink-0 rounded-full"
-                            style={{ background: d.color }}
+                            style={{ backgroundColor: d.color }}
                           />
                           <span className="truncate max-w-[9rem]">{label}</span>
                           <XIcon className="h-2.5 w-2.5 shrink-0" />
@@ -5734,7 +5734,7 @@ export default function MapView({
                 <ul
                   role="group"
                   aria-label="Searchable map layers"
-                  style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface)' }}
+                  style={{ borderColor: 'var(--map-border)', backgroundColor: 'var(--map-surface)' }}
                   className="kumbh-scroll absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border py-1 shadow-lg"
                 >
                   {searchGroups.length === 0 && (
@@ -5781,7 +5781,7 @@ export default function MapView({
                                   }}
                                   style={{
                                     color: 'var(--map-fg)',
-                                    background:
+                                    backgroundColor:
                                       selectedSector === s.sector_no
                                         ? 'var(--map-surface-active)'
                                         : undefined,
@@ -5839,7 +5839,7 @@ export default function MapView({
                                   <div
                                     style={{
                                       color: 'var(--map-fg)',
-                                      background: isChecked
+                                      backgroundColor: isChecked
                                         ? 'var(--map-surface-active)'
                                         : undefined,
                                     }}
@@ -5875,7 +5875,7 @@ export default function MapView({
                                           borderColor: isChecked
                                             ? CLASS_GROUP_COLORS[c]
                                             : 'var(--map-border)',
-                                          background: isChecked
+                                          backgroundColor: isChecked
                                             ? CLASS_GROUP_COLORS[c]
                                             : 'transparent',
                                         }}
@@ -5903,7 +5903,7 @@ export default function MapView({
                                       </span>
                                       <span
                                         className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                        style={{ background: CLASS_GROUP_COLORS[c] }}
+                                        style={{ backgroundColor: CLASS_GROUP_COLORS[c] }}
                                       />
                                       <span className="truncate">{c}</span>
                                     </button>
@@ -5928,7 +5928,7 @@ export default function MapView({
                                                   borderColor: subChecked
                                                     ? CLASS_GROUP_COLORS[c]
                                                     : 'var(--map-border)',
-                                                  background: subChecked
+                                                  backgroundColor: subChecked
                                                     ? CLASS_GROUP_COLORS[c]
                                                     : 'transparent',
                                                 }}
@@ -5979,7 +5979,7 @@ export default function MapView({
                                   }
                                   style={{
                                     color: 'var(--map-fg)',
-                                    background: visibility[d.key]
+                                    backgroundColor: visibility[d.key]
                                       ? 'var(--map-surface-active)'
                                       : undefined,
                                   }}
@@ -5991,7 +5991,7 @@ export default function MapView({
                                       borderColor: visibility[d.key]
                                         ? d.color
                                         : 'var(--map-border)',
-                                      background: visibility[d.key] ? d.color : 'transparent',
+                                      backgroundColor: visibility[d.key] ? d.color : 'transparent',
                                     }}
                                   >
                                     {visibility[d.key] && (
@@ -6080,7 +6080,7 @@ export default function MapView({
                                     <div
                                       style={{
                                         color: 'var(--map-fg)',
-                                        background: isChecked
+                                        backgroundColor: isChecked
                                           ? 'var(--map-surface-active)'
                                           : undefined,
                                       }}
@@ -6111,7 +6111,7 @@ export default function MapView({
                                           className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
                                           style={{
                                             borderColor: isChecked ? d.color : 'var(--map-border)',
-                                            background: isChecked ? d.color : 'transparent',
+                                            backgroundColor: isChecked ? d.color : 'transparent',
                                           }}
                                         >
                                           {isIndeterminate ? (
@@ -6138,14 +6138,14 @@ export default function MapView({
                                         {signageCode ? (
                                           <span
                                             className="flex h-3.5 shrink-0 items-center justify-center rounded-[3px] px-1 text-[8.5px] font-bold leading-none text-white"
-                                            style={{ background: d.color }}
+                                            style={{ backgroundColor: d.color }}
                                           >
                                             {signageCode}
                                           </span>
                                         ) : (
                                           <span
                                             className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                            style={{ background: d.color }}
+                                            style={{ backgroundColor: d.color }}
                                           />
                                         )}
                                         <span className="truncate">{d.label}</span>
@@ -6166,7 +6166,7 @@ export default function MapView({
                                                 borderColor: tertiaryRoadSectorOnly
                                                   ? d.color
                                                   : 'var(--map-border)',
-                                                background: tertiaryRoadSectorOnly
+                                                backgroundColor: tertiaryRoadSectorOnly
                                                   ? d.color
                                                   : 'transparent',
                                               }}
@@ -6212,7 +6212,7 @@ export default function MapView({
                                                   color: subChecked
                                                     ? 'var(--map-fg)'
                                                     : 'var(--map-fg-muted)',
-                                                  background: subChecked
+                                                  backgroundColor: subChecked
                                                     ? 'var(--map-surface-active)'
                                                     : undefined,
                                                 }}
@@ -6224,7 +6224,7 @@ export default function MapView({
                                                     borderColor: subChecked
                                                       ? d.color
                                                       : 'var(--map-border)',
-                                                    background: subChecked
+                                                    backgroundColor: subChecked
                                                       ? d.color
                                                       : 'transparent',
                                                   }}
@@ -6274,7 +6274,7 @@ export default function MapView({
                                   onClick={() => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
                                   style={{
                                     color: 'var(--map-fg)',
-                                    background: visibility[key]
+                                    backgroundColor: visibility[key]
                                       ? 'var(--map-surface-active)'
                                       : undefined,
                                   }}
@@ -6286,7 +6286,7 @@ export default function MapView({
                                       borderColor: visibility[key]
                                         ? 'var(--map-accent)'
                                         : 'var(--map-border)',
-                                      background: visibility[key]
+                                      backgroundColor: visibility[key]
                                         ? 'var(--map-accent)'
                                         : 'transparent',
                                     }}
@@ -6329,14 +6329,14 @@ export default function MapView({
               {baseLayerRows.map(({ key, label, icon: Icon, theme }) => (
                 <div
                   key={key}
-                  style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface)' }}
+                  style={{ borderColor: 'var(--map-border)', backgroundColor: 'var(--map-surface)' }}
                   className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 shadow-sm"
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     <span
                       className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
                       style={{
-                        background: `var(--map-section-${theme}-bg)`,
+                        backgroundColor: `var(--map-section-${theme}-bg)`,
                         color: `var(--map-section-${theme}-fg)`,
                       }}
                     >

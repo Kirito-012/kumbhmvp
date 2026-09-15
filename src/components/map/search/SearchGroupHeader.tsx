@@ -39,7 +39,7 @@ export default function SearchGroupHeader({
     <span
       className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px]"
       style={{
-        background: `var(--map-section-${theme}-bg)`,
+        backgroundColor: `var(--map-section-${theme}-bg)`,
         color: `var(--map-section-${theme}-fg)`,
       }}
     >

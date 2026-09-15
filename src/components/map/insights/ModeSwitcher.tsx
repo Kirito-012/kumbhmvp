@@ -70,7 +70,7 @@ export default function ModeSwitcher({
       aria-label="Map mode"
       style={{
         borderColor: 'var(--map-panel-border)',
-        background: 'var(--map-panel-bg)',
+        backgroundColor: 'var(--map-panel-bg)',
       }}
       className="relative inline-flex h-10 shrink-0 items-center rounded-lg border p-1 shadow-lg backdrop-blur-md"
     >
@@ -82,7 +82,7 @@ export default function ModeSwitcher({
           // includes the p-1 padding), not the 32px buttons themselves, so it was a few px wider
           // than each icon and drifted further off-center at every step (worse toward Tickets).
           transform: `translateX(${activeIndex * 2}rem)`,
-          background: INDICATOR_VAR[mode],
+          backgroundColor: INDICATOR_VAR[mode],
         }}
         className="absolute inset-y-1 left-1 w-8 rounded-md transition-transform duration-200 ease-out"
       />

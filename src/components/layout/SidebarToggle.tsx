@@ -16,7 +16,7 @@ export function SidebarToggle({ variant = 'overlay' }: { variant?: 'pinned' | 'o
         variant === 'overlay'
           ? {
               borderColor: 'var(--map-panel-border)',
-              background: 'var(--map-panel-bg)',
+              backgroundColor: 'var(--map-panel-bg)',
               color: 'var(--map-fg-muted)',
             }
           : undefined

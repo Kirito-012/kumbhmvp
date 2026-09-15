@@ -39,7 +39,7 @@ export default function SearchResultRow({
       aria-selected={highlighted}
       onMouseEnter={onMouseEnter}
       onClick={onClick}
-      style={{ background: highlighted ? 'var(--map-surface-hover)' : 'transparent' }}
+      style={{ backgroundColor: highlighted ? 'var(--map-surface-hover)' : 'transparent' }}
       className={
         sublabel
           ? 'flex w-full cursor-pointer flex-col items-start px-3 py-1.5 text-left'

@@ -72,7 +72,7 @@ function Section({
       <div className="mb-2 flex items-center gap-2">
         <span
           className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
-          style={{ background: t.bg, color: t.text }}
+          style={{ backgroundColor: t.bg, color: t.text }}
         >
           <span className="h-3 w-3">{icon}</span>
         </span>
@@ -88,7 +88,7 @@ function Section({
             {count !== undefined && (
               <span
                 className="rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums"
-                style={{ background: t.bg, color: t.text }}
+                style={{ backgroundColor: t.bg, color: t.text }}
               >
                 {count}
               </span>
@@ -393,7 +393,7 @@ function InsightsHero({
         >
           <span
             className="rounded-full px-1.5 py-0.5 font-semibold"
-            style={{ background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
+            style={{ backgroundColor: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
           >
             #{rankInfo.rank} of {rankInfo.ofCount} sectors
           </span>
@@ -465,13 +465,13 @@ function StatusProgress({
               className="relative cursor-pointer rounded-lg border px-2 py-1.5 text-left transition-colors"
               style={{
                 borderColor: active ? color : 'var(--map-border)',
-                background: active ? tint : 'transparent',
+                backgroundColor: active ? tint : 'transparent',
               }}
             >
               <div className="flex items-center gap-1.5">
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ background: color }}
+                  style={{ backgroundColor: color }}
                   aria-hidden
                 />
                 <span
@@ -596,18 +596,18 @@ function Categories({
               aria-pressed={active}
               title={`${active ? 'Clear' : 'Filter to'} ${row.name}`}
               className="relative flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors"
-              style={{ background: active ? rowTint : 'transparent' }}
+              style={{ backgroundColor: active ? rowTint : 'transparent' }}
             >
               {active && (
                 <span
                   aria-hidden="true"
                   className="absolute inset-y-1 left-0 w-[3px] rounded-full"
-                  style={{ background: color }}
+                  style={{ backgroundColor: color }}
                 />
               )}
               <span
                 className="h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ background: color }}
+                style={{ backgroundColor: color }}
                 aria-hidden
               />
               <span
@@ -687,7 +687,7 @@ function PriorityTrend({
               onClick={() => onFilterPriority(p.slug)}
               aria-pressed={active}
               className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors"
-              style={{ background: active ? 'var(--map-accent-bg)' : 'transparent' }}
+              style={{ backgroundColor: active ? 'var(--map-accent-bg)' : 'transparent' }}
             >
               <span
                 className="w-14 shrink-0 truncate text-[10.5px]"
@@ -722,14 +722,14 @@ function PriorityTrend({
             <span className="flex items-center gap-1">
               <span
                 className="h-1.5 w-1.5 rounded-full"
-                style={{ background: 'var(--map-accent)' }}
+                style={{ backgroundColor: 'var(--map-accent)' }}
               />{' '}
               Created
             </span>
             <span className="flex items-center gap-1">
               <span
                 className="h-1.5 w-1.5 rounded-full"
-                style={{ background: 'var(--map-mode-tickets)' }}
+                style={{ backgroundColor: 'var(--map-mode-tickets)' }}
               />{' '}
               Resolved
             </span>
@@ -775,7 +775,7 @@ function Assignees({
             <div key={a.id} className="flex items-center gap-2 text-[11.5px]">
               <span
                 className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold"
-                style={{ background: 'var(--map-surface-active)', color: 'var(--map-fg-muted)' }}
+                style={{ backgroundColor: 'var(--map-surface-active)', color: 'var(--map-fg-muted)' }}
                 aria-hidden
               >
                 {a.name.slice(0, 1).toUpperCase()}
@@ -877,7 +877,7 @@ function TicketListBlock({
           className="w-full rounded-lg border py-1.5 pl-8 pr-2.5 text-[11.5px] outline-none transition-shadow placeholder:text-[var(--map-fg-faint)] focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
           style={{
             borderColor: 'var(--map-border)',
-            background: 'var(--map-input-bg)',
+            backgroundColor: 'var(--map-input-bg)',
             color: 'var(--map-fg)',
           }}
         />
@@ -900,7 +900,7 @@ function TicketListBlock({
               >
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ background: priority?.color ?? 'var(--map-fg-faint)' }}
+                  style={{ backgroundColor: priority?.color ?? 'var(--map-fg-faint)' }}
                   title={priority?.name}
                   aria-hidden
                 />
@@ -921,7 +921,7 @@ function TicketListBlock({
                       <span
                         className="rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold"
                         style={{
-                          background: `color-mix(in srgb, ${status.color} 20%, transparent)`,
+                          backgroundColor: `color-mix(in srgb, ${status.color} 20%, transparent)`,
                           color: status.color,
                         }}
                       >
@@ -976,7 +976,7 @@ function SkeletonLines({ count }: { count: number }) {
         <div
           key={i}
           className="h-3.5 animate-pulse rounded"
-          style={{ background: 'var(--map-surface-active)', width: `${70 - i * 12}%` }}
+          style={{ backgroundColor: 'var(--map-surface-active)', width: `${70 - i * 12}%` }}
         />
       ))}
     </div>

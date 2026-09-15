@@ -261,11 +261,11 @@ function StatTile({
   return (
     <div
       className="flex items-center gap-2 rounded-[10px] border p-2"
-      style={{ background: 'var(--map-surface-alt)', borderColor: 'var(--map-border)' }}
+      style={{ backgroundColor: 'var(--map-surface-alt)', borderColor: 'var(--map-border)' }}
     >
       <span
         className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px]"
-        style={{ background: t.bg, color: t.fg }}
+        style={{ backgroundColor: t.bg, color: t.fg }}
       >
         <Icon className="h-3.5 w-3.5" />
       </span>
@@ -304,7 +304,7 @@ function UtilRow({
   return (
     <div
       className="rounded-[9px] border"
-      style={{ background: 'var(--map-surface-alt)', borderColor: 'var(--map-border)' }}
+      style={{ backgroundColor: 'var(--map-surface-alt)', borderColor: 'var(--map-border)' }}
     >
       <div
         className={`flex items-center gap-2.5 px-2 py-[7px] ${hasBreakdown ? 'cursor-pointer' : ''}`}
@@ -312,7 +312,7 @@ function UtilRow({
       >
         <span
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-          style={{ background: t.bg, color: t.fg }}
+          style={{ backgroundColor: t.bg, color: t.fg }}
         >
           <Icon className="h-[15px] w-[15px]" />
         </span>
@@ -381,7 +381,7 @@ function ColHead({
     <div className="mb-3 flex items-center gap-1.5">
       <span
         className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
-        style={{ background: t.bg, color: t.fg }}
+        style={{ backgroundColor: t.bg, color: t.fg }}
       >
         <Icon className="h-3 w-3" />
       </span>
@@ -545,7 +545,7 @@ export default function SectorReportDrawer({
   return (
     <div
       style={{
-        background: 'var(--map-panel-bg)',
+        backgroundColor: 'var(--map-panel-bg)',
         borderColor: 'var(--map-panel-border)',
         boxShadow: '0 -8px 30px var(--map-panel-shadow)',
         color: 'var(--map-fg)',
@@ -585,7 +585,7 @@ export default function SectorReportDrawer({
         >
           <span
             className="block h-1 w-9 rounded-full transition-colors"
-            style={{ background: dragging ? 'var(--map-accent)' : 'var(--map-switch-track)' }}
+            style={{ backgroundColor: dragging ? 'var(--map-accent)' : 'var(--map-switch-track)' }}
           />
         </button>
       </div>
@@ -615,7 +615,7 @@ export default function SectorReportDrawer({
       >
         <span
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]"
-          style={{ background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
+          style={{ backgroundColor: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
         >
           <ParcelIcon className="h-[18px] w-[18px]" />
         </span>
@@ -670,7 +670,7 @@ export default function SectorReportDrawer({
                 className="rounded-lg border px-2.5 py-2 text-[12.5px]"
                 style={{
                   borderColor: 'var(--danger-soft)',
-                  background: 'var(--danger-soft)',
+                  backgroundColor: 'var(--danger-soft)',
                   color: 'var(--danger)',
                 }}
               >
@@ -746,7 +746,7 @@ export default function SectorReportDrawer({
                           key={group.classGroup}
                           className="overflow-hidden rounded-[10px] border"
                           style={{
-                            background: 'var(--map-surface-alt)',
+                            backgroundColor: 'var(--map-surface-alt)',
                             borderColor: 'var(--map-border)',
                           }}
                         >
@@ -756,7 +756,7 @@ export default function SectorReportDrawer({
                           >
                             <span
                               className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[7px]"
-                              style={{ background: t.bg, color: t.fg }}
+                              style={{ backgroundColor: t.bg, color: t.fg }}
                             >
                               <Icon className="h-[13px] w-[13px]" />
                             </span>
@@ -793,14 +793,14 @@ export default function SectorReportDrawer({
                       <div
                         className="flex items-center gap-1.5 rounded-[10px] border px-2.5 py-2"
                         style={{
-                          background: 'var(--map-surface-alt)',
+                          backgroundColor: 'var(--map-surface-alt)',
                           borderColor: 'var(--map-border)',
                         }}
                       >
                         <span
                           className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[7px]"
                           style={{
-                            background: 'var(--map-section-blue-bg)',
+                            backgroundColor: 'var(--map-section-blue-bg)',
                             color: 'var(--map-section-blue-fg)',
                           }}
                         >

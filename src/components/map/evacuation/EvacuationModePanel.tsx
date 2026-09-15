@@ -84,7 +84,7 @@ function LayerToggleRow({
         <span
           aria-hidden
           className="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors"
-          style={{ background: on ? 'var(--map-accent)' : 'var(--map-switch-track)' }}
+          style={{ backgroundColor: on ? 'var(--map-accent)' : 'var(--map-switch-track)' }}
         >
           <span
             className="absolute h-3 w-3 rounded-full bg-white shadow transition-transform"
@@ -134,7 +134,7 @@ function BaseLayerRow({
         <span
           aria-hidden
           className="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors"
-          style={{ background: on ? 'var(--map-accent)' : 'var(--map-switch-track)' }}
+          style={{ backgroundColor: on ? 'var(--map-accent)' : 'var(--map-switch-track)' }}
         >
           <span
             className="absolute h-3 w-3 rounded-full bg-white shadow transition-transform"
@@ -164,7 +164,7 @@ function Chip({
       aria-pressed={active}
       style={{
         borderColor: active ? 'var(--map-accent)' : 'var(--map-border)',
-        background: active ? 'var(--map-accent)' : 'var(--map-input-bg)',
+        backgroundColor: active ? 'var(--map-accent)' : 'var(--map-input-bg)',
         color: active ? '#fff' : 'var(--map-fg-muted)',
       }}
       className="cursor-pointer rounded-full border px-2.5 py-1 text-[11.5px] font-medium transition-colors"
@@ -360,7 +360,7 @@ export default function EvacuationModePanel({
               id="evac-search-listbox"
               role="listbox"
               aria-label="Search results"
-              style={{ borderColor: 'var(--map-border)', background: 'var(--map-surface)' }}
+              style={{ borderColor: 'var(--map-border)', backgroundColor: 'var(--map-surface)' }}
               className="kumbh-scroll absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border py-1 shadow-lg"
             >
               {loading && flatRows.length === 0 && (

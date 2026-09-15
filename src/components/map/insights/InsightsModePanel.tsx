@@ -123,7 +123,7 @@ export default function InsightsModePanel({
           className="rounded-lg border px-2.5 py-2 text-[12.5px]"
           style={{
             borderColor: 'var(--danger-soft)',
-            background: 'var(--danger-soft)',
+            backgroundColor: 'var(--danger-soft)',
             color: 'var(--danger)',
           }}
         >
@@ -259,7 +259,7 @@ function InsightsModeBody({
                   className="cursor-pointer rounded-md px-1 py-1 text-[10.5px] font-semibold transition-colors"
                   style={
                     heatMetric === opt.value
-                      ? { background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }
+                      ? { backgroundColor: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }
                       : { color: 'var(--map-fg-muted)' }
                   }
                 >
@@ -309,7 +309,7 @@ function InsightsModeBody({
                   >
                     <span
                       className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                      style={{ background: BUCKET_COLORS[bucket][theme] }}
+                      style={{ backgroundColor: BUCKET_COLORS[bucket][theme] }}
                       aria-hidden
                     />
                     <span className="flex-1">{BUCKET_LABELS[bucket]}</span>
@@ -336,7 +336,7 @@ function InsightsModeBody({
               className="w-full rounded-lg border py-1.5 pl-8 pr-2.5 text-[11.5px] outline-none transition-shadow placeholder:text-[var(--map-fg-faint)] focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
               style={{
                 borderColor: 'var(--map-border)',
-                background: 'var(--map-input-bg)',
+                backgroundColor: 'var(--map-input-bg)',
                 color: 'var(--map-fg)',
               }}
             />
@@ -363,7 +363,7 @@ function InsightsModeBody({
                   onClick={() => onSelectSector(row.key)}
                   className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors"
                   style={{
-                    background: isSelected ? 'var(--map-accent-bg)' : 'transparent',
+                    backgroundColor: isSelected ? 'var(--map-accent-bg)' : 'transparent',
                   }}
                   onMouseEnter={(e) => {
                     if (!isSelected) e.currentTarget.style.background = 'var(--map-surface-hover)'

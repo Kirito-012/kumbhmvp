@@ -137,13 +137,13 @@ export function AnimatedBar({
   return (
     <span
       className={`block overflow-hidden rounded-full ${trackClassName}`}
-      style={{ height, background: 'var(--map-border)' }}
+      style={{ height, backgroundColor: 'var(--map-border)' }}
     >
       <span
         className="block h-full rounded-full"
         style={{
           width: `${width}%`,
-          background: fill,
+          backgroundColor: fill,
           transition: 'width 500ms cubic-bezier(0.16,1,0.3,1)',
         }}
       />
@@ -202,7 +202,7 @@ function StatusHoverCard({
         left: pos?.left ?? cursorX,
         top: pos?.top ?? cursorY,
         opacity: pos ? 1 : 0,
-        background: 'var(--map-popup-bg)',
+        backgroundColor: 'var(--map-popup-bg)',
         border: '1px solid var(--map-popup-border)',
         boxShadow: `0 24px 48px -12px rgba(0,0,0,0.5), 0 0 0 1px ${color}1a`,
       }}
@@ -402,7 +402,7 @@ export function StatusBreakdownDonut({
             <span className="flex min-w-0 items-center gap-1.5">
               <span
                 className="h-2 w-2 shrink-0 rounded-full"
-                style={{ background: entry.color }}
+                style={{ backgroundColor: entry.color }}
                 aria-hidden
               />
               <span className="truncate" style={{ color: 'var(--map-fg-muted)' }}>
@@ -455,7 +455,7 @@ export function Sparkline({ data }: { data: SectorTrendDay[] }) {
           <Tooltip
             cursor={{ stroke: 'var(--map-border)', strokeWidth: 1 }}
             contentStyle={{
-              background: 'var(--map-popup-bg)',
+              backgroundColor: 'var(--map-popup-bg)',
               border: '1px solid var(--map-popup-border)',
               borderRadius: 8,
               fontSize: 11,

@@ -56,7 +56,7 @@ function PriorityHoverCard({
         left: pos?.left ?? cursorX,
         top: pos?.top ?? cursorY,
         opacity: pos ? 1 : 0,
-        background: 'var(--category-hovercard-bg)',
+        backgroundColor: 'var(--category-hovercard-bg)',
         border: '1px solid var(--category-hovercard-border)',
         boxShadow: `0 24px 48px -12px rgba(0,0,0,0.5), 0 0 0 1px ${c}1a, 0 -1px 0 0 rgba(255,255,255,0.06) inset`,
       }}
@@ -104,7 +104,7 @@ function PriorityHoverCard({
 
         <div
           className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full"
-          style={{ background: 'var(--category-tube-bg)' }}
+          style={{ backgroundColor: 'var(--category-tube-bg)' }}
         >
           <div
             className="h-full rounded-full"

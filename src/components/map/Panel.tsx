@@ -148,7 +148,7 @@ export default function Panel({
         // sm+ -- but inline styles can't be media-gated, so it's simplest to just always set it
         // and let the higher-specificity `!` mobile override win under 640px regardless.
         ...(resizable ? { width } : undefined),
-        background: 'var(--map-panel-bg)',
+        backgroundColor: 'var(--map-panel-bg)',
         borderColor: 'var(--map-panel-border)',
         boxShadow: `0 8px 30px var(--map-panel-shadow)`,
         color: 'var(--map-fg)',
@@ -190,7 +190,7 @@ export default function Panel({
         >
           <span
             className="h-10 w-1 rounded-full transition-colors"
-            style={{ background: dragging ? 'var(--map-accent)' : 'var(--map-switch-track)' }}
+            style={{ backgroundColor: dragging ? 'var(--map-accent)' : 'var(--map-switch-track)' }}
           />
         </div>
       )}
@@ -212,7 +212,7 @@ export default function Panel({
       >
         <span
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-          style={{ background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
+          style={{ backgroundColor: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
         >
           <span className="h-4 w-4">{icon}</span>
         </span>

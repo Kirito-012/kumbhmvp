@@ -57,7 +57,7 @@ const SearchInput = forwardRef<
           : {})}
         style={{
           borderColor: 'var(--map-border)',
-          background: 'var(--map-input-bg)',
+          backgroundColor: 'var(--map-input-bg)',
           color: 'var(--map-fg)',
         }}
         className={`w-full rounded-xl border py-2.5 pl-9 ${onClear ? 'pr-8' : 'pr-3'} text-[14px] placeholder:text-[var(--map-fg-faint)] outline-none transition-shadow focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25`}

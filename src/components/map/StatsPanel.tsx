@@ -142,7 +142,7 @@ function Section({
       <div className="mb-2 flex items-center gap-2">
         <span
           className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
-          style={{ background: t.bg, color: t.text }}
+          style={{ backgroundColor: t.bg, color: t.text }}
         >
           <span className="h-3 w-3">{icon}</span>
         </span>
@@ -155,7 +155,7 @@ function Section({
         {count !== undefined && (
           <span
             className="ml-auto rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums"
-            style={{ background: t.bg, color: t.text }}
+            style={{ backgroundColor: t.bg, color: t.text }}
           >
             {count}
           </span>
@@ -212,7 +212,7 @@ function Table({
             return (
               <th
                 key={i}
-                style={{ background: 'var(--map-surface)', color: 'var(--map-fg-faint)' }}
+                style={{ backgroundColor: 'var(--map-surface)', color: 'var(--map-fg-faint)' }}
                 className={`${scrollable ? 'sticky top-0 z-10' : ''} pt-1 pb-1.5 ${
                   isFirst ? firstCellPad : ''
                 } ${isLast ? lastCellPad : 'pr-2'} text-[10.5px] font-semibold uppercase tracking-wide ${
@@ -240,7 +240,7 @@ function Table({
               key={ri}
               onClick={onRowClick ? () => onRowClick(ri) : undefined}
               className={`${onRowClick && !isActive ? 'cursor-pointer hover:bg-[var(--map-surface-hover)]' : onRowClick ? 'cursor-pointer' : ''}`}
-              style={isActive ? { background: rowTint } : undefined}
+              style={isActive ? { backgroundColor: rowTint } : undefined}
             >
               {row.map((cell, ci) => {
                 const isFirst = ci === 0
@@ -259,7 +259,7 @@ function Table({
                       <span
                         aria-hidden="true"
                         className="absolute inset-y-1 left-0 w-[3px] rounded-full"
-                        style={{ background: swatch ?? 'var(--map-accent)' }}
+                        style={{ backgroundColor: swatch ?? 'var(--map-accent)' }}
                       />
                     )}
                     {cell}
@@ -327,7 +327,7 @@ function SortHeader({
       // Fixing that properly needs a scroll container per section, which is a
       // bigger change than the benefit justifies here.
       aria-sort={isActive ? (sort.desc ? 'descending' : 'ascending') : 'none'}
-      style={{ background: 'var(--map-surface)', color: 'var(--map-fg-faint)' }}
+      style={{ backgroundColor: 'var(--map-surface)', color: 'var(--map-fg-faint)' }}
       className={`pt-1 pb-1.5 text-[10.5px] font-semibold uppercase tracking-wide ${
         align === 'right' ? 'text-right' : 'text-left'
       } ${className}`}
@@ -380,7 +380,7 @@ function RowCheckbox({
         // panel's tree even when nothing is selected.
         borderColor:
           checked || indeterminate ? color : `color-mix(in srgb, ${color} 45%, transparent)`,
-        background: checked || indeterminate ? color : 'transparent',
+        backgroundColor: checked || indeterminate ? color : 'transparent',
       }}
     >
       {indeterminate ? (
@@ -446,12 +446,12 @@ function MagnitudeBar({ value, max, color }: { value: number; max: number; color
         width: BAR_TRACK_PX,
         // The unfilled remainder has to stay visible -- it's the "out of what"
         // reference that makes the fixed track worth its vertical space.
-        background: `color-mix(in srgb, ${color} 24%, transparent)`,
+        backgroundColor: `color-mix(in srgb, ${color} 24%, transparent)`,
       }}
     >
       <span
         className="absolute inset-y-0 right-0 rounded-full"
-        style={{ width: `${pct}%`, background: color }}
+        style={{ width: `${pct}%`, backgroundColor: color }}
       />
     </span>
   )
@@ -495,7 +495,7 @@ function LocateToggleButton({
       title={label}
       style={{
         color: isOpen ? color : 'var(--map-fg-faint)',
-        background: isOpen ? `color-mix(in srgb, ${color} 16%, transparent)` : undefined,
+        backgroundColor: isOpen ? `color-mix(in srgb, ${color} 16%, transparent)` : undefined,
       }}
       className="flex h-[18px] w-[18px] shrink-0 cursor-pointer items-center justify-center rounded hover:bg-[var(--map-surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--map-accent)]"
     >
@@ -804,7 +804,7 @@ function PoiTable({
               <Fragment key={row.layer}>
                 <tr
                   className={isActive ? '' : 'cursor-pointer hover:bg-[var(--map-surface-hover)]'}
-                  style={isActive ? { background: rowTint } : undefined}
+                  style={isActive ? { backgroundColor: rowTint } : undefined}
                 >
                   <td
                     style={{ color: isActive ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
@@ -814,7 +814,7 @@ function PoiTable({
                       <span
                         aria-hidden="true"
                         className="absolute inset-y-1 left-0 w-[3px] rounded-full"
-                        style={{ background: color }}
+                        style={{ backgroundColor: color }}
                       />
                     )}
                     <span className="flex items-center gap-1">
@@ -849,7 +849,7 @@ function PoiTable({
                         {signageCode && (
                           <span
                             className="flex h-3.5 shrink-0 items-center justify-center rounded-[3px] px-1 text-[8.5px] font-bold leading-none text-white"
-                            style={{ background: color }}
+                            style={{ backgroundColor: color }}
                           >
                             {signageCode}
                           </span>
@@ -918,7 +918,7 @@ function PoiTable({
                           style={
                             subChecked
                               ? {
-                                  background: `color-mix(in srgb, ${color} var(--map-row-tint-pct), transparent)`,
+                                  backgroundColor: `color-mix(in srgb, ${color} var(--map-row-tint-pct), transparent)`,
                                 }
                               : undefined
                           }
@@ -932,7 +932,7 @@ function PoiTable({
                               <span
                                 aria-hidden="true"
                                 className="absolute inset-y-0.5 left-0 w-[3px] rounded-full"
-                                style={{ background: color }}
+                                style={{ backgroundColor: color }}
                               />
                             )}
                             <span className="flex items-center gap-1.5 pl-5">
@@ -1134,7 +1134,7 @@ function ClassAreaTable({
               <Fragment key={cls}>
                 <tr
                   className={isActive ? '' : 'cursor-pointer hover:bg-[var(--map-surface-hover)]'}
-                  style={isActive ? { background: rowTint } : undefined}
+                  style={isActive ? { backgroundColor: rowTint } : undefined}
                 >
                   <td
                     style={{ color: isActive ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
@@ -1144,7 +1144,7 @@ function ClassAreaTable({
                       <span
                         aria-hidden="true"
                         className="absolute inset-y-1 left-0 w-[3px] rounded-full"
-                        style={{ background: color }}
+                        style={{ backgroundColor: color }}
                       />
                     )}
                     <span className="flex items-center gap-1">
@@ -1252,7 +1252,7 @@ function ClassAreaTable({
                           style={
                             subChecked
                               ? {
-                                  background: `color-mix(in srgb, ${color} calc(var(--map-row-tint-pct) * 0.6), transparent)`,
+                                  backgroundColor: `color-mix(in srgb, ${color} calc(var(--map-row-tint-pct) * 0.6), transparent)`,
                                 }
                               : undefined
                           }
@@ -1272,7 +1272,7 @@ function ClassAreaTable({
                               <span
                                 aria-hidden="true"
                                 className="absolute inset-y-0.5 left-0 w-[3px] rounded-full"
-                                style={{ background: color }}
+                                style={{ backgroundColor: color }}
                               />
                             )}
                             <span className="flex items-center gap-1.5 pl-5">
@@ -1545,7 +1545,7 @@ export default function StatsPanel({
           onClick={onClearSector}
           style={{
             borderColor: 'var(--map-accent-bg-hover)',
-            background: 'var(--map-accent-bg)',
+            backgroundColor: 'var(--map-accent-bg)',
             color: 'var(--map-accent-fg)',
           }}
           className="mb-3 inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11.5px] font-medium transition-colors hover:brightness-95 cursor-pointer"
@@ -1571,7 +1571,7 @@ export default function StatsPanel({
           className="rounded-lg border px-2.5 py-2 text-[12.5px]"
           style={{
             borderColor: 'var(--danger-soft)',
-            background: 'var(--danger-soft)',
+            backgroundColor: 'var(--danger-soft)',
             color: 'var(--danger)',
           }}
         >
@@ -1713,7 +1713,7 @@ export default function StatsPanel({
                       <span
                         className="h-1.5 w-1.5 shrink-0 rounded-full"
                         style={{
-                          background: POI_COLORS.tertiary_road,
+                          backgroundColor: POI_COLORS.tertiary_road,
                           opacity: poiVisibility.tertiary_road ? 1 : 0.45,
                         }}
                       />
@@ -1724,7 +1724,7 @@ export default function StatsPanel({
                       <span
                         className="ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide"
                         style={{
-                          background: 'var(--map-surface-hover)',
+                          backgroundColor: 'var(--map-surface-hover)',
                           color: 'var(--map-fg-faint)',
                         }}
                       >
