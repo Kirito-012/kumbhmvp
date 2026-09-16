@@ -289,6 +289,44 @@ export function StatusBreakdownDonut({
   const [hoverBucket, setHoverBucket] = useState<StatusBucket | null>(null)
   const [chartHoverBucket, setChartHoverBucket] = useState<StatusBucket | null>(null)
   const [cursor, setCursor] = useState({ x: 0, y: 0 })
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  // Recharts' Pie onMouseLeave (and the wrapping div's own onMouseLeave below) both depend on the
+  // browser actually dispatching a leave event for the element under the cursor -- a fast flick off
+  // the donut, or the panel re-rendering out from under a stationary cursor (e.g. the periodic
+  // insights refetch swapping the DOM), can skip that dispatch and leave the hover card stuck
+  // showing the last-hovered bucket forever. This is a self-healing fallback, independent of those
+  // callbacks: while any hover is active, it checks the real cursor position against the donut's
+  // current bounding box on every document-wide mousemove and clears the hover the moment the two
+  // disagree.
+  useEffect(() => {
+    if (!hoverBucket && !chartHoverBucket) return
+    const handleMove = (e: MouseEvent) => {
+      const rect = rootRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const inside =
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY <= rect.bottom
+      if (!inside) {
+        setHoverBucket(null)
+        setChartHoverBucket(null)
+      }
+    }
+    // Deliberately NOT also a document 'mouseleave' listener: Recharts swaps the hovered sector's
+    // DOM node internally to render its "active shape" highlight, and that removal makes the
+    // browser synthesize a mouseleave on ancestors (up through document) to rebalance the hover
+    // chain -- even though the cursor never left the page. A 'mouseleave' listener here reacted to
+    // that false signal and cleared a completely legitimate, still-active hover. The mousemove
+    // bounds check above already catches a real fast-flick-away (the bug this exists for); it just
+    // can't also catch the cursor leaving the browser window entirely, since no more mousemove
+    // events fire once it does -- an accepted gap rather than reintroducing the false positive.
+    document.addEventListener('mousemove', handleMove)
+    return () => {
+      document.removeEventListener('mousemove', handleMove)
+    }
+  }, [hoverBucket, chartHoverBucket])
 
   const data = BUCKET_ORDER.map((bucket) => ({
     bucket,
@@ -319,6 +357,7 @@ export function StatusBreakdownDonut({
 
   return (
     <div
+      ref={rootRef}
       className="flex items-center gap-4"
       onMouseMove={(e) => setCursor({ x: e.clientX, y: e.clientY })}
     >

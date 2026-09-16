@@ -24,7 +24,7 @@ import {
   BUCKET_COLORS,
   type StatusBucket,
 } from '@/lib/insights/statusBuckets'
-import type { InsightsTicketData } from '@/lib/insights/types'
+import { TicketField, type InsightsTicketData } from '@/lib/insights/types'
 import { timeAgo } from '@/lib/utils'
 
 type SectorSummary = { sector_no: number; name: string; area_hac: number }
@@ -64,6 +64,7 @@ export default function InsightsModePanel({
   filters,
   selectedSector,
   onSelectSector,
+  onFlyToTicket,
   forceCollapsed,
   onExpand,
   onCollapse,
@@ -80,6 +81,10 @@ export default function InsightsModePanel({
   filters: InsightsFilters
   selectedSector: number | 'peripheral' | null
   onSelectSector: (sector: number | 'peripheral') => void
+  /** Flies the map to a ticket matched by number in the search box below (see
+   *  InsightsModeBody's ticketMatches), and highlights its parcel so the destination doesn't get
+   *  lost among its neighbours once the map settles. */
+  onFlyToTicket: (sectorPlanId: number, lng: number, lat: number) => void
   forceCollapsed?: boolean
   onExpand?: () => void
   onCollapse?: () => void
@@ -148,6 +153,7 @@ export default function InsightsModePanel({
           filters={filters}
           selectedSector={selectedSector}
           onSelectSector={onSelectSector}
+          onFlyToTicket={onFlyToTicket}
           theme={theme}
           generatedAt={insightsData.generatedAt}
           onRefresh={onRefresh}
@@ -166,6 +172,7 @@ function InsightsModeBody({
   filters,
   selectedSector,
   onSelectSector,
+  onFlyToTicket,
   theme,
   generatedAt,
   onRefresh,
@@ -178,6 +185,7 @@ function InsightsModeBody({
   filters: InsightsFilters
   selectedSector: number | 'peripheral' | null
   onSelectSector: (sector: number | 'peripheral') => void
+  onFlyToTicket: (sectorPlanId: number, lng: number, lat: number) => void
   theme: ReturnType<typeof useInsightTheme>
   generatedAt: string
   onRefresh: () => void
@@ -239,6 +247,18 @@ function InsightsModeBody({
   const visibleRanked = sectorQ
     ? ranked.filter((row) => row.label.toLowerCase().includes(sectorQ))
     : ranked
+
+  // A purely-numeric query is treated as a ticket-number lookup (e.g. "2581") rather than a
+  // sector-name search -- sector labels are prefixed with their own zero-padded number ("07. ...")
+  // so a digit query already matches those too via visibleRanked above; this just also surfaces
+  // the ticket itself so it can be flown to directly instead of only its sector.
+  const ticketQ = sectorQuery.trim()
+  const ticketMatches =
+    ticketQ && /^\d+$/.test(ticketQ)
+      ? insightsData.tickets
+          .filter((t) => String(t[TicketField.Number]).includes(ticketQ))
+          .slice(0, 6)
+      : []
 
   return (
     <div className="flex flex-col gap-4">
@@ -331,8 +351,8 @@ function InsightsModeBody({
               type="text"
               value={sectorQuery}
               onChange={(e) => setSectorQuery(e.target.value)}
-              placeholder="Search sectors…"
-              aria-label="Search sectors"
+              placeholder="Search sectors or a ticket #…"
+              aria-label="Search sectors or a ticket number"
               className="w-full rounded-lg border py-1.5 pl-8 pr-2.5 text-[11.5px] outline-none transition-shadow placeholder:text-[var(--map-fg-faint)] focus:border-[var(--map-accent)] focus:ring-2 focus:ring-[var(--map-accent)]/25"
               style={{
                 borderColor: 'var(--map-border)',
@@ -341,9 +361,50 @@ function InsightsModeBody({
               }}
             />
           </div>
-          {visibleRanked.length === 0 && (
+          {ticketMatches.length > 0 && (
+            <div className="mb-2 flex flex-col gap-0.5">
+              <span
+                className="px-1.5 text-[10px] font-semibold uppercase tracking-wide"
+                style={{ color: 'var(--map-fg-faint)' }}
+              >
+                Tickets
+              </span>
+              {ticketMatches.map((t) => {
+                const sectorNo = t[TicketField.SectorNo]
+                const classGroup = insightsData.classGroups[t[TicketField.ClassGroupIdx]]
+                return (
+                  <button
+                    key={t[TicketField.Number]}
+                    type="button"
+                    onClick={() =>
+                      onFlyToTicket(
+                        t[TicketField.SectorPlanId],
+                        t[TicketField.Lng],
+                        t[TicketField.Lat],
+                      )
+                    }
+                    className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-[var(--map-surface-hover)]"
+                  >
+                    <span
+                      className="shrink-0 text-[11.5px] font-semibold tabular-nums"
+                      style={{ color: 'var(--map-accent)' }}
+                    >
+                      #{t[TicketField.Number]}
+                    </span>
+                    <span
+                      className="min-w-0 flex-1 truncate text-[11.5px]"
+                      style={{ color: 'var(--map-fg-muted)' }}
+                    >
+                      {classGroup} · {sectorNo !== null ? `Sector ${sectorNo}` : 'Peripheral'}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          {visibleRanked.length === 0 && ticketMatches.length === 0 && (
             <p className="px-1.5 py-1 text-[11.5px]" style={{ color: 'var(--map-fg-faint)' }}>
-              No sectors match your search.
+              No sectors or tickets match your search.
             </p>
           )}
           <div className="flex flex-col gap-0.5">

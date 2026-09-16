@@ -138,6 +138,41 @@ export function PriorityBreakdown({ data: priorityBreakdown }: { data: PriorityB
   const [hoverSlug, setHoverSlug] = useState<string | null>(null)
   const [chartHoverSlug, setChartHoverSlug] = useState<string | null>(null)
   const [cursor, setCursor] = useState({ x: 0, y: 0 })
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  // Recharts' Pie onMouseLeave (and the donut wrapper's own onMouseLeave below) both depend on the
+  // browser actually dispatching a leave event for the element under the cursor -- a fast flick off
+  // the donut can skip that dispatch and leave the hover card stuck showing the last-hovered
+  // priority forever. This is a self-healing fallback, independent of those callbacks: while any
+  // hover is active, it checks the real cursor position against the donut's current bounding box on
+  // every document-wide mousemove and clears the hover the moment the two disagree.
+  //
+  // Deliberately NOT also a document 'mouseleave' listener (see MapView's insights donut, which hit
+  // this exact bug first): Recharts swaps the hovered sector's DOM node internally to render its
+  // "active shape" highlight, and that removal makes the browser synthesize a mouseleave on
+  // ancestors (up through document) to rebalance the hover chain -- even though the cursor never
+  // left the page. A 'mouseleave' listener here would react to that false signal and clear a
+  // completely legitimate, still-active hover.
+  useEffect(() => {
+    if (!hoverSlug && !chartHoverSlug) return
+    const handleMove = (e: MouseEvent) => {
+      const rect = rootRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const inside =
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY <= rect.bottom
+      if (!inside) {
+        setHoverSlug(null)
+        setChartHoverSlug(null)
+      }
+    }
+    document.addEventListener('mousemove', handleMove)
+    return () => {
+      document.removeEventListener('mousemove', handleMove)
+    }
+  }, [hoverSlug, chartHoverSlug])
 
   const hoveredEntry = chartHoverSlug
     ? (priorityBreakdown.find((d) => d.slug === chartHoverSlug) ?? null)
@@ -166,6 +201,7 @@ export function PriorityBreakdown({ data: priorityBreakdown }: { data: PriorityB
 
   return (
     <div
+      ref={rootRef}
       className="flex items-center gap-6"
       onMouseMove={(e) => setCursor({ x: e.clientX, y: e.clientY })}
     >

@@ -112,6 +112,8 @@ import EvacuationModePanel from '@/components/map/evacuation/EvacuationModePanel
 import EvacuationPanel from '@/components/map/evacuation/EvacuationPanel'
 import SearchInput from '@/components/map/search/SearchInput'
 import SearchGroupHeader from '@/components/map/search/SearchGroupHeader'
+import { PhotoLightbox } from '@/components/tickets/PhotoLightbox'
+import type { AttachmentView } from '@/lib/ticket-view'
 import {
   addEvacLayers,
   applyEvacFilters,
@@ -583,9 +585,28 @@ const SECTOR_FILL_OPACITY: { light: ExpressionSpecification; dark: ExpressionSpe
 // one in `*` fails style validation ("\"zoom\" expression may only be used as input to a top-level
 // \"step\" or \"interpolate\" expression") and silently drops the whole layer -- the exact same
 // class of bug `trafficRouteWidthExpr` in evacLayers.ts works around for the hover-width arrows.
-const SECTOR_FILL_OPACITY_DIMMED: { light: ExpressionSpecification; dark: ExpressionSpecification } = {
-  light: ['interpolate', ['linear'], ['zoom'], 11, 0.16 * 0.4, 15, 0.4 * 0.4] as unknown as ExpressionSpecification,
-  dark: ['interpolate', ['linear'], ['zoom'], 11, 0.1 * 0.4, 15, 0.3 * 0.4] as unknown as ExpressionSpecification,
+const SECTOR_FILL_OPACITY_DIMMED: {
+  light: ExpressionSpecification
+  dark: ExpressionSpecification
+} = {
+  light: [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    11,
+    0.16 * 0.4,
+    15,
+    0.4 * 0.4,
+  ] as unknown as ExpressionSpecification,
+  dark: [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    11,
+    0.1 * 0.4,
+    15,
+    0.3 * 0.4,
+  ] as unknown as ExpressionSpecification,
 }
 
 // Two call sites need this (the theme-swap effect AND the class-filter effect below both write
@@ -1305,6 +1326,14 @@ export default function MapView({
   /** sectorPlanId of the parcel the currently-open popup belongs to — lets the async ticket
    *  lookup discard its result if the user has since clicked a different parcel (or closed it). */
   const popupParcelIdRef = useRef<number | null>(null)
+  /** Set from the Map mode parcel popup's before/after thumbnail click (see the popup's click
+   *  delegation in showPopup) -- opens the same PhotoLightbox the ticket detail page uses. */
+  const [mapPopupPhotos, setMapPopupPhotos] = useState<AttachmentView[] | null>(null)
+  const [mapPopupPhotoIndex, setMapPopupPhotoIndex] = useState(0)
+  /** sectorPlanId to outline with sector-plan-highlight-glow/-outline (see the layers added in
+   *  initMap and the effect that drives their filter below) -- set when flying in from a
+   *  ticket-number search so the destination parcel doesn't get lost among its neighbours. */
+  const [highlightedParcelId, setHighlightedParcelId] = useState<number | null>(null)
   /** Mirrors `measuring` state inside the map's one-time 'load' click handler, which closes
    *  over stale state otherwise (that effect runs once on mount, not on every re-render). */
   const measuringRef = useRef(false)
@@ -1329,9 +1358,11 @@ export default function MapView({
    *  -- hover feature-state on evac lines). Tracked so the mousemove handler below can clear the
    *  PREVIOUS feature's `hover` flag before setting the new one, the same "diff against what was
    *  last set" shape hoveredSectorRef uses for Map mode's own sector hover. */
-  const hoveredEvacFeatureRef = useRef<{ source: string; sourceLayer?: string; id: string | number } | null>(
-    null,
-  )
+  const hoveredEvacFeatureRef = useRef<{
+    source: string
+    sourceLayer?: string
+    id: string | number
+  } | null>(null)
   /** Last known *expanded* width of the right-docked Stats/Insights panel --
    *  read by reservedMapPadding (see below) so the map's centered area
    *  always leaves room for the panel at the width it would open to,
@@ -2042,6 +2073,10 @@ export default function MapView({
   // already reconciled. Runs once; the effects below take over persisting
   // further changes.
   useEffect(() => {
+    // Deliberate: SSR renders with the hydration-safe defaults above, and this is the one-time
+    // post-mount read of the real localStorage value the comment above describes; there's no
+    // non-effect way to defer a browser-only read past hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setVisibility(loadStoredVisibility())
   }, [])
 
@@ -2054,6 +2089,8 @@ export default function MapView({
   // Same SSR-safe-default-then-hydrate split as `visibility` above, for evacVisibility's own
   // separate store (PLAN-evacuation.md §5.1).
   useEffect(() => {
+    // Deliberate, same as the visibility hydration effect above.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEvacVisibility(loadStoredEvacVisibility())
   }, [])
 
@@ -2163,10 +2200,50 @@ export default function MapView({
     ]
   }
 
+  // Every parcel popup (every mode -- see propertyRowsHtml below) folds Plot No./Block/Sector into
+  // one 3-column row instead of 3 separate ones, and drops Subclass entirely -- the class group is
+  // already the popup's own header title, so repeating it as a row is redundant there.
+  function parcelRowsHtml(p: Record<string, unknown>) {
+    const cols: [string, unknown][] = [
+      ['Plot', p.plot_no],
+      ['Block', p.block],
+      ['Sector', p.sector_no ?? 'Peripheral'],
+    ]
+    const areaValue = typeof p.area === 'number' ? p.area.toFixed(3) : p.area
+    return `<div style="padding:10px 16px 4px;display:flex;flex-direction:column">
+      <div style="display:flex;padding:5px 0">
+        ${cols
+          .map(
+            ([k, v], i) =>
+              `<div style="flex:1;min-width:0;${i > 0 ? 'border-left:1px solid var(--map-popup-row-border);padding-left:10px;margin-left:10px' : ''}">
+                <div style="font-size:10px;color:var(--map-popup-faint)">${escapeHtml(k)}</div>
+                <div style="font-size:12.5px;font-weight:600;color:var(--map-popup-heading);overflow-wrap:anywhere">${
+                  v === null || v === undefined || v === '' ? '—' : escapeHtml(v)
+                }</div>
+              </div>`,
+          )
+          .join('')}
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:5px 0;border-top:1px solid var(--map-popup-row-border)">
+        <span style="font-size:11.5px;color:var(--map-popup-faint)">Area (ha)</span>
+        <span style="font-size:12.5px;font-weight:600;color:var(--map-popup-heading);text-align:right;overflow-wrap:anywhere">${
+          areaValue === null || areaValue === undefined || areaValue === ''
+            ? '—'
+            : escapeHtml(areaValue)
+        }</span>
+      </div>
+    </div>`
+  }
+
   function propertyRowsHtml(feature: MapGEOJSONFeatureCompat) {
     const p = feature.properties ?? {}
     const poiDef = poiLayerDef(feature.layer.id)
     const isToilet = feature.layer.id === 'poi-sanitation' && p.subclass === 'Toilet'
+
+    if (feature.layer.id === 'sector-plan-fill') {
+      return parcelRowsHtml(p)
+    }
+
     const rows: [string, unknown][] = poiDef
       ? [
           ...(isToilet ? toiletSeatBreakdown(p.name) : []),
@@ -2192,15 +2269,10 @@ export default function MapView({
               ? ([['Source', '25 Aug 2026 survey']] as [string, unknown][])
               : []),
           ]
-        : feature.layer.id === 'sector-boundary-line' || feature.layer.id === 'sector-hit-target'
-          ? [['Area (ha)', p.area_hac]]
-          : [
-              ['Subclass', p.subclass],
-              ['Plot No.', p.plot_no],
-              ['Block', p.block],
-              ['Sector', p.sector_no ?? 'Peripheral'],
-              ['Area (ha)', typeof p.area === 'number' ? p.area.toFixed(3) : p.area],
-            ]
+        : // sector-boundary-line/sector-hit-target -- every other layer.id is either handled above
+          // (poiDef, road-line/emergency-exit-line) or normalized to 'sector-plan-fill' before
+          // showPopup is called (see PARCEL_DETAIL_LAYERS below), so this is the only remaining case.
+          [['Area (ha)', p.area_hac]]
 
     const visible = rows.filter(([, v]) => v !== undefined)
     if (visible.length === 0) return ''
@@ -2218,25 +2290,74 @@ export default function MapView({
       .join('')}</div>`
   }
 
-  function ticketRowsHtml(ticket: {
+  function statusBadgeHtml(label: string, color: string, isActiveStatus: boolean) {
+    return `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;backgroundColor:${color}18;color:${color};font-size:10.5px;font-weight:700">${
+      isActiveStatus
+        ? `<span style="width:5px;height:5px;border-radius:999px;backgroundColor:${color}"></span>`
+        : ''
+    }${escapeHtml(label)}</span>`
+  }
+
+  // Every parcel popup (every mode -- see showPopup) renders this: badges, before/after photo
+  // thumbnails (clickable, opens PhotoLightbox via the popup's click delegation), questionnaire-
+  // attempted status, and assignee/due date.
+  function ticketRichHtml(ticket: {
     number: number
     subject: string
     status: { name: string; color: string } | null
     priority: { name: string; color: string } | null
+    assignee?: { name: string } | null
+    dueDate?: string | null
+    photos?: AttachmentView[]
+    questionnaireCount?: number
   }) {
-    const badge = (label: string, color: string) =>
-      `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;backgroundColor:${color}18;color:${color};font-size:10.5px;font-weight:700">${
-        label === ticket.status?.name
-          ? `<span style="width:5px;height:5px;border-radius:999px;backgroundColor:${color}"></span>`
-          : ''
-      }${escapeHtml(label)}</span>`
+    const photos = ticket.photos ?? []
+
+    const photosHtml =
+      photos.length > 0
+        ? `<div style="display:flex;gap:8px;margin-bottom:10px">
+            ${photos
+              .map(
+                (photo, i) =>
+                  `<div data-popup-photo-index="${i}" style="cursor:pointer;flex:1;min-width:0;border-radius:10px;overflow:hidden;position:relative;aspect-ratio:4/3;backgroundColor:var(--map-popup-row-border)">
+                    <img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.phase)} site photo" style="width:100%;height:100%;object-fit:cover;display:block" />
+                    <span style="position:absolute;left:4px;bottom:4px;padding:1px 6px;border-radius:999px;font-size:9.5px;font-weight:700;text-transform:capitalize;backgroundColor:rgba(0,0,0,0.55);color:#fff">${escapeHtml(photo.phase)}</span>
+                  </div>`,
+              )
+              .join('')}
+          </div>`
+        : ''
+
+    const metaChips = [
+      ticket.assignee ? `Assignee: ${ticket.assignee.name}` : null,
+      ticket.dueDate ? `Due ${new Date(ticket.dueDate).toLocaleDateString()}` : null,
+    ].filter((c): c is string => c !== null)
+    const metaHtml =
+      metaChips.length > 0
+        ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:9px">
+            ${metaChips
+              .map(
+                (c) =>
+                  `<span style="padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:600;backgroundColor:var(--map-popup-row-border);color:var(--map-popup-subtle)">${escapeHtml(c)}</span>`,
+              )
+              .join('')}
+          </div>`
+        : ''
+
+    const questionnaireHtml =
+      (ticket.questionnaireCount ?? 0) > 0
+        ? `<a href="/tickets/${ticket.number}" style="display:inline-flex;align-items:center;gap:4px;color:var(--map-accent);font-weight:700;text-decoration:none;font-size:11.5px;margin-bottom:9px">Questionnaire submitted <span style="font-size:12px">→</span></a>`
+        : `<div style="font-size:11.5px;color:var(--map-popup-subtle);margin-bottom:9px">No questionnaire submitted yet</div>`
 
     return `<div style="margin:12px 16px 0;padding-top:12px;padding-bottom:14px;border-top:1px solid var(--map-popup-row-border)">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;flex-wrap:wrap">
-        ${ticket.status ? badge(ticket.status.name, ticket.status.color) : ''}
-        ${ticket.priority ? badge(ticket.priority.name, ticket.priority.color) : ''}
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:9px;flex-wrap:wrap">
+        ${ticket.status ? statusBadgeHtml(ticket.status.name, ticket.status.color, true) : ''}
+        ${ticket.priority ? statusBadgeHtml(ticket.priority.name, ticket.priority.color, false) : ''}
       </div>
+      ${photosHtml}
+      ${metaHtml}
       <p style="margin:0 0 9px;font-size:12.5px;line-height:1.45;color:var(--map-popup-subtle);overflow-wrap:anywhere">${escapeHtml(ticket.subject)}</p>
+      <div>${questionnaireHtml}</div>
       <a href="/tickets/${ticket.number}" style="display:inline-flex;align-items:center;gap:4px;color:var(--map-accent);font-weight:700;text-decoration:none;font-size:12px">Show the ticket <span style="font-size:13px">→</span></a>
     </div>`
   }
@@ -2253,6 +2374,21 @@ export default function MapView({
       .setHTML(baseHtml(''))
       .addTo(map)
     popupRef.current = popup
+
+    // Event delegation for the before/after thumbnails ticketRichHtml renders -- setHTML swaps
+    // the popup's innerHTML once the async ticket fetch below resolves, but the container element
+    // itself (and this listener) survives that swap, so this only needs to be wired up once. A
+    // harmless no-op for popups that never render any photos (roads/POIs, or a parcel with none).
+    let popupPhotos: AttachmentView[] = []
+    popup.getElement().addEventListener('click', (ev) => {
+      const target = (ev.target as HTMLElement).closest<HTMLElement>('[data-popup-photo-index]')
+      if (!target) return
+      ev.preventDefault()
+      const index = Number(target.getAttribute('data-popup-photo-index'))
+      if (popupPhotos.length === 0 || !Number.isInteger(index)) return
+      setMapPopupPhotos(popupPhotos)
+      setMapPopupPhotoIndex(index)
+    })
     // Its own close button bypasses every other path that clears
     // popupRef/popupParcelIdRef (map click, right-click, sector change) --
     // without this, popupRef.current keeps pointing at a removed-but-not-
@@ -2270,14 +2406,19 @@ export default function MapView({
     const sectorPlanId = typeof rawId === 'number' ? rawId : Number(rawId)
     if (!Number.isInteger(sectorPlanId)) return
 
+    // Clicking a *different* parcel than the one flown to from a ticket search means the user has
+    // moved on -- keep the glow only while they're still looking at that exact parcel.
+    setHighlightedParcelId((cur) => (cur !== null && cur !== sectorPlanId ? null : cur))
+
     popupParcelIdRef.current = sectorPlanId
-    fetch(`/api/tickets/by-parcel/${sectorPlanId}`)
+    fetch(`/api/tickets/by-parcel/${sectorPlanId}?rich=1`)
       .then((r) => r.json())
-      .then((data: { ticket: null | Parameters<typeof ticketRowsHtml>[0] }) => {
+      .then((data: { ticket: null | Parameters<typeof ticketRichHtml>[0] }) => {
         // Discard if the user clicked elsewhere (or closed the popup) while this was in flight.
         if (popupRef.current !== popup || popupParcelIdRef.current !== sectorPlanId) return
         if (!data.ticket) return
-        popup.setHTML(baseHtml(ticketRowsHtml(data.ticket)))
+        popupPhotos = data.ticket.photos ?? []
+        popup.setHTML(baseHtml(ticketRichHtml(data.ticket)))
       })
       .catch(() => {})
   }
@@ -2289,7 +2430,10 @@ export default function MapView({
   // feature's own vector-tile properties are exactly the row shape those functions expect) and
   // its own small set of property rows, distinct enough from the road/POI/parcel cases that
   // reusing that switch would have added more branches than it saved.
-  function evacPopupContent(layerId: string, p: Record<string, unknown>): { title: string; subtitle: string | null; rows: [string, unknown][] } {
+  function evacPopupContent(
+    layerId: string,
+    p: Record<string, unknown>,
+  ): { title: string; subtitle: string | null; rows: [string, unknown][] } {
     const CORRIDOR_NAMES: Record<string, string> = {
       deh_dir: 'Dehradun',
       naj_dir: 'Najibabad',
@@ -2355,7 +2499,12 @@ export default function MapView({
     return { title: 'Evacuation feature', subtitle: null, rows: [] }
   }
 
-  function showEvacPopup(map: MLMap, layerId: string, properties: Record<string, unknown>, lngLat: LngLat) {
+  function showEvacPopup(
+    map: MLMap,
+    layerId: string,
+    properties: Record<string, unknown>,
+    lngLat: LngLat,
+  ) {
     popupRef.current?.remove()
     popupParcelIdRef.current = null
     const { title, subtitle, rows } = evacPopupContent(layerId, properties)
@@ -2632,6 +2781,35 @@ export default function MapView({
       })
       map.addLayer({
         id: 'sector-plan-filter-outline',
+        type: 'line',
+        source: 'sector_plan',
+        'source-layer': 'sector_plan',
+        filter: FILTER_NO_MATCH,
+        paint: {
+          'line-color': FILTER_EMPHASIS_COLOR,
+          'line-width': 2.5,
+          'line-opacity': 1,
+        },
+      })
+      // Same glow+outline treatment as the class-filter emphasis above, but driven by
+      // highlightedParcelId instead (see the effect near that state) -- flags one specific parcel,
+      // e.g. after flying in from a ticket-number search in InsightsModePanel's left panel, where
+      // the destination would otherwise be indistinguishable from its many neighbours.
+      map.addLayer({
+        id: 'sector-plan-highlight-glow',
+        type: 'line',
+        source: 'sector_plan',
+        'source-layer': 'sector_plan',
+        filter: FILTER_NO_MATCH,
+        paint: {
+          'line-color': FILTER_EMPHASIS_COLOR,
+          'line-width': 7,
+          'line-opacity': 0.4,
+          'line-blur': 5,
+        },
+      })
+      map.addLayer({
+        id: 'sector-plan-highlight-outline',
         type: 'line',
         source: 'sector_plan',
         'source-layer': 'sector_plan',
@@ -3356,7 +3534,10 @@ export default function MapView({
       function setEvacHover(feature: typeof hoveredEvacFeatureRef.current) {
         const prev = hoveredEvacFeatureRef.current
         if (prev) {
-          map.setFeatureState({ source: prev.source, sourceLayer: prev.sourceLayer, id: prev.id }, { hover: false })
+          map.setFeatureState(
+            { source: prev.source, sourceLayer: prev.sourceLayer, id: prev.id },
+            { hover: false },
+          )
         }
         if (feature) {
           map.setFeatureState(
@@ -3378,7 +3559,10 @@ export default function MapView({
           if (measuringRef.current || modeRef.current !== 'evacuation') return
           const f = e.features?.[0]
           if (!f || f.id === undefined) return
-          if (hoveredEvacFeatureRef.current?.id !== f.id || hoveredEvacFeatureRef.current?.source !== f.source) {
+          if (
+            hoveredEvacFeatureRef.current?.id !== f.id ||
+            hoveredEvacFeatureRef.current?.source !== f.source
+          ) {
             setEvacHover({ source: f.source, sourceLayer: f.sourceLayer, id: f.id })
           }
           map.getCanvas().style.cursor = 'pointer'
@@ -3809,6 +3993,7 @@ export default function MapView({
           setSelectedSector('all')
           popupRef.current?.remove()
           popupParcelIdRef.current = null
+          setHighlightedParcelId(null)
           return
         }
         const PARCEL_DETAIL_LAYERS = [
@@ -3884,6 +4069,7 @@ export default function MapView({
         popupRef.current?.remove()
         popupRef.current = null
         popupParcelIdRef.current = null
+        setHighlightedParcelId(null)
       })
 
       // Live rubber-band: from the last committed point to the cursor,
@@ -4140,6 +4326,24 @@ export default function MapView({
     )
     if (mode !== 'heatmap') popupRef.current?.remove()
   }, [visibility, mode, mapReady, evacVisibility, evacFilters])
+
+  // Drives sector-plan-highlight-glow/-outline's filter from highlightedParcelId (see that state
+  // and the layers added in initMap) -- a plain id-equality filter, not the class/sub-class
+  // emphasis filter above, since this flags exactly one parcel rather than a whole matched set.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+    const filter: FilterSpecification =
+      highlightedParcelId !== null
+        ? ['==', ['get', 'id'], highlightedParcelId]
+        : ['==', ['get', 'id'], -1]
+    if (map.getLayer('sector-plan-highlight-glow')) {
+      map.setFilter('sector-plan-highlight-glow', filter)
+    }
+    if (map.getLayer('sector-plan-highlight-outline')) {
+      map.setFilter('sector-plan-highlight-outline', filter)
+    }
+  }, [highlightedParcelId, mapReady])
 
   // Paints Evacuation mode's selected-feature highlight (PLAN-evacuation.md §6.2 item 11/§9) --
   // pushes evacSelection's geometry into the evac-selected geojson source (created empty in
@@ -4502,7 +4706,10 @@ export default function MapView({
     const map = mapRef.current
     const feature = hoveredEvacFeatureRef.current
     if (map && feature) {
-      map.setFeatureState({ source: feature.source, sourceLayer: feature.sourceLayer, id: feature.id }, { hover: false })
+      map.setFeatureState(
+        { source: feature.source, sourceLayer: feature.sourceLayer, id: feature.id },
+        { hover: false },
+      )
     }
     hoveredEvacFeatureRef.current = null
   }, [mode])
@@ -4670,7 +4877,9 @@ export default function MapView({
           ? null
           : selectedSector
         : mode === 'evacuation'
-          ? (evacFocus?.kind === 'sector' ? evacFocus.sectorNo : null)
+          ? evacFocus?.kind === 'sector'
+            ? evacFocus.sectorNo
+            : null
           : typeof insightSector === 'number'
             ? insightSector
             : null
@@ -4908,6 +5117,30 @@ export default function MapView({
       zoom: 17,
       duration: 700,
     })
+  }
+
+  /** Same fly-in as flyToLocateFeature, plus outlining the destination parcel (see
+   *  highlightedParcelId) -- used by InsightsModePanel's ticket-number search, where the other
+   *  locate lists' plain fly-to would otherwise land on one parcel indistinguishable from its many
+   *  neighbours.
+   *
+   *  The ticket's own lng/lat (passed in as a fallback) is wherever it was recorded when the
+   *  ticket was created and can sit well off the parcel's actual shape, which reads as "flew to
+   *  the wrong place" once the destination is outlined for comparison. Fetching the parcel's real
+   *  centroid (same ST_Centroid(geom) the locate lists use) keeps the fly-to and the highlight
+   *  pointing at the same spot. */
+  function flyToTicketParcel(sectorPlanId: number, lng: number, lat: number) {
+    setHighlightedParcelId(sectorPlanId)
+    fetch(`/api/sector-plan/centroid/${sectorPlanId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data && typeof data.lng === 'number' && typeof data.lat === 'number') {
+          flyToLocateFeature(data.lng, data.lat)
+        } else {
+          flyToLocateFeature(lng, lat)
+        }
+      })
+      .catch(() => flyToLocateFeature(lng, lat))
   }
 
   /** Fetches just the bbox for a class/sub-class (sector_plan) or POI layer/
@@ -5743,7 +5976,10 @@ export default function MapView({
                 <ul
                   role="group"
                   aria-label="Searchable map layers"
-                  style={{ borderColor: 'var(--map-border)', backgroundColor: 'var(--map-surface)' }}
+                  style={{
+                    borderColor: 'var(--map-border)',
+                    backgroundColor: 'var(--map-surface)',
+                  }}
                   className="kumbh-scroll absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border py-1 shadow-lg"
                 >
                   {searchGroups.length === 0 && (
@@ -6338,7 +6574,10 @@ export default function MapView({
               {baseLayerRows.map(({ key, label, icon: Icon, theme }) => (
                 <div
                   key={key}
-                  style={{ borderColor: 'var(--map-border)', backgroundColor: 'var(--map-surface)' }}
+                  style={{
+                    borderColor: 'var(--map-border)',
+                    backgroundColor: 'var(--map-surface)',
+                  }}
                   className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 shadow-sm"
                 >
                   <span className="flex min-w-0 items-center gap-2">
@@ -6406,6 +6645,7 @@ export default function MapView({
           filters={insightFilters}
           selectedSector={insightSector}
           onSelectSector={selectInsightSectorFromPanel}
+          onFlyToTicket={flyToTicketParcel}
           forceCollapsed={expandedDockedPanel === 'stats'}
           onExpand={() => {
             if (isPhoneViewport()) setExpandedDockedPanel('search')
@@ -6557,6 +6797,14 @@ export default function MapView({
         />
       )}
       {mode === 'evacuation' && evacModeCollapsed && <FloatingLegend mode="evacuation" />}
+      {mapPopupPhotos && (
+        <PhotoLightbox
+          photos={mapPopupPhotos}
+          index={mapPopupPhotoIndex}
+          onClose={() => setMapPopupPhotos(null)}
+          onIndexChange={setMapPopupPhotoIndex}
+        />
+      )}
     </div>
   )
 }
