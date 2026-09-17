@@ -621,17 +621,19 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
         ensureBadgeImage(map, 'EXT', colorPair(EVAC_COLORS.exit, theme)),
         ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.unknown, theme)),
       ] as unknown as ExpressionSpecification,
-      // Grows with zoom (same shape as the traffic-route/direction-signage arrows' own icon-size,
-      // just a gentler curve) -- a flat icon-size reads as either too small to read zoomed out or
-      // oversized once zoomed in past street level, and per the user report, badges need to stay
-      // legible at BOTH ends now that every point renders individually instead of collapsing into
-      // a cluster at low zoom.
+      // Grows with zoom past street level, but never shrinks below the badge's native 1.0 design
+      // size (unlike the traffic-route/direction-signage arrows' own gentler-curve icon-size) --
+      // scaling a raster icon like this DOWN, even with a high addImage pixelRatio, has the WebGL
+      // texture sampler blend each badge's opaque fill with its transparent edge padding, which
+      // read as the badge going pale/translucent at lower zooms (reported after the "never
+      // cluster" change first introduced a <1 low-zoom stop here). Held flat at 1 instead, so it
+      // only ever scales up, never down.
       'icon-size': [
         'interpolate',
         ['linear'],
         ['zoom'],
         10,
-        0.7,
+        1,
         14,
         1,
         18,
