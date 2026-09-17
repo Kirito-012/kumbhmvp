@@ -119,6 +119,7 @@ import {
   applyEvacFilters,
   applyEvacTheme,
   setEvacArrowsData,
+  setEvacEntryExitPoints,
   setEvacLayersVisible,
   setEvacZonesData,
 } from '@/components/map/evacuation/evacLayers'
@@ -791,9 +792,11 @@ type PoiLayerDef = {
 
 // Which clustered point layers carry a categorical property worth preserving on their synthetic
 // cluster features (see clusterPoints' tagProperty in src/lib/poiClustering.ts) -- currently just
-// entry_exit's `remark` ('Entry'/'Exit'), so evacLayers.ts's evac-entry-exit-cluster circle can be
+// entry_exit's `remark` ('Entry'/'Exit'), so Map mode's own `poi-entry_exit-cluster` circle can be
 // colored the same way an individual point's badge is, instead of always rendering green
-// regardless of whether the points it's hiding are Entry, Exit, or a mix of both.
+// regardless of whether the points it's hiding are Entry, Exit, or a mix of both. Evacuation mode's
+// own entry/exit badges (evacLayers.ts's ENTRY_EXIT_POINTS_SOURCE) never cluster at all, so this
+// tagging only matters for Map mode's layer.
 const CLUSTER_TAG_PROPERTY: Record<string, string> = {
   entry_exit: 'remark',
 }
@@ -3275,7 +3278,13 @@ export default function MapView({
               poiRawFeaturesRef.current[def.key] = []
             }),
         ),
-      ).then(syncPoiClusters)
+      ).then(() => {
+        syncPoiClusters()
+        // Evacuation mode's own entry/exit badges never cluster (see ENTRY_EXIT_POINTS_SOURCE's
+        // comment in evacLayers.ts) -- fed the same raw features entry_exit's clustered Map-mode
+        // source above was just built from, once, since they never need re-clustering on zoom.
+        setEvacEntryExitPoints(map, poiRawFeaturesRef.current.entry_exit ?? [])
+      })
       map.on('zoomend', syncPoiClusters)
 
       // Invisible hit-target covering each sector's full boundary polygon
@@ -3861,22 +3870,10 @@ export default function MapView({
         // plain Map-mode clicks don't do, and evacFocus/evacSelection are its own state, not
         // selectedSector/insightSector.
         if (modeRef.current === 'evacuation') {
-          // 1. Entry/exit point clusters zoom in, same +3 pattern as every other clustered POI
-          // layer (see the plain cluster check just below this whole branch).
-          const evacClusterHits = map.queryRenderedFeatures(e.point, {
-            layers: ['evac-entry-exit-cluster'],
-          })
-          if (evacClusterHits.length > 0) {
-            map.easeTo({
-              center: [e.lngLat.lng, e.lngLat.lat],
-              zoom: Math.min(map.getZoom() + 3, 18),
-              duration: 500,
-            })
-            return
-          }
-
-          // 2. One of this mode's own evac-* layers -- popup + highlight, no fly (the feature is
-          // already on screen).
+          // Entry/exit points never cluster in this mode (see evacLayers.ts's
+          // ENTRY_EXIT_POINTS_SOURCE), so there's no cluster-click-to-zoom step here, unlike the
+          // generic clustered-POI handling below -- straight to popup + highlight for whichever
+          // evac-* layer was hit, same as every other feature type in this mode.
           const evacHits = map.queryRenderedFeatures(e.point, {
             layers: [
               'evac-traffic-route-peak',
@@ -3901,7 +3898,7 @@ export default function MapView({
             return
           }
 
-          // 3. Supporting layers (thematic_gate/junction/bridge/fh_location/
+          // 2. Supporting layers (thematic_gate/junction/bridge/fh_location/
           // public_service_facilities) reuse Map mode's own poi-* layers directly (see
           // visibilityForMode) -- querying the exact same poiLayerIds list Map mode uses is safe
           // and correctly scoped implicitly, since every OTHER poi-* layer stays hidden
@@ -3919,7 +3916,7 @@ export default function MapView({
             return
           }
 
-          // 4/5. Bare sector -> evacFocus + fly-in. Empty area -> clear both the selection and
+          // 3/4. Bare sector -> evacFocus + fly-in. Empty area -> clear both the selection and
           // the focused sector/zone (clicking away from everything means "show me nothing", not
           // just "close the highlight but keep browsing this sector's scoped view").
           const evacSectorHits = map.queryRenderedFeatures(e.point, {
@@ -5618,7 +5615,14 @@ export default function MapView({
     .reduce((sum, b, i) => sum + haversineDistanceM(measure.points[i], b), 0)
 
   return (
-    <div className="kumbh-map relative h-screen w-full overflow-hidden">
+    // overflow-clip (not overflow-hidden): a docked panel's sr-only checkbox (class/subclass/
+    // layer toggles) receiving focus makes Chromium walk every scrollable ancestor and scroll it
+    // into view -- including this one, since overflow-hidden still leaves it a scroll container
+    // (scrollTop is programmatically settable) even though no scrollbar ever shows. That silently
+    // shifted the whole map + panels up by however far this box could scroll and left them stuck
+    // there (no visible scrollbar to drag back). overflow-clip removes the scroll container
+    // entirely, so there's no scrollTop for that focus handling to move.
+    <div className="kumbh-map relative h-screen w-full overflow-clip">
       <div ref={mapContainer} className="h-full w-full" />
 
       {/* Transient notice -- see mapNotice. Centred over the map rather than
