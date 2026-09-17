@@ -8,6 +8,8 @@ import { TicketEventModel } from '@/server/db/models/ticket-event.model'
 import { TicketStatusModel } from '@/server/db/models/ticket-status.model'
 import { TicketPriorityModel } from '@/server/db/models/ticket-priority.model'
 import { TicketTypeModel } from '@/server/db/models/ticket-type.model'
+import { TicketAttachmentModel } from '@/server/db/models/ticket-attachment.model'
+import { TicketQuestionnaireModel } from '@/server/db/models/ticket-questionnaire.model'
 import { TagModel } from '@/server/db/models/tag.model'
 import { UserModel } from '@/server/db/models/user.model'
 import { nextSequence } from '@/server/db/models/counter.model'
@@ -496,8 +498,28 @@ export async function getTicketByParcelId(sectorPlanId: number) {
     .populate([
       { path: 'statusId', select: 'name slug color' },
       { path: 'priorityId', select: 'name slug color' },
+      { path: 'assigneeId', select: 'fullname email' },
     ])
     .lean()
+}
+
+/** Extra ticket-detail data for the Map mode parcel popup only (see the `rich=1` query param on
+ *  /api/tickets/by-parcel/[sectorPlanId]) -- kept out of getTicketByParcelId's default payload so
+ *  Ticket mode's own (much more frequent) parcel popup doesn't pay for these extra queries. */
+export async function getTicketPopupExtras(ticketId: string) {
+  await dbConnect()
+  const [beforePhoto, afterPhoto, questionnaireCount] = await Promise.all([
+    TicketAttachmentModel.findOne({ ticketId, phase: 'before', deletedAt: null })
+      .sort({ createdAt: -1 })
+      .populate({ path: 'uploaderId', select: 'fullname email' })
+      .lean(),
+    TicketAttachmentModel.findOne({ ticketId, phase: 'after', deletedAt: null })
+      .sort({ createdAt: -1 })
+      .populate({ path: 'uploaderId', select: 'fullname email' })
+      .lean(),
+    TicketQuestionnaireModel.countDocuments({ ticketId, deletedAt: null }),
+  ])
+  return { beforePhoto, afterPhoto, questionnaireCount }
 }
 
 export async function createTicket(input: {

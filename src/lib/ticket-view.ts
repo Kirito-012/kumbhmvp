@@ -26,7 +26,7 @@ function stripHtml(html: string) {
     .trim()
 }
 
-function toPerson(doc: unknown): PersonView {
+export function toPerson(doc: unknown): PersonView {
   if (!doc || typeof doc !== 'object') return null
   const d = doc as { _id?: unknown; fullname?: string; email?: string }
   if (!d._id) return null

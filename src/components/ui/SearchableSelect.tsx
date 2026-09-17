@@ -274,7 +274,7 @@ export function SearchableSelect({
                   {o.color && (
                     <span
                       className="h-2.5 w-2.5 shrink-0 rounded-full"
-                      style={{ background: o.color }}
+                      style={{ backgroundColor: o.color }}
                       aria-hidden
                     />
                   )}

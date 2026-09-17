@@ -288,6 +288,8 @@ All GIS routes use `runtime = 'nodejs'` and `getPool()`; ticket routes use `dbCo
 | `/api/poi/points/[layer]`               | Full GeoJSON for the 7 small point layers (client-side clustering)                                                                            |
 | `/api/tiles/[layer]/[z]/[x]/[y]`        | MVT vector tiles — see §9                                                                                                                     |
 | `/api/tickets/by-parcel/[sectorPlanId]` | Does this map parcel already have a ticket?                                                                                                   |
+| `/api/evacuation/search`                | Evacuation mode's search (PLAN-evacuation.md §8.1) — sector/zone-aware, labels via `src/lib/evacuation/labels.ts`. Gated on `read:all`/`ticket`, same as `/api/insights/*`. |
+| `/api/evacuation/summary`                | Per-layer counts, zone outlines, and (with `?sector=`/`?zone=`) a focused feature list + nearby care facilities (§8.2). Same gating.           |
 | `/api/v1/tickets` (POST)                | **External integration** — see below                                                                                                          |
 
 ### `/api/v1/tickets` — the DroneSeva integration
@@ -429,6 +431,237 @@ override table for DB colours sitting right at the contrast threshold.
 - **Layer visibility** — seeded to SSR-safe defaults, then hydrated from `localStorage` post-mount to
   avoid hydration mismatch, and mirrored into a ref for the once-registered `load` handler.
 
+### Insights (Heatmap/Ticket mode) — admin & manager only, see `PLAN-heatmap.md`
+
+`ModeSwitcher` (top-left control strip, gated on `canUseInsights`) swaps `MapView` between three modes:
+Map (the default subsystem above), Heatmap, and Tickets (sectors coloured by status-bucket feature-state).
+It's an icon-only `role="radiogroup"` of three equal-width `role="radio"` squares (no text labels, just
+`aria-label`/`title`) with a roving tabindex — arrow keys/Home/End move focus **and** selection between
+segments, Enter/Space activates the focused one; only the checked segment is a tab stop. Keyboard
+shortcuts `1`/`2`/`3` jump straight to Map/Heatmap/Tickets and `Esc` clears `insightSector` and returns to
+Map, all registered on `document.keydown` and skipped while an input/textarea/select has focus or while
+measure mode is active (measure mode owns `Esc` for exiting itself).
+
+**Heatmap mode (Phase 7 revision, `PLAN-heatmap.md` §11)** shows only sector boundaries plus an actual
+MapLibre `heatmap`-type layer (`insight-heat` in `insightLayers.ts`) — a translucent, non-polygon glow
+concentrated on ticket density, not a flat per-sector fill. Sector fill/labels, POIs, and other Map-mode
+layers are hidden by default; basemap place-name labels are dimmed to ~50% opacity (not hidden) via
+`setBasemapLabelsDimmed`, so the map stays legible under the glow. `HeatMetric` is just
+`'total' | 'pctOpen'` (`src/lib/insights/aggregate.ts`) — Total glows/ranks every ticket, % open re-uses
+the same open-tickets-only glow but ranks the sector list by percentage; there's no per-sector-polygon
+metric anymore. Above z15.5 individual ticket dots (`insight-heat-points`) fade in and become clickable —
+the click handler resolves `class_group_idx`/`status_idx`/`priority_idx` off the clicked GeoJSON feature
+(via an `insightsDataRef` mirror, since the map's one-time `load` handler closure can't see fresh React
+state) and shows a popup styled like the plain-map parcel popup (icon header + labelled property rows for
+a single ticket, or a compact per-ticket block for a cluster). The colour ramp is a fixed 5-stop
+green→red (`HEAT_PALETTE` in `src/lib/insights/heatScale.ts`, same ramp for both themes) surfaced as a
+single CSS gradient bar (`heatGradientCss`) in both `InsightsModePanel`'s legend and `FloatingLegend`.
+`computeQuantileBreaks`/`colorForValue` (same file) are Ticket mode's, not Heatmap's, colouring logic now.
+
+A `?mode=heatmap`/`?mode=tickets`/`?mode=evacuation` deep link cold-loads correctly — the
+mode-visibility effect is gated on `mapReady` (a state flip at the end of `initMap`'s `load` handler), not
+`map.isStyleLoaded()`, specifically so it re-runs once on mount even when `mode` is already non-`'map'`
+before the style finishes loading. (An earlier revision of this doc flagged the `isStyleLoaded()` version
+of this bug as open; it had already been fixed by the time PLAN-evacuation.md's Phase 1 checked, so this
+note now just explains why the `mapReady` gate exists rather than warning about it.)
+
+Data contract is a client-side split (`PLAN-heatmap.md §3.3`): a bulk ticket-tuple array
+(`useTicketInsights`) fetched once per `active` transition and filtered/rolled-up locally
+(`rollupBySector`/`matchesFilters` in `src/lib/insights/aggregate.ts`) drives the sector list, legend and
+map paint; a separate on-demand fetch (`useSectorInsights`, keyed on `sector:nonce` to dedupe redundant
+re-fetches) hits `/api/insights/sectors/:sectorNo` (`:sectorNo` is `all`/`peripheral`/a number) for the
+richer per-sector detail (trend, assignees, oldest-open, median-resolve-time, ticket rows) shown in
+`InsightsPanel`. `InsightsModePanel` (left, metric/legend/filters/ranked sectors) and `InsightsPanel`
+(right, hero/status/categories/priority+trend/assignees/tickets) are both `Panel`s and both auto-collapse
+below `sm` like every other docked panel.
+
+A compact **floating legend** (`FloatingLegend`, module-private to `MapView.tsx`) appears bottom-left,
+on any viewport, whenever `InsightsModePanel` is collapsed (tracked via its `onWidthChange` →
+`Panel`'s `onRenderedWidthChange`, which reports 0 when collapsed) so the map's colours always have a key
+even with the panel tucked away. It deliberately recomputes its own small rollup from
+`insightsData`/`filters`/`heatMetric` rather than reaching into the paint effects' internal refs.
+
+### Evacuation mode — `PLAN-evacuation.md` (complete, Phases 0-7)
+
+A 4th `ModeSwitcher` segment (amber, `--map-mode-evacuation`, key `4`), for crowd-flow/evacuation
+planning: entry/exit points and routes, direction signage, emergency exits, traffic routes, plus
+off-by-default supporting layers (thematic gates, junctions, bridges, footpaths, fire hydrants, public
+service facilities, zone outlines) and flood risk (`hfl_area`/`hfl_line`). See §10's "Two source drops" for
+where the emergency-exit/flood/hospital data actually comes from.
+
+Its own layer-visibility store (`EvacKey` in `src/lib/evacuation/layers.ts`, defaults in
+`defaultEvacVisibility()`) is deliberately **separate** from Map mode's `visibility` — persisted under its
+own `localStorage` key (`tcsticket:mapView:evacVisibility`) — except `sector_plan`/`sector_boundary`/
+`sector_names`, which keep following the shared `visibility` in this mode (unlike Heatmap/Ticket, which
+force sector labels off and Heatmap alone also forces the sector layers themselves off). The 6
+"supporting" POI layers (thematic gates, junctions, bridges, footpaths, fire hydrants, public service
+facilities) reuse Map mode's own `poi-*` layers directly, following `evacVisibility` instead of
+`visibility` while this mode is active — every other `POI_LAYER_DEFS` key (including ones this mode also
+draws, like `traffic_route`/`entry_exit`) stays hidden, since those get their own dedicated `evac-*`
+layers instead (see `evacLayers.ts`) so the two visual languages never mix.
+`Esc` in this mode steps back one level per press (clear the selected feature, then the focused
+sector/zone, then leave the mode) rather than exiting in one press like Heatmap/Ticket do.
+
+**Map layers (`evacLayers.ts`, Phase 2):** created once in `initMap`'s `load` handler (gated on
+`canUseInsights`), reusing the `traffic_route`/`entry_exit_line`/`direction_line`/`entry_exit`/
+`location_entry` sources MapView's own POI-layer loop already creates, plus `emergency_exit` (Phase 0)
+and two new vector sources for `hfl_area`/`hfl_line`. Entry is green, exit is rose (a different green/red
+split from Map mode's single "green = entry or exit" convention, since this mode's whole point is telling
+them apart), emergency exits keep Map mode's red, flood risk is translucent blue. EN/EXT point badges
+reuse the same canvas-drawn pill-icon generator as Map mode's "BS"/"G"/"FH" signage codes, extracted to
+`src/lib/mapBadgeIcon.ts` so both can share it. **Not yet implemented** (see the phase table in
+PLAN-evacuation.md for why): traffic-route/direction-signage arrows, zone outlines/labels, the
+selected-feature highlight's data (Phase 5), hover feature-state (Phase 5), and dimming
+`sector-plan-fill` itself (only basemap labels dim so far).
+
+**Gotcha this phase caught and fixed:** `emergency_exit` (Phase 0's own source) was missing from
+`APP_SOURCE_IDS`, the whitelist the basemap theme-swap effect uses to tell "one of our own sources" apart
+from "belongs to the vendored basemap" — same bug `INSIGHT_HEAT_SOURCE`/`INSIGHT_SECTOR_LABEL_SOURCE`
+already had comments warning about, missed the first time. A real theme toggle would have deleted it as a
+stale basemap source. Fixed alongside adding evacLayers.ts's own three new sources to the same list.
+
+**Search + summary APIs (Phase 3):** `/api/evacuation/search` and `/api/evacuation/summary` (§8 table)
+are sector- **and zone-aware** — each result's sector/zone comes from a `LEFT JOIN LATERAL` against
+`sector_boundary` on `ST_Intersects(boundary, ST_PointOnSurface(feature))`, so a query like "12" or
+"rishikesh zone" finds features spatially inside that area even when the feature's own `sector` column
+is null (most of them are — see §2.2 above). Every label shown anywhere (search results, and eventually
+popups) comes from `src/lib/evacuation/labels.ts`, never a raw column value — `traffic_route.name` in
+particular is null on half the rows and inconsistently cased on the rest, so its label is always built
+from the structured `entry_exit`/`plan`/corridor-flag columns instead. `src/lib/evacuation/filters.ts`
+has the `EvacFilters` type plus `buildEvacFilters`/`trafficRoutePlanVisible` (unit-tested).
+
+**`EvacuationModePanel` (real, Phase 4):** search (`useEvacuationSearch`, 200ms debounce +
+`AbortController`), scenario/direction/corridor filter chips, and interactive layer toggles.
+**Deliberately not** built by extracting Map mode's ~700-line unified search into the shared
+`src/components/map/search/*` components the plan originally sketched — that refactor's only payoff
+was code reuse, and its risk (a regression in Map mode's most-used control, unreviewed) wasn't worth it
+for an autonomous pass. `EvacuationModePanel` has its own self-contained search UI instead, following
+the same visual conventions; Map mode's own search code is completely untouched.
+
+Filter chips are wired all the way to the map: `evacLayers.ts`'s `applyEvacFilters` applies direction/
+corridor as real `setFilter` calls (ANDed onto traffic_route's permanent peak/normal split), and
+`setEvacLayersVisible` now also takes `evacFilters` so the scenario chip can show/hide the peak vs
+normal traffic-route layer without fighting the `traffic_route` on/off toggle (two independent
+booleans on the same pair of layers). **One filter is a known no-op:** Direction has no effect on
+`entry_exit`'s point badges, since that layer sits on a clustered geojson source and a style filter
+can't change cluster membership (see "Clustering" above) — doing this right needs a server-side
+`?remark=` refetch, not built yet.
+
+**`EvacuationPanel` (real, Phase 6):** a hero tile row (Entry/exit points · Entry/exit routes ·
+Traffic routes · Direction signage · Emergency exits — five real `/api/evacuation/summary` counts,
+each as an `AnimatedBar` share-of-max bar, fed by a new `useEvacuationSummary` hook that refetches on
+`evacFocus` change), a "Nearby care" list (hospitals/police/fire, with bed counts already formatted
+server-side by `facilityLabel`) shown only when a sector/zone is focused, a static legend of every
+evac-\* style (EN/EXT badges, solid vs dashed route lines, emergency casing, flood fill/lines), and a
+per-focus "Features in view" list grouped by layer. Every care/feature row reuses `selectEvacResult`
+(now also passed to `EvacuationPanel` as `onSelectResult`) for the same fly-in/highlight/layer-on
+behaviour a search result gets — a summary-API feature (`id`/`label`/`sublabel`/`bbox`/`anchor`, no
+sector/zone/source fields) is adapted into `EvacSearchResult`'s shape by a small `asSearchResult`
+helper rather than widening the summary API to match search's response shape. All sections use
+`Reveal`/`pillEntranceDelayMs` from `insights/charts.tsx`, same cascade as Heatmap/Ticket panels.
+One deliberate scope note: the hero shows one combined "Entry/exit points" count rather than a
+separate entry/exit split — `kumbh.entry_exit` only carries direction per-row (`remark`), and
+`/api/evacuation/summary`'s `COUNTED_LAYERS` never aggregates by direction, so a true split needs a
+new query shape nothing else in the mode needs.
+
+`EvacuationModePanel` also gained a "Base layers" section this phase (sector plan/boundaries/names,
+bound to Map mode's own shared `visibility`/`setVisibility` via new `mapVisibility`/`onToggleMapLayer`
+props) — decision #6 always required this, but Phase 4's self-contained-search scope change dropped it
+by omission; and `Reveal` stagger on its own filter/layer sections, matching the right panel.
+
+`FloatingLegend` (module-private in MapView.tsx) gained a 3rd `mode === 'evacuation'` branch — a
+compact EN/EXT/Emergency/Peak/Normal key with no counts (this mode has no per-mode rollup the way
+Heatmap/Ticket do) — shown via a new `evacModeCollapsed` state tracking `EvacuationModePanel`'s own
+`onWidthChange` (mirroring `insightsModeCollapsed`). Rather than fork a second legend component, its
+`insightsData`/`filters`/`heatMetric` props were loosened to optional (with an early `if (!insightsData
+|| !filters) return null` guard before the ticket-mode branch that needs them) so one component still
+serves all three modes.
+
+**Click handling + popups (Phase 5):** a new mode-specific branch in `initMap`'s click handler (mirroring
+Heatmap/Ticket's own self-contained branches) checks entry/exit clusters (+3 zoom, same as every other
+clustered POI layer), then the evac-\* layers themselves (popup via a new `evacPopupContent`/
+`showEvacPopup` in MapView.tsx, using `src/lib/evacuation/labels.ts`'s pure label functions directly
+client-side -- no server round-trip, since the clicked feature's own vector-tile properties are exactly
+the row shape those functions expect), then falls back to the same `poiLayerIds` check Map mode uses
+(safe because every *other* POI layer stays hidden while this mode is active) for the 6 supporting
+layers, and finally bare-sector (`evacFocus` + fly) vs. empty-area (clear selection). A clicked feature's
+exact geometry, or a search result's bbox-as-rectangle (results never carry full geometry, to keep that
+API response light), populates the `evac-selected` geojson source via a dedicated effect keyed on
+`evacSelection`, showing a **steady** highlight outline -- not the plan's pulse-then-settle animation,
+which is deferred polish.
+
+**A real bug from Phase 2, only caught here:** `classColors.ts` briefly had `hfl_area`/`hfl_line` entries
+in `POLYGON_LAYER_COLORS`/`LINE_LAYER_COLORS` (added during Phase 2, commented "not yet a Map-mode
+toggle") -- but `POI_LAYER_DEFS` in MapView.tsx is *auto-derived* from those maps' keys (see §9's own POI
+section), so the entries silently made Map mode's generic POI loop create a `kumbh.hfl_area` vector
+source of its own before `addEvacLayers` ever ran. `addEvacLayers`'s own idempotency guard then saw that
+source and silently returned, every time, meaning **no evac-\* layer existed at all** for the whole of
+Phases 2-4 despite no console error ever appearing -- nothing in that testing exercised a code path that
+would query an evac-\* layer id and surface the gap. Fixed by removing the 4 classColors.ts entries
+entirely (flood risk is Evacuation-mode-only; its colours live in `EVAC_COLORS`,
+`src/lib/evacuation/layers.ts`). If either map ever needs a flood-risk-adjacent entry again, remember
+that adding one there is equivalent to adding a Map-mode toggle, not a private reference value.
+
+**Phase 6/7 (final polish):** see "`EvacuationPanel` (real, Phase 6)" above for the right panel's hero/
+nearby-care/legend/feature-list content and the `FloatingLegend` evacuation branch. Phase 7's one real
+a11y fix: `EvacuationModePanel`'s search implements genuine roving-highlight keyboard nav (arrow keys
+move a `highlightIndex`, Enter activates) but never exposed that to assistive tech — the input now
+carries `role="combobox"`/`aria-expanded`/`aria-controls`/`aria-activedescendant`, and every
+`role="option"` row has a matching `id`. The listbox's non-option children (group headers, loading/
+error/empty states) got `role="presentation"` to keep the tree valid. Both modes' panels, the shared
+search UI, and every layer toggle are covered; nothing else in the mode needed an a11y change.
+
+**Post-launch fixes (same day):** user testing surfaced 4 real bugs, all fixed — see
+`PLAN-evacuation.md` §13 for the full writeup. In short: layer toggles now fly-in like Map mode's own
+`togglePoiLayerFilter` (`toggleEvacLayer`, reusing `/api/poi/locate`); a focused sector now actually
+highlights (`sector-selected-outline`/`-glow`'s filter effect gained an `evacFocus` branch it never had);
+right-click and clicking empty area now clear `evacFocus`/`evacSelection` (new `evacFocusRef`/
+`evacSelectionRef` mirroring `selectedSectorRef`, plus the empty-area click branch clearing `evacFocus`
+too, not just `evacSelection`); and the Legend/`FloatingLegend` traffic-route/direction-signage swatches
+were corrected from an invented blue/violet to the actual rendered green/red direction colors.
+
+**Deferred-item follow-up (same day):** 3 more items from the original design, previously deferred or
+explicitly decided against, were implemented on request — see `PLAN-evacuation.md` §14. Traffic-route/
+direction-signage **arrows**: real data showed the source geometry's vertex order has no reliable
+relationship to Entry/Exit (checked via a nearest-sector-centroid distance comparison before writing any
+code — roughly 60/40 either way), so arrows are a new `/api/evacuation/arrows`-fed bearing computed from
+each route's midpoint to/from its nearest sector centroid instead of following the line itself, rendered
+as rotated chevron `symbol` layers. The selected-feature highlight now **pulses then settles** (~2.4s
+ease-out rAF) instead of a steady outline. And a **shared search UI** (`src/components/map/search/`:
+`SearchInput`/`SearchGroupHeader`/`SearchResultRow`) now backs both Map mode's input/group-headers and
+Evacuation's whole dropdown — narrower than the original "extract everything" sketch (the bespoke
+sector-classes/POI subclass trees stayed put in MapView.tsx) to keep the regression risk Phase 4 flagged
+near zero, verified via live before/after checks in both themes.
+
+**Second deferred-item follow-up (same day):** 5 more — see `PLAN-evacuation.md` §15. **Zone outlines**
+now actually render (`evac-zone-outline-line`/`-label` + `setEvacZonesData`, fed by
+`/api/evacuation/summary`'s already-returned zone geometry) — the toggle existed since Phase 1 but had
+no layers behind it. **Hover feature-state** on the 5 hoverable evac-\* lines. **`sector-plan-fill`
+dims to ~40% in Evacuation mode** — this uncovered two real pre-existing bugs while implementing it:
+`showClassWash`'s mode check was hardcoded to `'map'`, so the wash literally could never show in
+Evacuation mode at all regardless of the shared toggle (contradicting decision #6), and the class-filter
+effect that writes this opacity was missing `mapReady` from its dependency array, so a cold
+`?mode=evacuation` load's only pre-ready pass could early-return and never re-run — invisible until now
+because every value that effect ever wrote matched the layer's creation-time default in every mode.
+**Corridor chips now show counts** (a new `corridors` field on `/api/evacuation/summary`, with
+`useEvacuationSummary` lifted from `EvacuationPanel` to `MapView` so both docked panels share one
+fetch). **Traffic-route popups gained Sector/Length rows** (`kumbh.traffic_route` has neither column;
+both are computed in the tiles route — length via `ST_Length`, sector via the same nearest-centroid
+`LEFT JOIN LATERAL` technique `/api/evacuation/arrows` already uses). Two separate MapLibre "zoom
+expression" style-validation errors were hit and fixed while building hover and dimming (a zoom-based
+paint value can only be wrapped by `step`/`interpolate`/`let`/`case` directly, never by an arbitrary
+runtime operator like `+`/`*` around the whole expression) — worth remembering for any future evac-\*
+paint property that combines a zoom-interpolated base with a runtime modifier.
+
+**Direction-signage arrow visibility fix (same day):** §15's direction-line arrows were confirmed via
+`queryRenderedFeatures` but turned out to be genuinely invisible in practice — a same-hue, ~8px chevron
+with no outline sitting on top of a same-colored route line (both green for Entry, both red for Exit)
+disappeared at any normal viewing zoom; only found by jumping the camera directly to a known arrow's
+coordinates up to z19 until it appeared. Fixed in `mapBadgeIcon.ts`'s `makeChevronIcon`: bigger canvas
+(10→16 units) plus a contrasting stroke outline (`EVAC_COLORS.emergencyExitCasing`, the same white/
+near-black pair emergency exits' own casing already uses), `icon-size` raised to 1.3/1.1. See
+`PLAN-evacuation.md` §16.
+
 ---
 
 ## 10. The geospatial data
@@ -472,6 +705,41 @@ plain MapLibre `setFilter` on `in_sector` — no second layer or request, since 
 
 Its label is **"Street network (OSM)"** to flag it as third-party reference data, not curated project
 infrastructure.
+
+### Two source drops, and why a few tables mix them (`source` column)
+
+`scripts/load_kumbh_2027.py` reads from a `Kumbh Data/` folder at the repo root (gitignored, not
+committed — see `--source-root` below) that actually holds **two** drops:
+
+- `Kumbh_Mela_2027_V1_07_07/…gdb` (edited 2026-09-06) — **the source of truth for everything.**
+- `Kumbh_Mela_Shape/25_08_2026/` — an **older** shapefile export, kept only because the 2027 gdb
+  dropped or never had three things (see `SHP_TABLE_SPECS`/`supplement_public_service_facilities` in
+  the loader, and `PLAN-evacuation.md` §2-§3 for the full investigation):
+  - **`kumbh.emergency_exit`** (new table, 24 rows) — the 2027 road reload relabelled these 24 paths
+    (in sectors 7/9/11/12) as plain `Proposed Road`; the label survives only in the older drop, even
+    though 23 of the 24 paths' vertices coincide with a `Proposed Road` row in `kumbh.road`. Map mode's
+    "Emergency Exit" toggle now draws from this table (its own `emergency-exit-line` MapLibre layer) —
+    it used to be a `type='Emergency Exit'` filter on `road-line`, which is why the toggle existed but
+    drew nothing between the 2026-09-06 reload and this table's introduction.
+  - **`kumbh.hfl_area`** (19 rows) / **`kumbh.hfl_line`** (17 rows) — flood-risk polygons/lines (High
+    Flood Level) with no 2027 gdb equivalent at all.
+  - **21 rows appended to `kumbh.public_service_facilities`** — Hospital/Health Camping facilities
+    (AIIMS, Mela Hospital, Harmilap Mission, …) the 2027 gdb doesn't carry, plus `subclass`/`services`/
+    `category`/`bed` backfilled on the 57 gdb rows where the older drop has them (2027's own columns
+    are all null). `supplement_public_service_facilities` does this and re-runs automatically after any
+    reload of that table, since a plain gdb reload truncates it back to null/57.
+  - `kumbh.sector_boundary.zone` (32 rows, 5 zones) is also backfilled from the older drop's
+    `SECTOR_BOUNDARY_UPDATED.shp`, which carries a `Zone` column the 2027 layer doesn't — matched by
+    sector **name** (all 32 match exactly, no spatial join needed).
+
+  Every row actually sourced from the older drop carries `source = 'shp_2026_08_25'` (`'gdb_2027'`
+  otherwise, on tables that have the column at all) so the app can flag it as such — see the
+  "Source: 25 Aug 2026 survey" popup row for `emergency-exit-line`/`kumbh.hfl_*`.
+
+  **Do not casually pull anything else from the older drop.** These four exceptions were individually
+  verified (row counts, name/geometry matching) against the 2027 data — the 2027 gdb is authoritative
+  for everything not listed above, including its own 15-point-smaller `entry_exit` (63 vs. the older
+  drop's 78) and its `Public_Service_Facilities`/`FSTP` type set.
 
 ---
 
@@ -587,25 +855,39 @@ Coverage is thin — the map and ticket flows have no automated tests.
 ### Extending `load_kumbh_2027.py`
 
 ```bash
-python scripts/load_kumbh_2027.py [--dry-run] [--only table1,table2]
+python scripts/load_kumbh_2027.py [--dry-run] [--only table1,table2] [--source-root PATH]
 ```
 
-Reads `POSTGRES_URL` from `.env.local`. Needs `fiona`, `pyproj`, `psycopg2-binary`.
+Reads `POSTGRES_URL` from `.env.local`. Needs `fiona`, `pyproj`, `psycopg2-binary`, `shapely`.
+`--source-root` defaults to `Kumbh Data/` at the repo root (gitignored — see §10's "Two source drops"
+for what lives in there and why); falls back to the legacy repo-root layout if that's not present.
 
-Two spec structures, both pairing a target table with source gdb layer(s) and a
+Three spec structures, all pairing a target table with one or more source layers/files and a
 `map_fn(properties, source_layer) -> dict` column mapper:
 
-- **`REPLACE_SPECS`** — table already exists. Old rows are copied to a dated
+- **`REPLACE_SPECS`** — table already exists, sourced from the gdb. Old rows are copied to a dated
   `<table>_backup_<date>` table, then truncated and reloaded.
 - **`NEW_TABLE_SPECS`** — creates the table if missing (serial PK, GiST index on geom, btree on
-  sector-like columns).
+  sector-like columns), sourced from the gdb.
+- **`SHP_TABLE_SPECS`** — like `NEW_TABLE_SPECS`, but reads one standalone shapefile from the older
+  25 Aug 2026 drop (`SHP_2026_08_25_DIR`) via `load_shp_new_table`, with an optional row-level
+  `feature_filter`. Only used for the three exceptions in §10's "Two source drops" — don't add a
+  layer here unless it's a genuine gap in the 2027 gdb, verified the way those three were
+  (`PLAN-evacuation.md` §2-§3).
 
-Reusable helpers: `force_2d()` (drops Z), `clean()` (normalizes blanks), `backfill_sector_no()`
-(post-load spatial join for sector numbers unparseable from free text), `dedupe_tertiary_road()` (the
-fold-a-subset-layer-into-a-flag-column pattern).
+Reusable helpers: `force_2d()` (drops Z), `to_multi()` (promotes a bare Polygon/LineString to Multi* --
+needed for shapefile sources, which aren't always the Multi variant a target column is declared as),
+`clean()` (normalizes blanks), `backfill_sector_no()` (post-load spatial join for sector numbers
+unparseable from free text — reusable on any table with `sector_no`/`geom`), `dedupe_tertiary_road()`
+(the fold-a-subset-layer-into-a-flag-column pattern), `backfill_sector_zone()` (name-join `zone` from
+the older drop onto `sector_boundary`), `supplement_public_service_facilities()` (centroid-matches the
+older drop's facilities onto the gdb rows and appends the ones the gdb doesn't have — idempotent, and
+re-run automatically after every reload of that table since a plain reload truncates its enrichment
+away).
 
-To add a layer: add an entry to the appropriate spec with a `map_fn`, following the existing
-`_<table>_map` pattern.
+To add a gdb layer: add an entry to `REPLACE_SPECS`/`NEW_TABLE_SPECS` with a `map_fn`, following the
+existing `_<table>_map` pattern. `SOURCE_TAG_2027`/`SOURCE_TAG_SHP` are the two values a table's
+`source` column (where present) can hold.
 
 ---
 
@@ -641,8 +923,10 @@ To add a layer: add an entry to the appropriate spec with a `map_fn`, following 
 
 ## 16. Current state
 
-Branch `main`. Recent work (this may be stale — check `git log`):
+Branch `feat/heatmap` (not yet merged to `main`). Recent work (this may be stale — check `git log`):
 
+- Heatmap/Ticket mode (`PLAN-heatmap.md`), Phases 1–6 committed; Phase 7 (density-heatmap revision,
+  see §9) implemented on the branch but not yet committed as of this writing
 - Ticket auth and route guards
 - Mobile-responsive UI pass
 - The Azure/Oryx deploy fixes described in §11
@@ -650,6 +934,17 @@ Branch `main`. Recent work (this may be stale — check `git log`):
 - `proxy.ts` canonical redirect scoped to production so localhost dev works
 - `Road_Secondary` classified and loaded (12 of 109 rows into `kumbh.road`, 97 duplicates
   dropped via content-hash exclusion) — the gdb load is now fully complete, 67/67 (§10)
+- Evacuation mode (`PLAN-evacuation.md`) Phase 0 committed: `kumbh.emergency_exit`/`hfl_area`/
+  `hfl_line` loaded from the older 25 Aug 2026 shapefile drop, `public_service_facilities` enriched
+  with 21 extra hospitals, `sector_boundary.zone` backfilled — see §10's "Two source drops". Map
+  mode's Emergency Exit toggle now draws real data again (its own `emergency-exit-line` layer/source,
+  not a `road-line` filter).
+- Evacuation mode (`PLAN-evacuation.md`) **complete, all 8 phases (0-7) committed**: mode plumbing, map
+  layers (only genuinely live as of Phase 5 -- see §9's classColors.ts bug writeup), search/summary APIs,
+  a real `EvacuationModePanel` (including a "Base layers" section) and `EvacuationPanel` (hero tiles,
+  nearby care, legend, feature list), click/popup/selection-highlight handling, a `FloatingLegend`
+  evacuation branch, and a Phase 7 a11y pass on the search combobox — §9's "Evacuation mode" subsection.
+  Verified live in both themes and at 375px; `tsc`/`eslint`/`npm test` (85 tests) clean.
 
 Open items:
 

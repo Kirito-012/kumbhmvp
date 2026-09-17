@@ -224,6 +224,14 @@ export const LINE_LAYER_COLORS: Record<string, string> = {
   // swatch stands for the whole layer, so keep it in sync with the mid tier,
   // TERTIARY_ROAD_STYLE.light.colors.main.
   tertiary_road: '#4285f4',
+  // hfl_line/hfl_area deliberately do NOT have entries here (or in POLYGON_LAYER_COLORS below) --
+  // adding one would auto-derive a `poi-hfl_line`/`poi-hfl_area` Map-mode toggle via
+  // POI_LAYER_DEFS (MapView.tsx builds it from Object.keys() of these three maps), which is
+  // exactly the bug PLAN-evacuation.md's Phase 5 caught: MapView's own generic POI loop created
+  // `kumbh.hfl_line`'s vector source before evacLayers.ts's addEvacLayers ever ran, so its
+  // `if (map.getSource('hfl_area')) return` guard tripped immediately and silently skipped every
+  // evac-* layer, every time. Flood risk is Evacuation-mode-only; its colours live in
+  // EVAC_COLORS.floodArea/floodLine (src/lib/evacuation/layers.ts) instead.
 }
 
 export const LINE_LAYER_LABELS: Record<string, string> = {
@@ -265,6 +273,7 @@ export const POLYGON_LAYER_COLORS: Record<string, string> = {
   dam: '#3f6b8c',
   landuse: '#6b7280',
   uk_district_boundary: '#6b7280',
+  // hfl_area has no entry here -- see LINE_LAYER_COLORS' comment on why.
 }
 
 export const POLYGON_LAYER_LABELS: Record<string, string> = {

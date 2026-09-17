@@ -15,6 +15,11 @@ const DRAWER_ANIM_MS = 260
 const DEFAULT_HEIGHT_VH = 18
 const MIN_HEIGHT_PX = 120
 const MAX_HEIGHT_VH = 88
+// Height the drawer opens to when the user actually activates it (heading-row click, or the
+// drag-handle pill -- see toggleActive below), tall enough that the report's three columns are
+// actually readable instead of just a sliver. Only ever *raises* height, never shrinks a height
+// the user already dragged taller than this -- see toggleActive's Math.max.
+const ACTIVE_HEIGHT_VH = 48
 
 type Report = {
   sectorNo: number
@@ -256,11 +261,11 @@ function StatTile({
   return (
     <div
       className="flex items-center gap-2 rounded-[10px] border p-2"
-      style={{ background: 'var(--map-surface-alt)', borderColor: 'var(--map-border)' }}
+      style={{ backgroundColor: 'var(--map-surface-alt)', borderColor: 'var(--map-border)' }}
     >
       <span
         className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px]"
-        style={{ background: t.bg, color: t.fg }}
+        style={{ backgroundColor: t.bg, color: t.fg }}
       >
         <Icon className="h-3.5 w-3.5" />
       </span>
@@ -299,7 +304,7 @@ function UtilRow({
   return (
     <div
       className="rounded-[9px] border"
-      style={{ background: 'var(--map-surface-alt)', borderColor: 'var(--map-border)' }}
+      style={{ backgroundColor: 'var(--map-surface-alt)', borderColor: 'var(--map-border)' }}
     >
       <div
         className={`flex items-center gap-2.5 px-2 py-[7px] ${hasBreakdown ? 'cursor-pointer' : ''}`}
@@ -307,7 +312,7 @@ function UtilRow({
       >
         <span
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-          style={{ background: t.bg, color: t.fg }}
+          style={{ backgroundColor: t.bg, color: t.fg }}
         >
           <Icon className="h-[15px] w-[15px]" />
         </span>
@@ -376,7 +381,7 @@ function ColHead({
     <div className="mb-3 flex items-center gap-1.5">
       <span
         className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
-        style={{ background: t.bg, color: t.fg }}
+        style={{ backgroundColor: t.bg, color: t.fg }}
       >
         <Icon className="h-3 w-3" />
       </span>
@@ -393,17 +398,18 @@ function ColHead({
 export default function SectorReportDrawer({
   sectorNo,
   sectorLabel,
-  onClose,
 }: {
   /** Drawer is hidden entirely when null -- same "no sector selected" gate as the Stats panel's filtered view. */
   sectorNo: number | null
   sectorLabel: string
-  onClose: () => void
 }) {
   const [report, setReport] = useState<Report | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [collapsed, setCollapsed] = useState(false)
+  // Starts collapsed (matches the effect below, which enforces this on every sectorNo change
+  // too) so a sector already selected on first mount -- e.g. a deep link -- never flashes the
+  // full report open for a frame before that effect collapses it back.
+  const [collapsed, setCollapsed] = useState(true)
   // Keeps the drawer mounted for the swipe-out animation's duration after
   // sectorNo goes back to null, instead of vanishing instantly -- mirrors
   // the DRAWER_ANIM_MS timeout below, which is what actually unmounts it.
@@ -420,6 +426,12 @@ export default function SectorReportDrawer({
   const [dragging, setDragging] = useState(false)
   const dragState = useRef({ startY: 0, startHeight: height })
 
+  // Shared by the drag clamp below and toggleActive's expand bump, so the two never drift apart
+  // (a bumped-open height must still respect the same ceiling a drag would).
+  function maxDrawerHeightPx() {
+    return Math.min((window.innerHeight * MAX_HEIGHT_VH) / 100, window.innerHeight - 96)
+  }
+
   function startDrag(e: React.PointerEvent) {
     e.preventDefault()
     dragState.current = { startY: e.clientY, startHeight: height }
@@ -430,12 +442,8 @@ export default function SectorReportDrawer({
     function onMove(ev: PointerEvent) {
       // Dragging the top handle up (negative delta) grows the drawer.
       const delta = dragState.current.startY - ev.clientY
-      const maxHeight = Math.min(
-        (window.innerHeight * MAX_HEIGHT_VH) / 100,
-        window.innerHeight - 96,
-      )
       const next = Math.min(
-        maxHeight,
+        maxDrawerHeightPx(),
         Math.max(MIN_HEIGHT_PX, dragState.current.startHeight + delta),
       )
       setHeight(next)
@@ -449,6 +457,27 @@ export default function SectorReportDrawer({
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+  }
+
+  // Shared by both activation gestures (heading-row click and the drag-handle pill's click --
+  // see their onClick handlers below). Only *opening* (collapsed -> active) also bumps `height`
+  // up to ACTIVE_HEIGHT_VH when it's currently smaller -- e.g. still at the short default strip
+  // height, or a small height left over from a previous drag -- so activating the drawer always
+  // shows enough of the report to be useful instead of reopening at whatever sliver of a height
+  // happened to be set last. Never *shrinks* a height the user already dragged taller than that,
+  // and never touches height on the way back to collapsed (collapsing ignores height entirely --
+  // see the container's `height: collapsed ? undefined : height` below).
+  function toggleActive() {
+    setCollapsed((wasCollapsed) => {
+      if (wasCollapsed) {
+        const activeHeight = Math.min(
+          maxDrawerHeightPx(),
+          Math.round((window.innerHeight * ACTIVE_HEIGHT_VH) / 100),
+        )
+        setHeight((h) => Math.max(h, activeHeight))
+      }
+      return !wasCollapsed
+    })
   }
 
   useEffect(() => {
@@ -494,12 +523,15 @@ export default function SectorReportDrawer({
     }
   }, [sectorNo])
 
-  // Re-opens automatically (starts expanded) whenever a different sector is picked --
-  // a user who collapsed the drawer for sector A shouldn't have it stay collapsed
-  // when they then pick sector B, since that hides the very thing they just asked to see.
+  // Always (re)starts collapsed -- an inactive strip, not the full report -- whenever a
+  // (different) sector is picked. Selecting a sector is not itself a request to see the report;
+  // the drawer only goes active once the user deliberately clicks its heading row (see the
+  // heading's onClick below). Runs on every sectorNo change, not just null-to-number, so picking
+  // sector B while sector A's drawer happened to be left expanded doesn't carry that open state
+  // over -- each newly picked sector starts from the same inactive state.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting UI-only collapsed state on sectorNo changing, not state synced from an external system
-    setCollapsed(false)
+    setCollapsed(true)
   }, [sectorNo])
 
   if (!mounted) return null
@@ -513,7 +545,7 @@ export default function SectorReportDrawer({
   return (
     <div
       style={{
-        background: 'var(--map-panel-bg)',
+        backgroundColor: 'var(--map-panel-bg)',
         borderColor: 'var(--map-panel-border)',
         boxShadow: '0 -8px 30px var(--map-panel-shadow)',
         color: 'var(--map-fg)',
@@ -545,7 +577,7 @@ export default function SectorReportDrawer({
           type="button"
           onClick={(e) => {
             e.stopPropagation()
-            setCollapsed((v) => !v)
+            toggleActive()
           }}
           aria-label={collapsed ? 'Expand sector report' : 'Collapse sector report'}
           aria-expanded={!collapsed}
@@ -553,18 +585,37 @@ export default function SectorReportDrawer({
         >
           <span
             className="block h-1 w-9 rounded-full transition-colors"
-            style={{ background: dragging ? 'var(--map-accent)' : 'var(--map-switch-track)' }}
+            style={{ backgroundColor: dragging ? 'var(--map-accent)' : 'var(--map-switch-track)' }}
           />
         </button>
       </div>
 
+      {/* Heading row -- icon, title, sector label, and the collapse ("X") button. Clicking
+          anywhere in this row *other than* the "X" button (which stops its own propagation)
+          toggles the drawer between its inactive strip and the full report -- picking a sector
+          only ever opens the inactive strip (see the sectorNo effect above); this is the one
+          gesture that actually shows the report. The "X" button only ever collapses back to that
+          same inactive strip now -- it no longer deselects the sector (that used to call the
+          removed onClose prop), so the drawer stays available for a re-click without having to
+          re-pick the sector. */}
       <div
+        onClick={toggleActive}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            toggleActive()
+          }
+        }}
+        aria-label={collapsed ? 'Expand sector report' : 'Collapse sector report'}
+        aria-expanded={!collapsed}
         style={{ borderColor: 'var(--map-panel-border)' }}
-        className="flex shrink-0 items-center gap-2.5 border-b px-5 pb-3.5"
+        className="flex shrink-0 cursor-pointer items-center gap-2.5 border-b px-5 pb-3.5"
       >
         <span
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]"
-          style={{ background: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
+          style={{ backgroundColor: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
         >
           <ParcelIcon className="h-[18px] w-[18px]" />
         </span>
@@ -586,9 +637,9 @@ export default function SectorReportDrawer({
           type="button"
           onClick={(e) => {
             e.stopPropagation()
-            onClose()
+            setCollapsed(true)
           }}
-          aria-label="Close sector report"
+          aria-label="Collapse sector report"
           style={{ color: 'var(--map-fg-faint)' }}
           className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg hover:bg-[var(--map-surface-hover)]"
         >
@@ -619,7 +670,7 @@ export default function SectorReportDrawer({
                 className="rounded-lg border px-2.5 py-2 text-[12.5px]"
                 style={{
                   borderColor: 'var(--danger-soft)',
-                  background: 'var(--danger-soft)',
+                  backgroundColor: 'var(--danger-soft)',
                   color: 'var(--danger)',
                 }}
               >
@@ -695,7 +746,7 @@ export default function SectorReportDrawer({
                           key={group.classGroup}
                           className="overflow-hidden rounded-[10px] border"
                           style={{
-                            background: 'var(--map-surface-alt)',
+                            backgroundColor: 'var(--map-surface-alt)',
                             borderColor: 'var(--map-border)',
                           }}
                         >
@@ -705,7 +756,7 @@ export default function SectorReportDrawer({
                           >
                             <span
                               className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[7px]"
-                              style={{ background: t.bg, color: t.fg }}
+                              style={{ backgroundColor: t.bg, color: t.fg }}
                             >
                               <Icon className="h-[13px] w-[13px]" />
                             </span>
@@ -742,14 +793,14 @@ export default function SectorReportDrawer({
                       <div
                         className="flex items-center gap-1.5 rounded-[10px] border px-2.5 py-2"
                         style={{
-                          background: 'var(--map-surface-alt)',
+                          backgroundColor: 'var(--map-surface-alt)',
                           borderColor: 'var(--map-border)',
                         }}
                       >
                         <span
                           className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[7px]"
                           style={{
-                            background: 'var(--map-section-blue-bg)',
+                            backgroundColor: 'var(--map-section-blue-bg)',
                             color: 'var(--map-section-blue-fg)',
                           }}
                         >

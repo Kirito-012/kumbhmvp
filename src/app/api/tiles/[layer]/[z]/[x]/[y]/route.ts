@@ -26,6 +26,11 @@ const LAYERS: Record<
     filterBelowZoom?: number
     /** Simplify geometry (in tile units, post-clip) to shrink dense layers. */
     simplify?: boolean
+    /** A literal SQL join clause (authored here, never request input) appended after the FROM
+     *  table -- for a computed column that needs a second table, e.g. traffic_route's nearest-
+     *  sector lookup. Can reference the base table's own columns unqualified (there's no alias on
+     *  it), same as `columns`/`lowZoomWhere` already do. */
+    extraJoin?: string
   }
 > = {
   road: {
@@ -34,7 +39,7 @@ const LAYERS: Record<
   },
   sector_boundary: {
     table: 'kumbh.sector_boundary',
-    columns: 'id, name, sector_no, area_hac',
+    columns: 'id, name, sector_no, area_hac, zone',
   },
   sector_plan: {
     table: 'kumbh.sector_plan',
@@ -122,8 +127,15 @@ const LAYERS: Record<
   },
   traffic_route: {
     table: 'kumbh.traffic_route',
+    // length_m/sector_no are computed, not real columns -- kumbh.traffic_route has neither
+    // (see CONTEXT.md §9's Evacuation mode notes on why "Sector" needs a spatial join rather than
+    // a plain column, same nearest-sector-centroid technique /api/evacuation/arrows already uses
+    // for its bearing calculation). Both feed evacPopupContent's traffic-route popup rows.
     columns:
-      'id, name, entry_exit, plan, direction, weekend, normal, peak_day, deh_dir, naj_dir, sah_dir, meer_dir',
+      'id, name, entry_exit, plan, direction, weekend, normal, peak_day, deh_dir, naj_dir, sah_dir, meer_dir, ' +
+      'ROUND(ST_Length(geom::geography))::int AS length_m, sb.sector_no',
+    extraJoin:
+      'LEFT JOIN LATERAL (SELECT b.sector_no FROM kumbh.sector_boundary b ORDER BY b.geom <-> geom LIMIT 1) sb ON TRUE',
   },
   tentcity: {
     table: 'kumbh.tentcity',
@@ -213,6 +225,21 @@ const LAYERS: Record<
     table: 'kumbh.other_transport',
     columns: 'id, name',
   },
+  // Loaded from the 25 Aug 2026 shapefile drop, not the 2027 gdb -- see
+  // scripts/load_kumbh_2027.py's SHP_TABLE_SPECS and PLAN-evacuation.md §2.3. `source`
+  // is always 'shp_2026_08_25' for these three; carried through so the app can flag it.
+  emergency_exit: {
+    table: 'kumbh.emergency_exit',
+    columns: 'id, road_name, row_width_m, sector_name, sector_no, source',
+  },
+  hfl_area: {
+    table: 'kumbh.hfl_area',
+    columns: 'id, type, name, sector_no, area_m2, source',
+  },
+  hfl_line: {
+    table: 'kumbh.hfl_line',
+    columns: 'id, name, return_period_years, bank, source',
+  },
   tertiary_road: {
     table: 'kumbh.tertiary_road',
     columns: 'id, osm_id, name, fclass, ref, oneway, maxspeed, bridge, tunnel, in_sector',
@@ -280,6 +307,7 @@ export async function GET(
       SELECT ${def.columns},
              ${geomExpr} AS geom
       FROM ${def.table}
+      ${def.extraJoin ?? ''}
       WHERE geom && ST_Transform(ST_TileEnvelope($2, $3, $4, margin => (64.0 / 4096)), 4326)
       ${extraWhere}
     ) t

@@ -44,7 +44,7 @@ export function VolumeChart({ data }: { data: VolumePoint[] }) {
           <Tooltip
             cursor={{ stroke: 'var(--border-strong)', strokeWidth: 1 }}
             contentStyle={{
-              background: 'var(--surface)',
+              backgroundColor: 'var(--surface)',
               border: '1px solid var(--border-strong)',
               borderRadius: 10,
               fontSize: 12,

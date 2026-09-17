@@ -1,0 +1,675 @@
+import type { Map as MLMap, ExpressionSpecification, GeoJSONSource } from 'maplibre-gl'
+import type { Feature, FeatureCollection, Point } from 'geojson'
+import { HEAT_PALETTE, NO_DATA_COLOR, darkenHex, type Theme } from '@/lib/insights/heatScale'
+import type {
+  SectorRollup,
+  SectorPlanBucket,
+  InsightsFilters,
+  HeatMetric,
+} from '@/lib/insights/aggregate'
+import { isOpenTicket, matchesFilters } from '@/lib/insights/aggregate'
+import { BUCKET_COLORS, BUCKET_ORDER } from '@/lib/insights/statusBuckets'
+import {
+  TicketField,
+  type InsightsPriorityRow,
+  type InsightsStatusRow,
+  type InsightsTicketTuple,
+} from '@/lib/insights/types'
+
+// Heatmap only ever attaches to the sector_boundary vector source MapView already loads (see
+// initMap's map.addSource('sector_boundary', ...)) -- sector_no is already an exposed feature
+// property there (used by sector-hover-fill/etc.), so no new tile source is needed for the
+// zoomed-out sector shading.
+const SECTOR_SOURCE = 'sector_boundary'
+const SECTOR_SOURCE_LAYER = 'sector_boundary'
+
+// Ticket mode recolours the same 'sector_plan' vector source MapView already loads for the
+// class-group wash (see initMap's map.addSource('sector_plan', ...), promoteId: 'id') via
+// feature-state rather than a second tile source -- see PLAN-heatmap.md §5.3.
+const PARCEL_SOURCE = 'sector_plan'
+const PARCEL_SOURCE_LAYER = 'sector_plan'
+
+export const INSIGHT_HEAT_SOURCE = 'insight-tickets'
+// One point per sector (its centroid), fed from the same `sectors` array MapView already fetches
+// from /api/sectors -- deliberately NOT the sector_boundary vector tile source: a large sector
+// polygon is clipped into a separate fragment per tile it overlaps, so a symbol layer placed
+// directly on it puts one label per fragment (the same sector's label repeating several times at
+// low zoom). A one-feature-per-sector point source makes "exactly one label per sector" structural
+// rather than something to fight with placement options like symbol-avoid-edges.
+export const INSIGHT_SECTOR_LABEL_SOURCE = 'insight-sector-label-points'
+
+export const INSIGHT_SECTOR_FILL_LAYER = 'insight-sector-fill'
+export const INSIGHT_SECTOR_OUTLINE_LAYER = 'insight-sector-outline'
+export const INSIGHT_SECTOR_SELECTED_LAYER = 'insight-sector-selected'
+export const INSIGHT_SECTOR_LABEL_LAYER = 'insight-sector-label'
+export const INSIGHT_HEAT_LAYER = 'insight-heat'
+export const INSIGHT_HEAT_POINTS_LAYER = 'insight-heat-points'
+export const INSIGHT_TICKET_FILL_LAYER = 'insight-ticket-fill'
+export const INSIGHT_TICKET_OUTLINE_LAYER = 'insight-ticket-outline'
+
+/** Every Heatmap-only layer this module owns, bottom-to-top paint order. Used for visibility
+ *  toggling and for the theme-swap effect's re-theme pass. The sector label layer is shared with
+ *  Ticket mode (different text, see updateTicketSectorLabels) so it's toggled separately from
+ *  this list -- see setInsightLabelVisible. */
+export const INSIGHT_LAYER_IDS = [
+  INSIGHT_SECTOR_FILL_LAYER,
+  INSIGHT_SECTOR_OUTLINE_LAYER,
+  INSIGHT_SECTOR_SELECTED_LAYER,
+  INSIGHT_HEAT_LAYER,
+  INSIGHT_HEAT_POINTS_LAYER,
+] as const
+
+/** Ticket mode's own layers -- toggled independently of INSIGHT_LAYER_IDS above (they're never
+ *  both visible at once, but each mode owns its own visibility switch for clarity). */
+export const TICKET_LAYER_IDS = [INSIGHT_TICKET_FILL_LAYER, INSIGHT_TICKET_OUTLINE_LAYER] as const
+
+function sectorLabelExpr(labelBySector: Map<number, string>): ExpressionSpecification {
+  const pairs: (number | string)[] = []
+  for (const [sectorNo, label] of labelBySector) pairs.push(sectorNo, label)
+  if (pairs.length === 0) return '' as unknown as ExpressionSpecification
+  return ['match', ['get', 'sector_no'], ...pairs, ''] as unknown as ExpressionSpecification
+}
+
+// Neutral sector-boundary hairline shown at every zoom in Heatmap mode (PLAN-heatmap.md §11.3) --
+// no longer coloured per-sector, just a flat theme-appropriate line so the boundaries stay
+// legible under the density glow without competing with it for attention.
+const SECTOR_OUTLINE_COLOR: Record<Theme, string> = {
+  light: 'rgba(71,85,105,0.55)',
+  dark: 'rgba(203,213,225,0.45)',
+}
+
+// Sector label text/halo -- opposite of NO_DATA_COLOR's pairing on purpose: NO_DATA_COLOR is a
+// muted neutral meant to recede (fine for an empty-fill colour, bad for label contrast), and it
+// was previously reused here as the halo, giving near-black text a near-black (dark theme) or
+// near-white text a near-white (light theme) halo -- both effectively invisible. These pairs are
+// plain high-contrast opposites (dark text on a light halo, light text on a dark halo) so the
+// label reads as a solid legible plate in both themes regardless of what's underneath. Exported so
+// MapView's own plain "sector name" label (Map mode's base-layer toggle, not part of the Insights
+// system) can match this exact look rather than inventing a second palette.
+export const SECTOR_LABEL_TEXT_COLOR: Record<Theme, string> = {
+  light: '#0f172a',
+  dark: '#f8fafc',
+}
+export const SECTOR_LABEL_HALO_COLOR: Record<Theme, string> = {
+  light: '#ffffff',
+  dark: '#0b1220',
+}
+
+// Fixed green -> lime -> yellow -> orange -> red density ramp, alpha baked into each rgba stop so
+// the basemap and its road/place-name labels stay readable through even the reddest core
+// (PLAN-heatmap.md §11.4). Deliberately independent of HEAT_PALETTE (which stays theme-aware and
+// is only used for the sector-list dots/bars, §11.8, and for the heat-points dot colour below) --
+// same ramp in both themes for now; applyInsightTheme re-applies this same expression on toggle,
+// so it's still the one place to diverge per-theme later if dark mode needs its own look.
+const HEAT_GLOW_COLOR: ExpressionSpecification = [
+  'interpolate',
+  ['linear'],
+  ['heatmap-density'],
+  0,
+  'rgba(0,0,0,0)',
+  0.15,
+  'rgba(34,197,94,0.30)',
+  0.35,
+  'rgba(163,230,53,0.45)',
+  0.55,
+  'rgba(250,204,21,0.55)',
+  0.75,
+  'rgba(249,115,22,0.65)',
+  1,
+  'rgba(220,38,38,0.72)',
+] as unknown as ExpressionSpecification
+
+/**
+ * Adds every Heatmap layer (idempotent -- a re-entry into Heatmap mode, or React StrictMode's
+ * double-invoke, is a no-op if they already exist). All layers start hidden (`visibility: 'none'`)
+ * -- MapView's mode-visibility effect turns them on/off, mirroring visibilityForMode's pattern for
+ * the plain-map layers. `insight-sector-fill` is an invisible hit target (fill-opacity 0) used only
+ * for sector click/hover; `insight-sector-outline` is a flat neutral hairline at every zoom -- see
+ * SECTOR_OUTLINE_COLOR and applyInsightTheme, which re-applies it on a theme toggle.
+ */
+export function addInsightLayers(map: MLMap, theme: Theme): void {
+  if (!map.getSource(INSIGHT_HEAT_SOURCE)) {
+    map.addSource(INSIGHT_HEAT_SOURCE, {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+    })
+  }
+  if (!map.getSource(INSIGHT_SECTOR_LABEL_SOURCE)) {
+    map.addSource(INSIGHT_SECTOR_LABEL_SOURCE, {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+    })
+  }
+
+  if (!map.getLayer(INSIGHT_SECTOR_FILL_LAYER)) {
+    map.addLayer({
+      id: INSIGHT_SECTOR_FILL_LAYER,
+      type: 'fill',
+      source: SECTOR_SOURCE,
+      'source-layer': SECTOR_SOURCE_LAYER,
+      layout: { visibility: 'none' },
+      paint: {
+        // Invisible hit target only (PLAN-heatmap.md §11.3) -- fill-color is never seen at
+        // opacity 0, kept as a real constant rather than 'transparent' just for readability.
+        'fill-color': NO_DATA_COLOR[theme],
+        'fill-opacity': 0,
+      },
+    })
+  }
+  if (!map.getLayer(INSIGHT_SECTOR_OUTLINE_LAYER)) {
+    map.addLayer({
+      id: INSIGHT_SECTOR_OUTLINE_LAYER,
+      type: 'line',
+      source: SECTOR_SOURCE,
+      'source-layer': SECTOR_SOURCE_LAYER,
+      layout: { visibility: 'none', 'line-join': 'round' },
+      paint: {
+        'line-color': SECTOR_OUTLINE_COLOR[theme],
+        'line-width': 1.2,
+      },
+    })
+  }
+  if (!map.getLayer(INSIGHT_SECTOR_LABEL_LAYER)) {
+    map.addLayer({
+      id: INSIGHT_SECTOR_LABEL_LAYER,
+      type: 'symbol',
+      source: INSIGHT_SECTOR_LABEL_SOURCE,
+      minzoom: 11,
+      layout: {
+        visibility: 'none',
+        'text-field': ['format', ['concat', 'S', ['to-string', ['get', 'sector_no']]], {}],
+        'text-font': ['Noto Sans Bold'],
+        'text-size': 13,
+        'text-allow-overlap': false,
+      },
+      paint: {
+        'text-color': SECTOR_LABEL_TEXT_COLOR[theme],
+        'text-halo-color': SECTOR_LABEL_HALO_COLOR[theme],
+        // Wide enough to read as a solid plate behind the text (rather than a thin outline) over
+        // any basemap/heat-glow colour underneath, since this label has no real background layer.
+        'text-halo-width': 2,
+      },
+    })
+  }
+  // Double-stroke selected-sector highlight, same "outline + soft glow" idea as the plain map's
+  // sector-selected-outline/-glow pair, kept as one 2.5px line here for simplicity (Phase 3 scope
+  // is correct colour + zoom behaviour, not matching that pair's dark-mode glow variant 1:1).
+  if (!map.getLayer(INSIGHT_SECTOR_SELECTED_LAYER)) {
+    map.addLayer({
+      id: INSIGHT_SECTOR_SELECTED_LAYER,
+      type: 'line',
+      source: SECTOR_SOURCE,
+      'source-layer': SECTOR_SOURCE_LAYER,
+      filter: ['==', ['get', 'sector_no'], -1],
+      layout: { visibility: 'none' },
+      paint: { 'line-color': theme === 'dark' ? '#fb923c' : '#7c3aed', 'line-width': 3 },
+    })
+  }
+
+  if (!map.getLayer(INSIGHT_HEAT_LAYER)) {
+    // Placed below the basemap's first symbol layer (place-name/road labels, POI icons) so those
+    // labels paint on top of the glow instead of being hidden under it (PLAN-heatmap.md §11.6).
+    // Reading map.getStyle().layers here is safe: this runs from MapView's map.on('load') handler
+    // before any of this component's own layers have been added (only three vector sources exist
+    // at that point, no layers), so the current style is still exactly the basemap's own layer
+    // stack in its original order. A theme toggle later re-adds a fresh basemap and repositions
+    // this same layer itself (MapView's syncBasemap, since it already has the new basemap's layer
+    // array in scope there) rather than re-running this lookup.
+    const firstSymbolLayerId = map.getStyle().layers.find((l) => l.type === 'symbol')?.id
+    map.addLayer(
+      {
+        id: INSIGHT_HEAT_LAYER,
+        type: 'heatmap',
+        source: INSIGHT_HEAT_SOURCE,
+        layout: { visibility: 'none' },
+        paint: {
+          'heatmap-weight': ['get', 'weight'],
+          // Exponential (not linear) so a hotspot covers roughly the same GROUND area at every
+          // zoom -- a linear radius would make hotspots visually balloon as you zoom in.
+          'heatmap-radius': ['interpolate', ['exponential', 2], ['zoom'], 10, 8, 13, 28, 16, 90],
+          // Low zoomed out so sectors 7/5/11/12 (600-740 tickets each) don't fuse into one red
+          // blob; higher zoomed in so a single busy parcel still reads on its own.
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 10, 0.15, 13, 0.5, 16, 1.2],
+          // Visible at every zoom (was hidden below z13) -- eases down slightly by z16 once the
+          // individual ticket dots (insight-heat-points) take over the close-up reading.
+          'heatmap-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0.85, 16, 0.6],
+          'heatmap-color': HEAT_GLOW_COLOR,
+        },
+      },
+      firstSymbolLayerId,
+    )
+  }
+  if (!map.getLayer(INSIGHT_HEAT_POINTS_LAYER)) {
+    map.addLayer({
+      id: INSIGHT_HEAT_POINTS_LAYER,
+      type: 'circle',
+      source: INSIGHT_HEAT_SOURCE,
+      // minzoom must be <= the fade-in's start (15.5) below, not the zoom it's fully visible by
+      // (16) -- a minzoom of 16 clipped the whole 15.5->16 fade-in before it could ever show.
+      minzoom: 15.5,
+      layout: { visibility: 'none' },
+      paint: {
+        'circle-radius': 4,
+        'circle-color': HEAT_PALETTE[theme][3],
+        'circle-stroke-color': theme === 'dark' ? '#0b0d11' : '#ffffff',
+        'circle-stroke-width': 1,
+        'circle-opacity': ['interpolate', ['linear'], ['zoom'], 15.5, 0, 16, 0.9],
+      },
+    })
+  }
+}
+
+/** Shows/hides every insight layer at once -- MapView calls this from the mode-visibility effect
+ *  alongside visibilityForMode's plain-map handling. Layers not yet created (e.g. Ticket mode
+ *  hasn't run addInsightLayers yet in an earlier phase) are silently skipped. */
+export function setInsightLayersVisible(map: MLMap, visible: boolean): void {
+  const visibility = visible ? 'visible' : 'none'
+  for (const id of INSIGHT_LAYER_IDS) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility)
+  }
+}
+
+/** The sector label layer is shared between Heatmap and Ticket mode -- only Ticket mode currently
+ *  sets its text (see updateTicketSectorLabels); Heatmap hides it entirely (PLAN-heatmap.md §11.1
+ *  decision #2) -- so it's toggled independently of both modes' own layer lists rather than living
+ *  in either INSIGHT_LAYER_IDS or TICKET_LAYER_IDS. */
+export function setInsightLabelVisible(map: MLMap, visible: boolean): void {
+  if (map.getLayer(INSIGHT_SECTOR_LABEL_LAYER)) {
+    map.setLayoutProperty(INSIGHT_SECTOR_LABEL_LAYER, 'visibility', visible ? 'visible' : 'none')
+  }
+}
+
+/** `['match', ['feature-state','bucket'], ...]` colour expression shared by fill/outline --
+ *  `colorForBucket` supplies each bucket's colour so the two call sites (fill: bucket colour,
+ *  outline: darkened bucket colour) can share the match/fallback plumbing. A parcel with no
+ *  feature-state set yet (no ticket, e.g. a Road/Parking parcel), and a parcel whose ticket fails
+ *  the active filters ('muted'), both fall through to fully-transparent -- a filter (e.g. the
+ *  Categories panel's class/sub-class picks) is meant to isolate just the matching parcels, not
+ *  leave the rest visible as a washed-out outline. */
+function ticketBucketExpr(
+  colorForBucket: (bucket: Exclude<SectorPlanBucket, 'muted'>) => string,
+): ExpressionSpecification {
+  const pairs: string[] = []
+  for (const bucket of BUCKET_ORDER) pairs.push(bucket, colorForBucket(bucket))
+  return [
+    'match',
+    ['feature-state', 'bucket'],
+    ...pairs,
+    'transparent',
+  ] as unknown as ExpressionSpecification
+}
+
+function ticketFillExpr(theme: Theme): ExpressionSpecification {
+  return ticketBucketExpr((b) => BUCKET_COLORS[b][theme])
+}
+
+function ticketOutlineExpr(theme: Theme): ExpressionSpecification {
+  return ticketBucketExpr((b) => darkenHex(BUCKET_COLORS[b][theme], 0.25))
+}
+
+/**
+ * Adds Ticket mode's parcel fill/outline layers on the existing `sector_plan` source (idempotent,
+ * same reasoning as addInsightLayers). Both start hidden with every feature falling through to
+ * 'transparent' -- MapView's feature-state effect paints real buckets in once ticket data has
+ * loaded. Added after sector-plan-fill/-class-outline in MapView's `load` handler (not inside
+ * addInsightLayers, which runs before sector_plan itself exists) so the ticket fill/outline sit
+ * ABOVE the class-group wash but BELOW the peripheral dashed outline and filter-emphasis layers
+ * that are added right after them -- see PLAN-heatmap.md §9 ("ticket fill sits under [the
+ * peripheral outline], not over it").
+ */
+export function addTicketLayers(map: MLMap, theme: Theme): void {
+  if (!map.getLayer(INSIGHT_TICKET_FILL_LAYER)) {
+    map.addLayer({
+      id: INSIGHT_TICKET_FILL_LAYER,
+      type: 'fill',
+      source: PARCEL_SOURCE,
+      'source-layer': PARCEL_SOURCE_LAYER,
+      layout: { visibility: 'none' },
+      paint: {
+        'fill-color': ticketFillExpr(theme),
+        // Fades slightly at parcel-reading zooms so the parcel's own class-wash/outline (still
+        // visible underneath) keeps some legibility rather than being fully painted over.
+        'fill-opacity': ['interpolate', ['linear'], ['zoom'], 11, 0.55, 15, 0.35],
+      },
+    })
+  }
+  if (!map.getLayer(INSIGHT_TICKET_OUTLINE_LAYER)) {
+    map.addLayer({
+      id: INSIGHT_TICKET_OUTLINE_LAYER,
+      type: 'line',
+      source: PARCEL_SOURCE,
+      'source-layer': PARCEL_SOURCE_LAYER,
+      layout: { visibility: 'none', 'line-join': 'round' },
+      paint: {
+        'line-color': ticketOutlineExpr(theme),
+        'line-width': 1,
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], 11, 0.5, 15, 0.9],
+      },
+    })
+  }
+}
+
+export function setTicketLayersVisible(map: MLMap, visible: boolean): void {
+  const visibility = visible ? 'visible' : 'none'
+  for (const id of TICKET_LAYER_IDS) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility)
+  }
+}
+
+/** Re-applies the fill/outline colour expressions on a theme toggle -- called unconditionally
+ *  from MapView's theme-swap effect (syncBasemap), same as applyInsightTheme, since both bucket
+ *  and muted colours are theme-dependent plain paint values. */
+export function applyTicketTheme(map: MLMap, theme: Theme): void {
+  if (map.getLayer(INSIGHT_TICKET_FILL_LAYER)) {
+    map.setPaintProperty(INSIGHT_TICKET_FILL_LAYER, 'fill-color', ticketFillExpr(theme))
+  }
+  if (map.getLayer(INSIGHT_TICKET_OUTLINE_LAYER)) {
+    map.setPaintProperty(INSIGHT_TICKET_OUTLINE_LAYER, 'line-color', ticketOutlineExpr(theme))
+  }
+}
+
+/**
+ * Diffs `next` (this pass's sectorPlanId -> bucket map, from aggregate.ts's
+ * bucketBySectorPlanId) against `previous` (the last map actually applied) and calls
+ * setFeatureState/removeFeatureState only for parcels whose bucket actually changed --
+ * PLAN-heatmap.md §9's "~3.6k calls is fine, but batch in one frame and diff so only changed
+ * parcels are touched". The caller (MapView) is responsible for the "one frame" half: schedule
+ * this inside a single requestAnimationFrame per data/filter change, cancelling any still-pending
+ * one from a faster-than-a-frame previous call.
+ */
+export function applyTicketFeatureState(
+  map: MLMap,
+  next: Map<number, SectorPlanBucket>,
+  previous: Map<number, SectorPlanBucket> | null,
+): void {
+  const ids = new Set<number>(next.keys())
+  if (previous) for (const id of previous.keys()) ids.add(id)
+
+  for (const id of ids) {
+    const nextBucket = next.get(id)
+    if (previous && previous.get(id) === nextBucket) continue
+    const target = { source: PARCEL_SOURCE, sourceLayer: PARCEL_SOURCE_LAYER, id }
+    if (nextBucket === undefined) map.removeFeatureState(target)
+    else map.setFeatureState(target, { bucket: nextBucket })
+  }
+}
+
+/** Ticket mode's sector labels ("S7 · 52% resolved" per PLAN-heatmap.md §5.3) -- computed from the
+ *  sector's full, unfiltered rollup (a filter chip narrows which parcels are highlighted, not what
+ *  "resolved" means for the sector as a whole). Halo colour is re-applied so it still matches
+ *  NO_DATA_COLOR on a theme toggle; text colour itself is handled by applyInsightTheme, which
+ *  already re-applies unconditionally regardless of which mode set the label text. */
+export function updateTicketSectorLabels(
+  map: MLMap,
+  rollups: Map<number | null, SectorRollup>,
+  theme: Theme,
+): void {
+  const labelBySector = new Map<number, string>()
+  for (const [sectorNo, rollup] of rollups) {
+    if (sectorNo === null) continue // peripheral has no sector polygon to label
+    const pct = rollup.total > 0 ? Math.round((rollup.resolved / rollup.total) * 100) : 0
+    labelBySector.set(sectorNo, `S${sectorNo} · ${pct}% resolved`)
+  }
+  if (map.getLayer(INSIGHT_SECTOR_LABEL_LAYER)) {
+    map.setLayoutProperty(INSIGHT_SECTOR_LABEL_LAYER, 'text-field', [
+      'format',
+      sectorLabelExpr(labelBySector),
+      {},
+    ])
+    map.setPaintProperty(
+      INSIGHT_SECTOR_LABEL_LAYER,
+      'text-halo-color',
+      SECTOR_LABEL_HALO_COLOR[theme],
+    )
+  }
+}
+
+/** Populates the dedicated one-point-per-sector label source from MapView's `sectors` state (its
+ *  /api/sectors fetch, unrelated to and loaded independently of ticket data) -- called from its own
+ *  effect keyed only on [sectors, mapReady] so the label anchor points exist as soon as sector data
+ *  loads, regardless of ticket/mode/filter state. Each feature carries the same `sector_no`
+ *  property sectorLabelExpr already matches on, so no other code needs to change. */
+export function setInsightSectorLabelPoints(
+  map: MLMap,
+  sectors: { sector_no: number; lng: number; lat: number }[],
+): void {
+  const src = map.getSource(INSIGHT_SECTOR_LABEL_SOURCE)
+  if (!src || !('setData' in src)) return
+  const features: Feature<Point, { sector_no: number }>[] = sectors.map((s) => ({
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [s.lng, s.lat] },
+    properties: { sector_no: s.sector_no },
+  }))
+  ;(src as GeoJSONSource).setData({ type: 'FeatureCollection', features })
+}
+
+/** Re-applies theme-dependent paint -- the heat colour ramp, sector outline hairline, label
+ *  text/halo colours, circle colours, selected-sector colour -- on a basemap theme toggle.
+ *  `insight-sector-fill` needs no re-theming: it's an invisible (fill-opacity 0) hit target, and
+ *  its fill-color is never actually painted. */
+export function applyInsightTheme(map: MLMap, theme: Theme): void {
+  if (map.getLayer(INSIGHT_SECTOR_OUTLINE_LAYER)) {
+    map.setPaintProperty(INSIGHT_SECTOR_OUTLINE_LAYER, 'line-color', SECTOR_OUTLINE_COLOR[theme])
+  }
+  if (map.getLayer(INSIGHT_HEAT_LAYER)) {
+    // Same fixed ramp in both themes for now (HEAT_GLOW_COLOR doesn't take theme) -- re-applied
+    // unconditionally here so this stays the one place to diverge per-theme later if needed.
+    map.setPaintProperty(INSIGHT_HEAT_LAYER, 'heatmap-color', HEAT_GLOW_COLOR)
+  }
+  if (map.getLayer(INSIGHT_HEAT_POINTS_LAYER)) {
+    map.setPaintProperty(INSIGHT_HEAT_POINTS_LAYER, 'circle-color', HEAT_PALETTE[theme][3])
+    map.setPaintProperty(
+      INSIGHT_HEAT_POINTS_LAYER,
+      'circle-stroke-color',
+      theme === 'dark' ? '#0b0d11' : '#ffffff',
+    )
+  }
+  if (map.getLayer(INSIGHT_SECTOR_LABEL_LAYER)) {
+    map.setPaintProperty(INSIGHT_SECTOR_LABEL_LAYER, 'text-color', SECTOR_LABEL_TEXT_COLOR[theme])
+    map.setPaintProperty(
+      INSIGHT_SECTOR_LABEL_LAYER,
+      'text-halo-color',
+      SECTOR_LABEL_HALO_COLOR[theme],
+    )
+  }
+  if (map.getLayer(INSIGHT_SECTOR_SELECTED_LAYER)) {
+    map.setPaintProperty(
+      INSIGHT_SECTOR_SELECTED_LAYER,
+      'line-color',
+      theme === 'dark' ? '#fb923c' : '#7c3aed',
+    )
+  }
+}
+
+export function setInsightSelectedFilter(map: MLMap, sectorNo: number | null): void {
+  if (!map.getLayer(INSIGHT_SECTOR_SELECTED_LAYER)) return
+  map.setFilter(INSIGHT_SECTOR_SELECTED_LAYER, ['==', ['get', 'sector_no'], sectorNo ?? -1])
+}
+
+function priorityWeight(priorityRow: InsightsPriorityRow | undefined): number {
+  // Low/Normal/High/Critical -> 0.6/1/1.6/2.4, keyed by order rather than slug so an unexpected
+  // priority slug still gets a sane mid weight instead of falling through to undefined.
+  switch (priorityRow?.order) {
+    case 0:
+      return 0.6
+    case 1:
+      return 1
+    case 2:
+      return 1.6
+    case 3:
+      return 2.4
+    default:
+      return 1
+  }
+}
+
+// sector_no/weight drive the glow itself; number/status_idx/priority_idx ride along unused by the
+// heat/circle paint but are what a future ticket-dot click popup (PLAN-heatmap.md §11.7) reads
+// straight off the clicked feature instead of re-looking the ticket up elsewhere.
+type HeatFeatureProps = {
+  sector_no: number | null
+  weight: number
+  number: number
+  status_idx: number
+  priority_idx: number
+  class_group_idx: number
+}
+
+/** Builds the GeoJSON feature collection for the heat glow + heat points layers, weighted by
+ *  priority per PLAN-heatmap.md §5.2. Respects the active filters the same way the sector-shading
+ *  values do, and includes every ticket (not just open ones) when the metric is 'total' -- "Open
+ *  tickets only, unless the metric is total" per §5.2. */
+export function buildHeatFeatureCollection(
+  tickets: InsightsTicketTuple[],
+  statuses: InsightsStatusRow[],
+  priorities: InsightsPriorityRow[],
+  classGroups: string[],
+  filters: InsightsFilters,
+  metric: HeatMetric,
+  now: number = Date.now(),
+  subclasses: string[] = [],
+): FeatureCollection<Point, HeatFeatureProps> {
+  const features: Feature<Point, HeatFeatureProps>[] = []
+  for (const t of tickets) {
+    if (!matchesFilters(t, statuses, priorities, classGroups, filters, now, subclasses)) continue
+    if (metric !== 'total' && !isOpenTicket(t, statuses)) continue
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [t[TicketField.Lng], t[TicketField.Lat]] },
+      properties: {
+        sector_no: t[TicketField.SectorNo],
+        weight: priorityWeight(priorities[t[TicketField.PriorityIdx]]),
+        number: t[TicketField.Number],
+        status_idx: t[TicketField.StatusIdx],
+        priority_idx: t[TicketField.PriorityIdx],
+        class_group_idx: t[TicketField.ClassGroupIdx],
+      },
+    })
+  }
+  return { type: 'FeatureCollection', features }
+}
+
+export function setInsightHeatData(
+  map: MLMap,
+  data: FeatureCollection<Point, HeatFeatureProps>,
+): void {
+  const src = map.getSource(INSIGHT_HEAT_SOURCE)
+  if (src && 'setData' in src) (src as GeoJSONSource).setData(data)
+}
+
+// Same zoom stops as addInsightLayers's initial 'heatmap-intensity' paint value (10->0.15,
+// 13->0.5, 16->1.2) -- kept as the one base curve setInsightHeatIntensityScale multiplies, so the
+// unfiltered look (ratio 1) is pixel-identical to what addInsightLayers paints at rest.
+const BASE_HEAT_INTENSITY_STOPS: [number, number][] = [
+  [10, 0.15],
+  [13, 0.5],
+  [16, 1.2],
+]
+
+/**
+ * Scales the heatmap-intensity curve by `ratio` (the filtered ticket count divided by the total
+ * eligible count) so the glow visibly dims once a category/status/priority filter narrows the
+ * ticket set down. MapLibre's `heatmap-density` normalises to whatever's currently on screen, so
+ * without this a heavy filter can still repaint the same "hot" red core from just a handful of
+ * leftover points -- making the map look like it ignored the filter even though the underlying
+ * data did change (every count elsewhere in the panel updates correctly). Clamped to [0.3, 1] so a
+ * severe filter dims the glow rather than making it vanish outright.
+ */
+export function setInsightHeatIntensityScale(map: MLMap, ratio: number): void {
+  if (!map.getLayer(INSIGHT_HEAT_LAYER)) return
+  const clamped = Math.max(0.3, Math.min(1, ratio))
+  const expr = ['interpolate', ['linear'], ['zoom']] as unknown[]
+  for (const [zoom, value] of BASE_HEAT_INTENSITY_STOPS) {
+    expr.push(zoom, value * clamped)
+  }
+  map.setPaintProperty(INSIGHT_HEAT_LAYER, 'heatmap-intensity', expr as ExpressionSpecification)
+}
+
+// Cached ORIGINAL (undimmed) text-opacity/icon-opacity per basemap symbol layer id, populated the
+// first time setBasemapLabelsDimmed(map, true, ...) touches that layer -- lets `dimmed: false`
+// restore the exact pre-dim value, and stops a second `dimmed: true` call from halving an
+// already-halved value. A theme swap destroys and recreates every basemap layer object, so cached
+// entries from the OLD basemap are meaningless for the NEW basemap's same-id layers -- MapView's
+// syncBasemap clears this (clearBasemapLabelDimCache) right after re-adding the new basemap, before
+// anything dims it again.
+const dimmedLabelCache = new Map<string, { textOpacity: unknown; iconOpacity: unknown }>()
+
+export function clearBasemapLabelDimCache(): void {
+  dimmedLabelCache.clear()
+}
+
+/** Halves a text-opacity/icon-opacity paint value for setBasemapLabelsDimmed's dim pass. A plain
+ *  number (or unset, i.e. undefined -- the style default is opacity 1) just gets multiplied. A
+ *  zoom `interpolate`/`step` expression can't be wrapped in `['*', ..., 0.5]` (that's not valid
+ *  syntax for an expression used as a whole property value in every MapLibre version this app
+ *  needs to support), so each numeric OUTPUT stop is halved in place instead -- for `interpolate`
+ *  the array alternates `[type, [interp], [input], in1, out1, in2, out2, ...]` (outputs at index
+ *  4, 6, 8, ...); for `step` it's `[type, [input], output0, in1, output1, ...]` (outputs at index
+ *  2, 4, 6, ...). Anything else (some other expression shape entirely, e.g. a `match`/`case`) just
+ *  falls through to a flat 0.5 rather than trying to interpret it. */
+function halveOpacityValue(value: unknown): unknown {
+  if (value === undefined) return 0.5
+  if (typeof value === 'number') return value * 0.5
+  if (Array.isArray(value) && (value[0] === 'interpolate' || value[0] === 'step')) {
+    const halved = [...value]
+    const firstOutputIndex = value[0] === 'interpolate' ? 4 : 2
+    for (let i = firstOutputIndex; i < halved.length; i += 2) {
+      if (typeof halved[i] === 'number') halved[i] = (halved[i] as number) * 0.5
+    }
+    return halved
+  }
+  return 0.5
+}
+
+/**
+ * Dims (or restores) every symbol layer's text/icon opacity that belongs to the vendored basemap
+ * style rather than to one of this app's own layers -- used to fade place-name/POI labels to 50%
+ * while Heatmap mode's density glow is up (PLAN-heatmap.md §11.1 decision #5, §11.5), so the map
+ * still reads as a map under the glow without its labels competing with it for attention. Labels
+ * are kept, not hidden -- `text-opacity`/`icon-opacity`, not `visibility`.
+ *
+ * `isAppSourceId` is the exact same "one of our own sources" test MapView's syncBasemap theme-swap
+ * effect already uses (its `APP_SOURCE_IDS` set) -- passed in rather than imported so this module
+ * doesn't need to know MapView's source-id list, and doesn't hardcode a MapTiler/CARTO source id
+ * that would break the next time either vendor changes.
+ */
+export function setBasemapLabelsDimmed(
+  map: MLMap,
+  dimmed: boolean,
+  isAppSourceId: (sourceId: string) => boolean,
+): void {
+  if (dimmed) {
+    for (const layer of map.getStyle().layers) {
+      if (layer.type !== 'symbol') continue
+      // Every 'symbol' layer requires a source (only 'background' layers don't), but the `!source`
+      // half of this guard costs nothing and keeps the check correct even if that ever changes.
+      // An app source's own labels (there aren't any today, but nothing stops one existing later)
+      // are left alone -- this only dims the basemap's.
+      if (!layer.source || isAppSourceId(layer.source)) continue
+      if (!dimmedLabelCache.has(layer.id)) {
+        dimmedLabelCache.set(layer.id, {
+          textOpacity: map.getPaintProperty(layer.id, 'text-opacity'),
+          iconOpacity: map.getPaintProperty(layer.id, 'icon-opacity'),
+        })
+      }
+      const original = dimmedLabelCache.get(layer.id)!
+      map.setPaintProperty(
+        layer.id,
+        'text-opacity',
+        halveOpacityValue(original.textOpacity) as never,
+      )
+      map.setPaintProperty(
+        layer.id,
+        'icon-opacity',
+        halveOpacityValue(original.iconOpacity) as never,
+      )
+    }
+  } else {
+    for (const [layerId, original] of dimmedLabelCache) {
+      if (!map.getLayer(layerId)) continue
+      map.setPaintProperty(layerId, 'text-opacity', original.textOpacity as never)
+      map.setPaintProperty(layerId, 'icon-opacity', original.iconOpacity as never)
+    }
+    dimmedLabelCache.clear()
+  }
+}

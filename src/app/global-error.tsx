@@ -19,7 +19,7 @@ export default function GlobalError({
           gap: '1rem',
           padding: '0 1.5rem',
           textAlign: 'center',
-          background: '#08090c',
+          backgroundColor: '#08090c',
           color: '#f4f5f7',
           fontFamily: 'system-ui, sans-serif',
         }}
@@ -39,7 +39,7 @@ export default function GlobalError({
             padding: '0 1rem',
             borderRadius: '0.5rem',
             border: 'none',
-            background: '#10b981',
+            backgroundColor: '#10b981',
             color: '#000',
             fontSize: '0.875rem',
             fontWeight: 500,

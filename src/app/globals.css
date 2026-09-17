@@ -119,6 +119,13 @@
      with no color customization hook -- inverting them is the only way to keep them visible
      against the now-dark control background above. */
   --map-ctrl-icon-filter: invert(1) brightness(1.5);
+
+  /* ModeSwitcher's sliding indicator (Map reuses --map-accent above) -- dark: brighter, since a
+     saturated red/emerald at light-mode intensity reads muddy against the dark glass panel. */
+  --map-mode-heatmap: #f87171;
+  --map-mode-tickets: #34d399;
+  /* Amber -- distinct from heatmap's red and tickets' green (PLAN-evacuation.md §4.2). */
+  --map-mode-evacuation: #fbbf24;
 }
 
 [data-theme='light'] {
@@ -224,6 +231,11 @@
   --map-section-violet-fg: #6d28d9;
 
   --map-ctrl-icon-filter: none;
+
+  /* ModeSwitcher's sliding indicator (Map reuses --map-accent above). */
+  --map-mode-heatmap: #dc2626;
+  --map-mode-tickets: #059669;
+  --map-mode-evacuation: #d97706;
 }
 
 @theme inline {
@@ -517,6 +529,31 @@ input[type='checkbox'].kumbh-checkbox {
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+/* Directional variant of panel-in for the Heatmap/Ticket mode docked panels (Panel's `entrance`
+   prop) -- slides in from whichever edge the panel is actually docked to (left/right) instead of
+   just fading in place, so the initial mount into Heatmap/Ticket mode reads as more deliberate than
+   Map mode's plain panel-in. Same 0.98 scale-up as panel-in, just with a signed translateX added. */
+@keyframes panel-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-18px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+@keyframes panel-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(18px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
   }
 }
 

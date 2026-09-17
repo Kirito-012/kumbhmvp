@@ -129,7 +129,7 @@ function Tube({
         className="relative h-52 cursor-pointer overflow-hidden rounded-xl outline-none transition-all duration-150 focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         style={{
           border: `1px solid ${isHovered ? c : 'var(--category-tube-border)'}`,
-          background: 'var(--category-tube-bg)',
+          backgroundColor: 'var(--category-tube-bg)',
           // The 4th shadow (inset 2px 0 0 ...) is a thin left-edge glass refraction highlight,
           // paired with the existing top-edge one, so the tube reads as a lit glass cylinder
           // rather than a flat rounded rect.
@@ -187,7 +187,7 @@ function Tube({
             <div
               className="absolute -top-px left-0 right-0 h-[2px]"
               style={{
-                background: c,
+                backgroundColor: c,
                 boxShadow: `0 0 calc(10px * var(--category-liquid-glow)) ${c}, 0 0 calc(24px * var(--category-liquid-glow)) ${c}66`,
               }}
             />
@@ -202,7 +202,7 @@ function Tube({
                   bottom: 6,
                   width: b.size,
                   height: b.size,
-                  background: 'white',
+                  backgroundColor: 'white',
                   opacity: 'calc(0.25 + 0.35 * var(--category-liquid-glow))',
                   mixBlendMode: 'overlay',
                   animation: `bubble-rise ${b.duration}s ease-in ${b.delay}s infinite`,
@@ -218,7 +218,7 @@ function Tube({
           style={{
             bottom: `clamp(8px, calc(${shown}% + 8px), calc(100% - 32px))`,
             transition: `bottom ${RISE_MS}ms cubic-bezier(0.16, 1, 0.3, 1) ${delayMs}ms`,
-            background: 'var(--category-pill-bg)',
+            backgroundColor: 'var(--category-pill-bg)',
             color: 'var(--category-pill-fg)',
             boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
           }}
@@ -308,7 +308,7 @@ function HoverCard({
         left: pos?.left ?? cursorX,
         top: pos?.top ?? cursorY,
         opacity: pos ? 1 : 0,
-        background: 'var(--category-hovercard-bg)',
+        backgroundColor: 'var(--category-hovercard-bg)',
         border: '1px solid var(--category-hovercard-border)',
         boxShadow: `0 24px 48px -12px rgba(0,0,0,0.5), 0 0 0 1px ${c}1a, 0 -1px 0 0 rgba(255,255,255,0.06) inset`,
       }}
@@ -360,7 +360,7 @@ function HoverCard({
         {/* Proportion bar — visual echo of the tube's own liquid, quick second read of the split */}
         <div
           className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full"
-          style={{ background: 'var(--category-tube-bg)' }}
+          style={{ backgroundColor: 'var(--category-tube-bg)' }}
         >
           <div
             className="h-full rounded-full"
@@ -553,7 +553,7 @@ export function CategoryBreakdown({
       className="relative overflow-hidden rounded-2xl animate-fade-in"
       style={{
         border: '1px solid var(--category-panel-border)',
-        background:
+        backgroundColor:
           'linear-gradient(180deg, var(--category-panel-top), var(--category-panel-deep))',
         boxShadow:
           'inset 0 1px 0 0 var(--category-tube-inset-top), 0 16px 40px -20px rgba(0,0,0,calc(0.5 * var(--category-liquid-glow) + 0.08))',
@@ -563,7 +563,7 @@ export function CategoryBreakdown({
       <div
         className="pointer-events-none absolute inset-0"
         style={{
-          background:
+          backgroundColor:
             'radial-gradient(55% 45% at 85% 0%, var(--category-panel-sheen-1), transparent 60%), radial-gradient(40% 35% at 10% 100%, var(--category-panel-sheen-2), transparent 60%)',
         }}
         aria-hidden
@@ -575,7 +575,7 @@ export function CategoryBreakdown({
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
             style={{
               border: '1px solid var(--category-tube-border)',
-              background: 'var(--category-tube-bg)',
+              backgroundColor: 'var(--category-tube-bg)',
               color: 'var(--category-label)',
             }}
           >
