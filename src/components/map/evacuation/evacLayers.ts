@@ -96,6 +96,17 @@ function colorPair(pair: { light: string; dark: string }, theme: EvacTheme): str
   return theme === 'light' ? pair.light : pair.dark
 }
 
+/** EN/EXT badge fill -- always the LIGHT theme's more saturated shade, even in dark mode, unlike
+ *  every other evac-* color which follows colorPair. EVAC_COLORS.exit's dark variant (#fb7185, a
+ *  pale pastel rose) was picked to pop as a thin LINE against black, but filled as a solid pill
+ *  behind the badge's white lettering it reads as barely-there low-contrast -- the white text
+ *  nearly disappears into it. The light variant is dark/saturated enough for the white text to
+ *  stay legible in both themes, and still reads as plenty visible against a dark basemap filled
+ *  solid rather than as a 2px line. */
+function badgeFillColor(pair: { light: string; dark: string }): string {
+  return pair.light
+}
+
 /** 'Entry' -> green, 'Exit' -> rose, anything else (destination signs, null) -> slate. Reused for
  *  entry_exit_line/entry_exit/location_entry's `remark` and traffic_route's `entry_exit` -- both
  *  columns use the same 'Entry'/'Exit' vocabulary (case-sensitive; direction_line's own `remark`
@@ -625,10 +636,10 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
         'match',
         ['get', 'remark'],
         'Entry',
-        ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.entry, theme)),
+        ensureBadgeImage(map, 'EN', badgeFillColor(EVAC_COLORS.entry)),
         'Exit',
-        ensureBadgeImage(map, 'EXT', colorPair(EVAC_COLORS.exit, theme)),
-        ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.unknown, theme)),
+        ensureBadgeImage(map, 'EXT', badgeFillColor(EVAC_COLORS.exit)),
+        ensureBadgeImage(map, 'EN', badgeFillColor(EVAC_COLORS.unknown)),
       ] as unknown as ExpressionSpecification,
       // Grows with zoom past street level, but never shrinks below the badge's native 1.0 design
       // size (unlike the traffic-route/direction-signage arrows' own gentler-curve icon-size) --
@@ -666,7 +677,22 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
       'icon-ignore-placement': true,
     },
     paint: {
-      'icon-opacity': 1,
+      // Per user testing: a flat 1 still read as "not fully solid" zoomed out -- at region zoom
+      // dozens of badges packed together genuinely do want to sit back a bit (a wall of fully
+      // solid pills reads as visual noise), but that same softness was carrying over to close
+      // zoom, where a single badge has room to be the obvious focus and should look completely
+      // solid, not a shade of it. Ramping 0.7 -> 1 over zoom 12-15 keeps the zoomed-out look
+      // (already fine, don't touch it) while guaranteeing a true 100%-opaque badge by the time
+      // you're zoomed in on it.
+      'icon-opacity': [
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        12,
+        0.7,
+        15,
+        1,
+      ] as unknown as ExpressionSpecification,
     },
   })
 
@@ -977,10 +1003,10 @@ export function applyEvacTheme(map: MLMap, theme: EvacTheme): void {
     'match',
     ['get', 'remark'],
     'Entry',
-    ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.entry, theme)),
+    ensureBadgeImage(map, 'EN', badgeFillColor(EVAC_COLORS.entry)),
     'Exit',
-    ensureBadgeImage(map, 'EXT', colorPair(EVAC_COLORS.exit, theme)),
-    ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.unknown, theme)),
+    ensureBadgeImage(map, 'EXT', badgeFillColor(EVAC_COLORS.exit)),
+    ensureBadgeImage(map, 'EN', badgeFillColor(EVAC_COLORS.unknown)),
   ] as unknown as ExpressionSpecification)
   map.setLayoutProperty(
     'evac-location-entry-badge',
