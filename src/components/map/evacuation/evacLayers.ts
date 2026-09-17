@@ -202,7 +202,16 @@ function trafficRouteWidthExpr(boost: number): ExpressionSpecification {
 function ensureBadgeImage(map: MLMap, text: string, color: string): string {
   const id = badgeIconId(text, color)
   if (map.hasImage(id)) map.removeImage(id)
-  map.addImage(id, makeBadgeIcon(text, color), { pixelRatio: 4 })
+  // pixelRatio here is what MapLibre divides the bitmap's raw pixel size by to get its "design"
+  // (icon-size: 1) CSS size -- makeBadgeIcon renders at a flat 4x supersample for crisp edges, but
+  // declaring that same 4 as the pixelRatio made MapLibre treat the badge as an ultra-small ~14px
+  // design, then downsample the GPU texture that far on anything but a true 4x/retina display.
+  // That minification is what read as "translucent"/washed out -- thin glyphs like the badge's
+  // white lettering lose most of their contrast once the sampler blends them with several
+  // neighbouring pixels of solid fill. 3 keeps the same supersampled source (still oversampled on
+  // every real display) but targets a ~19px design instead, closer to what the downsample can
+  // reproduce cleanly.
+  map.addImage(id, makeBadgeIcon(text, color), { pixelRatio: 3 })
   return id
 }
 
