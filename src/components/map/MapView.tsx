@@ -5615,7 +5615,14 @@ export default function MapView({
     .reduce((sum, b, i) => sum + haversineDistanceM(measure.points[i], b), 0)
 
   return (
-    <div className="kumbh-map relative h-screen w-full overflow-hidden">
+    // overflow-clip (not overflow-hidden): a docked panel's sr-only checkbox (class/subclass/
+    // layer toggles) receiving focus makes Chromium walk every scrollable ancestor and scroll it
+    // into view -- including this one, since overflow-hidden still leaves it a scroll container
+    // (scrollTop is programmatically settable) even though no scrollbar ever shows. That silently
+    // shifted the whole map + panels up by however far this box could scroll and left them stuck
+    // there (no visible scrollbar to drag back). overflow-clip removes the scroll container
+    // entirely, so there's no scrollTop for that focus handling to move.
+    <div className="kumbh-map relative h-screen w-full overflow-clip">
       <div ref={mapContainer} className="h-full w-full" />
 
       {/* Transient notice -- see mapNotice. Centred over the map rather than
