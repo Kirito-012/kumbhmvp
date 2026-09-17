@@ -201,7 +201,10 @@
   --map-surface-alt: rgba(248, 250, 252, 0.7);
   --map-surface-hover: #f8fafc;
   --map-surface-active: #f1f5f9;
-  --map-border: #f1f5f9;
+  /* One step darker than the --map-surface-alt fill it usually outlines (slate-200 vs slate-100):
+     at slate-100 a tile border was ~1.05:1 against its own fill on the white glass panel, so
+     cards read as floating text rather than as objects. Dark theme needs no equivalent bump. */
+  --map-border: #e2e8f0;
   --map-input-bg: #ffffff;
   --map-accent: #2563eb;
   --map-accent-bg: #eff6ff;
