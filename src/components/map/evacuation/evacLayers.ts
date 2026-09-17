@@ -1,8 +1,17 @@
-import type { Map as MLMap, ExpressionSpecification, FilterSpecification, GeoJSONSource } from 'maplibre-gl'
+import type {
+  Map as MLMap,
+  ExpressionSpecification,
+  FilterSpecification,
+  GeoJSONSource,
+} from 'maplibre-gl'
 import type { FeatureCollection, Point, Geometry } from 'geojson'
 import { badgeIconId, makeBadgeIcon, chevronIconId, makeChevronIcon } from '@/lib/mapBadgeIcon'
 import { EVAC_COLORS, type EvacKey, type EvacTheme } from '@/lib/evacuation/layers'
-import { buildEvacFilters, trafficRoutePlanVisible, type EvacFilters } from '@/lib/evacuation/filters'
+import {
+  buildEvacFilters,
+  trafficRoutePlanVisible,
+  type EvacFilters,
+} from '@/lib/evacuation/filters'
 
 // Evacuation mode's own MapLibre layers -- see PLAN-evacuation.md §6. Every layer here is created
 // once, hidden, in initMap's `load` handler (gated on canUseInsights, same as insightLayers.ts's
@@ -38,6 +47,13 @@ const DIRECTION_LINE_ARROWS_SOURCE = 'evac-direction-line-arrows'
  *  always returns all 5 zones' unioned geometry, regardless of focus, per PLAN-evacuation.md
  *  §2.4/§8.2). */
 const ZONE_OUTLINE_SOURCE = 'evac-zone-outline'
+/** Every entry/exit point, unclustered -- fed via setEvacEntryExitPoints once MapView's one-time
+ *  `/api/poi/points/entry_exit` fetch resolves. Deliberately a SEPARATE source from Map mode's own
+ *  `entry_exit` (which stays clustered -- see MapView's syncPoiClusters/clusterPoints): Evacuation
+ *  mode's whole point of showing entry/exit points is crowd-flow planning, where merging two
+ *  10-30m-apart Entry/Exit points into one ambiguous "2" dot (or losing which of a mixed cluster is
+ *  which) defeats the purpose. Every point gets its own EN/EXT badge at every zoom instead. */
+const ENTRY_EXIT_POINTS_SOURCE = 'evac-entry-exit-points'
 const EMPTY_FEATURE_COLLECTION: FeatureCollection = { type: 'FeatureCollection', features: [] }
 
 /** Every layer id this module creates, grouped by which `evacVisibility` key controls it -- the
@@ -54,12 +70,7 @@ const LAYERS_BY_KEY: Record<EvacKey, string[]> = {
   entry_exit_line: ['evac-entry-exit-line-glow', 'evac-entry-exit-line'],
   direction_line: ['evac-direction-line', 'evac-direction-line-arrows'],
   emergency_exit: ['evac-emergency-exit-glow', 'evac-emergency-exit-casing', 'evac-emergency-exit'],
-  entry_exit: [
-    'evac-entry-exit-cluster',
-    'evac-entry-exit-cluster-count',
-    'evac-entry-exit-hit',
-    'evac-entry-exit-badge',
-  ],
+  entry_exit: ['evac-entry-exit-hit', 'evac-entry-exit-badge'],
   location_entry: ['evac-location-entry-hit', 'evac-location-entry-badge'],
   // Supporting layers with no evac-* layer of their own yet -- they reuse Map mode's existing
   // `poi-*` layers directly (see MapView's setEvacLayersVisible call site), so there's nothing for
@@ -136,10 +147,12 @@ const GLOW_OPACITY: ExpressionSpecification = [
 
 const PEAK_DAY_FILTER: FilterSpecification = ['==', ['get', 'plan'], 'Peak day']
 const NOT_PEAK_DAY_FILTER: FilterSpecification = ['!=', ['get', 'plan'], 'Peak day']
-const UNCLUSTERED_FILTER: FilterSpecification = ['!', ['has', 'point_count']]
-const CLUSTERED_FILTER: FilterSpecification = ['has', 'point_count']
 
-const HOVER_CONDITION = ['boolean', ['feature-state', 'hover'], false] as unknown as ExpressionSpecification
+const HOVER_CONDITION = [
+  'boolean',
+  ['feature-state', 'hover'],
+  false,
+] as unknown as ExpressionSpecification
 
 /** Widens a hoverable evac-* line by `boost` px while MapLibre's native feature-state `hover` flag
  *  is set on it (see MapView's evac hover mousemove/mouseleave handlers) -- shared by the 3
@@ -191,7 +204,12 @@ function ensureChevronImage(map: MLMap, color: string, theme: EvacTheme): string
 /** icon-image match expression shared by both arrow layers -- 'Entry'/'Exit' (traffic_route's
  *  `entry_exit`) or upper-cased 'ENTRY'/'EXIT' (direction_line's `remark`) both normalise to the
  *  same 3-way match since MapLibre's `match` does a strict equality check, not case-insensitive. */
-function arrowIconExpr(map: MLMap, field: string, theme: EvacTheme, upcase: boolean): ExpressionSpecification {
+function arrowIconExpr(
+  map: MLMap,
+  field: string,
+  theme: EvacTheme,
+  upcase: boolean,
+): ExpressionSpecification {
   const getField = upcase ? (['upcase', ['get', field]] as const) : (['get', field] as const)
   const entryValue = upcase ? 'ENTRY' : 'Entry'
   const exitValue = upcase ? 'EXIT' : 'Exit'
@@ -247,6 +265,10 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
   map.addSource(TRAFFIC_ROUTE_ARROWS_SOURCE, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
   map.addSource(DIRECTION_LINE_ARROWS_SOURCE, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
   map.addSource(ZONE_OUTLINE_SOURCE, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+  // Populated later via setEvacEntryExitPoints once MapView's one-time entry_exit points fetch
+  // resolves -- see ENTRY_EXIT_POINTS_SOURCE's own comment for why this is a separate,
+  // never-clustered source rather than reusing Map mode's clustered `entry_exit`.
+  map.addSource(ENTRY_EXIT_POINTS_SOURCE, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
 
   // --- Flood risk (off by default; hfl_area/hfl_line are 25-Aug-2026-only, see CONTEXT.md §10) --
   map.addLayer({
@@ -345,7 +367,15 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
     paint: {
       'line-color': theme === 'light' ? '#0f172a' : '#e2e8f0',
       'line-opacity': theme === 'light' ? 0.18 : 0.22,
-      'line-width': ['interpolate', ['linear'], ['zoom'], 8, 5, 14, 7] as unknown as ExpressionSpecification,
+      'line-width': [
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        8,
+        5,
+        14,
+        7,
+      ] as unknown as ExpressionSpecification,
     },
   })
   const trafficRouteCore = (id: string, filter: FilterSpecification, dashed: boolean) =>
@@ -483,62 +513,33 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
   })
 
   // --- Entry/exit point badges (on by default) ------------------------------------------------
-  // Own dedicated cluster/hit layers rather than reusing Map mode's `poi-entry_exit-*` ones --
-  // those are always force-hidden while this mode is active (visibilityForMode turns every
-  // POI_LAYER_DEFS key off), so reusing them would mean un-hiding specific Map-mode layers from
-  // evacuation-mode code, coupling the two. A dedicated layer set on the SAME already-clustered
-  // `entry_exit` source costs one extra paint definition, not an extra request.
-  //
-  // circle-color reuses entryExitColorExpr('remark', ...) rather than a flat color: MapView's
-  // clusterPoints() copies `remark` onto a cluster feature only when every point it hides shares
-  // the same value (see its own tagProperty comment), so a cluster paints green/rose exactly when
-  // it's all-Entry/all-Exit and falls to the same neutral slate a lone ambiguous point gets when
-  // it's a mix of both -- a cluster used to always paint green regardless of what was inside it,
-  // which is what actually made an Exit cluster impossible to tell apart from an Entry one until
-  // zoomed in past the cluster threshold.
-  map.addLayer({
-    id: 'evac-entry-exit-cluster',
-    type: 'circle',
-    source: 'entry_exit',
-    filter: CLUSTERED_FILTER,
-    layout: { visibility: 'none' },
-    paint: {
-      'circle-color': entryExitColorExpr('remark', theme),
-      'circle-opacity': 0.8,
-      'circle-radius': ['step', ['get', 'point_count'], 9, 10, 14, 50, 19] as unknown as ExpressionSpecification,
-    },
-  })
-  map.addLayer({
-    id: 'evac-entry-exit-cluster-count',
-    type: 'symbol',
-    source: 'entry_exit',
-    filter: CLUSTERED_FILTER,
-    minzoom: 9,
-    layout: {
-      visibility: 'none',
-      'text-field': ['get', 'point_count_abbreviated'],
-      'text-font': ['Noto Sans Bold'],
-      'text-size': 11,
-      'text-allow-overlap': true,
-    },
-    paint: { 'text-color': '#ffffff' },
-  })
+  // On ENTRY_EXIT_POINTS_SOURCE (see its own comment), never Map mode's clustered `entry_exit` --
+  // Evacuation mode shows every single entry/exit point as its own EN/EXT badge, at every zoom,
+  // full stop. No cluster circle, no "2" count bubble standing in for a mixed Entry+Exit pair:
+  // during an actual evacuation, which specific gate is an entry and which is an exit is exactly
+  // the thing that must never be ambiguous or hidden behind a zoom threshold.
   map.addLayer({
     id: 'evac-entry-exit-hit',
     type: 'circle',
-    source: 'entry_exit',
-    filter: UNCLUSTERED_FILTER,
+    source: ENTRY_EXIT_POINTS_SOURCE,
     layout: { visibility: 'none' },
     paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 10, 16, 14] as unknown as ExpressionSpecification,
+      'circle-radius': [
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        10,
+        10,
+        16,
+        14,
+      ] as unknown as ExpressionSpecification,
       'circle-opacity': 0,
     },
   })
   map.addLayer({
     id: 'evac-entry-exit-badge',
     type: 'symbol',
-    source: 'entry_exit',
-    filter: UNCLUSTERED_FILTER,
+    source: ENTRY_EXIT_POINTS_SOURCE,
     layout: {
       visibility: 'none',
       'icon-image': [
@@ -550,14 +551,30 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
         ensureBadgeImage(map, 'EXT', colorPair(EVAC_COLORS.exit, theme)),
         ensureBadgeImage(map, 'EN', colorPair(EVAC_COLORS.unknown, theme)),
       ] as unknown as ExpressionSpecification,
+      // Grows with zoom (same shape as the traffic-route/direction-signage arrows' own icon-size,
+      // just a gentler curve) -- a flat icon-size reads as either too small to read zoomed out or
+      // oversized once zoomed in past street level, and per the user report, badges need to stay
+      // legible at BOTH ends now that every point renders individually instead of collapsing into
+      // a cluster at low zoom.
+      'icon-size': [
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        10,
+        0.7,
+        14,
+        1,
+        18,
+        1.5,
+      ] as unknown as ExpressionSpecification,
       // An Entry and its paired Exit point are often only 10-30m apart on the ground (real data,
       // not a hypothetical -- see the tagProperty comment on clusterPoints in poiClustering.ts),
-      // close enough that their badges overlap on screen well past the zoom where they've split
-      // out of a cluster into individual points. With allow-overlap false, MapLibre's collision
-      // detection was silently dropping one of the two -- reading as "the EXT/EN badge just isn't
-      // there" with no visual hint a second point exists underneath, exactly the "not visible at
-      // all" bug this was reported as. True for both badge layers so neither the arrow/route glyphs
-      // above nor these compete for whichever wins collision priority.
+      // close enough that their badges overlap on screen at most zooms. With allow-overlap false,
+      // MapLibre's collision detection was silently dropping one of the two -- reading as "the
+      // EXT/EN badge just isn't there" with no visual hint a second point exists underneath,
+      // exactly the "not visible at all" bug this was reported as. True for both badge layers so
+      // neither the arrow/route glyphs above nor these compete for whichever wins collision
+      // priority.
       'icon-allow-overlap': true,
     },
   })
@@ -569,7 +586,15 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
     source: 'location_entry',
     layout: { visibility: 'none' },
     paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 10, 16, 14] as unknown as ExpressionSpecification,
+      'circle-radius': [
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        10,
+        10,
+        16,
+        14,
+      ] as unknown as ExpressionSpecification,
       'circle-opacity': 0,
     },
   })
@@ -670,15 +695,21 @@ export function applyEvacFilters(map: MLMap, filters: EvacFilters): void {
   if (!map.getLayer('evac-traffic-route-casing')) return // not created yet (canUseInsights false)
 
   const plain = buildEvacFilters(filters)
-  const asFilter = (f: FilterSpecification | null | undefined) => (f ?? null) as FilterSpecification | null
+  const asFilter = (f: FilterSpecification | null | undefined) =>
+    (f ?? null) as FilterSpecification | null
 
   // The casing has no permanent plan split of its own (unlike the peak/normal core layers), so a
   // plan selection is applied here as a real filter rather than a visibility choice.
-  const casingParts = [plain.traffic_route, filters.plan ? ['==', ['get', 'plan'], filters.plan] : null].filter(
-    (p): p is FilterSpecification => Boolean(p),
-  )
+  const casingParts = [
+    plain.traffic_route,
+    filters.plan ? ['==', ['get', 'plan'], filters.plan] : null,
+  ].filter((p): p is FilterSpecification => Boolean(p))
   const casingFilter =
-    casingParts.length === 0 ? null : casingParts.length === 1 ? casingParts[0] : (['all', ...casingParts] as unknown as FilterSpecification)
+    casingParts.length === 0
+      ? null
+      : casingParts.length === 1
+        ? casingParts[0]
+        : (['all', ...casingParts] as unknown as FilterSpecification)
   map.setFilter('evac-traffic-route-casing', casingFilter)
   // Arrows aren't split into peak/normal layers (one point per route, unlike the 2 line layers
   // below), so they take the same combined direction+corridor+plan filter as the casing.
@@ -710,6 +741,18 @@ export function setEvacArrowsData(
   const directionSource = map.getSource(DIRECTION_LINE_ARROWS_SOURCE) as GeoJSONSource | undefined
   trafficSource?.setData(data.trafficRoute)
   directionSource?.setData(data.directionLine)
+}
+
+/** Feeds evac-* mode's own unclustered entry/exit points source -- called once from MapView after
+ *  its one-time `/api/poi/points/entry_exit` fetch (the same raw features Map mode's own clustered
+ *  `entry_exit` source gets clustered from) resolves. See ENTRY_EXIT_POINTS_SOURCE's own comment
+ *  for why this is a separate source rather than reusing that clustered one. */
+export function setEvacEntryExitPoints(
+  map: MLMap,
+  features: FeatureCollection<Point>['features'],
+): void {
+  const source = map.getSource(ENTRY_EXIT_POINTS_SOURCE) as GeoJSONSource | undefined
+  source?.setData({ type: 'FeatureCollection', features })
 }
 
 /** Feeds the zone-outline geojson source its data -- called from MapView whenever
@@ -745,11 +788,7 @@ export function applyEvacTheme(map: MLMap, theme: EvacTheme): void {
   if (!map.getLayer('evac-hfl-area-fill')) return // not created yet (canUseInsights false)
 
   map.setPaintProperty('evac-hfl-area-fill', 'fill-color', colorPair(EVAC_COLORS.floodArea, theme))
-  map.setPaintProperty(
-    'evac-hfl-area-fill',
-    'fill-opacity',
-    theme === 'light' ? 0.14 : 0.18,
-  )
+  map.setPaintProperty('evac-hfl-area-fill', 'fill-opacity', theme === 'light' ? 0.14 : 0.18)
   map.setPaintProperty(
     'evac-hfl-area-outline',
     'line-color',
@@ -758,8 +797,16 @@ export function applyEvacTheme(map: MLMap, theme: EvacTheme): void {
   map.setPaintProperty('evac-hfl-line', 'line-color', colorPair(EVAC_COLORS.floodLine, theme))
 
   if (map.getLayer('evac-zone-outline-line')) {
-    map.setPaintProperty('evac-zone-outline-line', 'line-color', colorPair(EVAC_COLORS.zoneOutline, theme))
-    map.setPaintProperty('evac-zone-outline-label', 'text-color', colorPair(EVAC_COLORS.zoneOutline, theme))
+    map.setPaintProperty(
+      'evac-zone-outline-line',
+      'line-color',
+      colorPair(EVAC_COLORS.zoneOutline, theme),
+    )
+    map.setPaintProperty(
+      'evac-zone-outline-label',
+      'text-color',
+      colorPair(EVAC_COLORS.zoneOutline, theme),
+    )
     map.setPaintProperty(
       'evac-zone-outline-label',
       'text-halo-color',
@@ -772,23 +819,39 @@ export function applyEvacTheme(map: MLMap, theme: EvacTheme): void {
     'line-color',
     theme === 'light' ? '#0f172a' : '#e2e8f0',
   )
+  map.setPaintProperty('evac-traffic-route-casing', 'line-opacity', theme === 'light' ? 0.18 : 0.22)
   map.setPaintProperty(
-    'evac-traffic-route-casing',
-    'line-opacity',
-    theme === 'light' ? 0.18 : 0.22,
+    'evac-traffic-route-peak',
+    'line-color',
+    entryExitColorExpr('entry_exit', theme),
   )
-  map.setPaintProperty('evac-traffic-route-peak', 'line-color', entryExitColorExpr('entry_exit', theme))
-  map.setPaintProperty('evac-traffic-route-normal', 'line-color', entryExitColorExpr('entry_exit', theme))
+  map.setPaintProperty(
+    'evac-traffic-route-normal',
+    'line-color',
+    entryExitColorExpr('entry_exit', theme),
+  )
   if (map.getLayer('evac-traffic-route-arrows')) {
-    map.setLayoutProperty('evac-traffic-route-arrows', 'icon-image', arrowIconExpr(map, 'entry_exit', theme, false))
+    map.setLayoutProperty(
+      'evac-traffic-route-arrows',
+      'icon-image',
+      arrowIconExpr(map, 'entry_exit', theme, false),
+    )
   }
 
-  map.setPaintProperty('evac-entry-exit-line-glow', 'line-color', entryExitColorExpr('remark', theme))
+  map.setPaintProperty(
+    'evac-entry-exit-line-glow',
+    'line-color',
+    entryExitColorExpr('remark', theme),
+  )
   map.setPaintProperty('evac-entry-exit-line', 'line-color', entryExitColorExpr('remark', theme))
 
   map.setPaintProperty('evac-direction-line', 'line-color', directionLineColorExpr(theme))
   if (map.getLayer('evac-direction-line-arrows')) {
-    map.setLayoutProperty('evac-direction-line-arrows', 'icon-image', arrowIconExpr(map, 'remark', theme, true))
+    map.setLayoutProperty(
+      'evac-direction-line-arrows',
+      'icon-image',
+      arrowIconExpr(map, 'remark', theme, true),
+    )
   }
 
   map.setPaintProperty(
@@ -801,9 +864,12 @@ export function applyEvacTheme(map: MLMap, theme: EvacTheme): void {
     'line-color',
     colorPair(EVAC_COLORS.emergencyExitCasing, theme),
   )
-  map.setPaintProperty('evac-emergency-exit', 'line-color', colorPair(EVAC_COLORS.emergencyExit, theme))
+  map.setPaintProperty(
+    'evac-emergency-exit',
+    'line-color',
+    colorPair(EVAC_COLORS.emergencyExit, theme),
+  )
 
-  map.setPaintProperty('evac-entry-exit-cluster', 'circle-color', entryExitColorExpr('remark', theme))
   map.setLayoutProperty('evac-entry-exit-badge', 'icon-image', [
     'match',
     ['get', 'remark'],

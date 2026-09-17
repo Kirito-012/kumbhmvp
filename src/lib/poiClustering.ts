@@ -50,11 +50,13 @@ type ClusterableFeature = Feature<Point>
  * `tagProperty`, when given, copies that property onto the synthetic cluster
  * IF every member point shares the same value for it (left unset otherwise,
  * i.e. a "mixed" cluster) -- lets a caller whose points carry a meaningful
- * categorical field (e.g. Evacuation's entry_exit `remark`: 'Entry'/'Exit')
- * style a cluster circle the same way it styles an individual point, rather
- * than every cluster rendering in one hardcoded color regardless of what it
- * actually contains (see evacLayers.ts's `evac-entry-exit-cluster`, which
- * used to always paint green even for an all-Exit or mixed cluster).
+ * categorical field (e.g. entry_exit's `remark`: 'Entry'/'Exit') style a
+ * cluster circle the same way it styles an individual point, rather than
+ * every cluster rendering in one hardcoded color regardless of what it
+ * actually contains (see MapView's `poi-entry_exit-cluster`, which used to
+ * always paint green even for an all-Exit or mixed cluster). Evacuation
+ * mode's own entry/exit badges never cluster at all -- see evacLayers.ts's
+ * ENTRY_EXIT_POINTS_SOURCE.
  */
 export function clusterPoints(
   features: ClusterableFeature[],
