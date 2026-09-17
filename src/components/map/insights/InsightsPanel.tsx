@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react'
 import Panel from '@/components/map/Panel'
 import {
   ChartBarIcon,
+  ChevronDownIcon,
   GridIcon,
   SlidersIcon,
   TagIcon,
@@ -129,6 +130,7 @@ export default function InsightsPanel({
   filters,
   sectors,
   onFilterClassGroup,
+  onFilterSubclass,
   onClearClassGroups,
   onFilterPriority,
   onFilterStatusBucket,
@@ -145,6 +147,7 @@ export default function InsightsPanel({
   filters: InsightsFilters
   sectors: SectorSummary[]
   onFilterClassGroup: (classGroup: string) => void
+  onFilterSubclass: (classGroup: string, subclass: string) => void
   onClearClassGroups: () => void
   onFilterPriority: (prioritySlug: string) => void
   onFilterStatusBucket: (bucket: StatusBucket) => void
@@ -173,6 +176,7 @@ export default function InsightsPanel({
     (filters.statusSlugs?.length ?? 0) > 0 ||
     (filters.prioritySlugs?.length ?? 0) > 0 ||
     (filters.classGroups?.length ?? 0) > 0 ||
+    Object.values(filters.subclasses ?? {}).some((subs) => subs.length > 0) ||
     filters.createdWithinMs !== undefined
 
   return (
@@ -223,6 +227,8 @@ export default function InsightsPanel({
               insightsData.priorities,
               insightsData.classGroups,
               filters,
+              undefined,
+              insightsData.subclasses,
             ),
           ).length === 0 ? (
             <Reveal index={1}>
@@ -258,6 +264,7 @@ export default function InsightsPanel({
                   insightsData={insightsData}
                   filters={filters}
                   onFilterClassGroup={onFilterClassGroup}
+                  onFilterSubclass={onFilterSubclass}
                   onClearClassGroups={onClearClassGroups}
                 />
               </Reveal>
@@ -327,6 +334,8 @@ function InsightsHero({
       insightsData.priorities,
       insightsData.classGroups,
       filtersIgnoringStatus,
+      undefined,
+      insightsData.subclasses,
     ),
   )
   const totals = bucketTotals(scoped, insightsData.statuses)
@@ -359,6 +368,8 @@ function InsightsHero({
       insightsData.priorities,
       insightsData.classGroups,
       filters,
+      undefined,
+      insightsData.subclasses,
     )
     const opensByNamedSector = sectors.map((s) => allRollups.get(s.sector_no)?.open ?? 0)
     const sortedOpens = [...opensByNamedSector].sort((a, b) => b - a)
@@ -432,6 +443,8 @@ function StatusProgress({
       insightsData.priorities,
       insightsData.classGroups,
       filtersIgnoringStatus,
+      undefined,
+      insightsData.subclasses,
     ),
   )
   const totals = bucketTotals(filtered, insightsData.statuses)
@@ -501,25 +514,92 @@ function StatusProgress({
   )
 }
 
+/** Tri-state checkbox swatch for a category/sub-class row -- same shape as StatsPanel's own
+ *  RowCheckbox (Map mode's "Area by class" table), duplicated here rather than shared since the
+ *  two panels otherwise have nothing in common and a shared import would be the only tie between
+ *  them. */
+function RowCheckbox({
+  checked,
+  indeterminate = false,
+  color,
+  size = 'md',
+}: {
+  checked: boolean
+  indeterminate?: boolean
+  color: string
+  size?: 'sm' | 'md'
+}) {
+  const box = size === 'sm' ? 'h-3 w-3' : 'h-3.5 w-3.5'
+  const tick = size === 'sm' ? 'h-2 w-2' : 'h-2.5 w-2.5'
+  return (
+    <span
+      aria-hidden="true"
+      className={`flex ${box} shrink-0 items-center justify-center rounded-[4px] border`}
+      style={{
+        borderColor:
+          checked || indeterminate ? color : `color-mix(in srgb, ${color} 45%, transparent)`,
+        backgroundColor: checked || indeterminate ? color : 'transparent',
+      }}
+    >
+      {indeterminate ? (
+        <span className="h-[2px] w-1.5 rounded-full bg-white" />
+      ) : (
+        checked && (
+          <svg viewBox="0 0 24 24" fill="none" className={tick}>
+            <path
+              d="M5 13l4 4L19 7"
+              stroke="white"
+              strokeWidth={3}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        )
+      )}
+    </span>
+  )
+}
+
+/** Sub-class row cap before "Show N more…", mirroring StatsPanel's SUBCLASS_ROW_CAP. */
+const CATEGORY_SUBCLASS_ROW_CAP = 4
+
 function Categories({
   sector,
   insightsData,
   filters,
   onFilterClassGroup,
+  onFilterSubclass,
   onClearClassGroups,
 }: {
   sector: number | 'peripheral' | null
   insightsData: InsightsTicketData
   filters: InsightsFilters
   onFilterClassGroup: (classGroup: string) => void
+  onFilterSubclass: (classGroup: string, subclass: string) => void
   onClearClassGroups: () => void
 }) {
-  // Deliberately ignores the classGroups filter itself (though not the other
-  // filter types, or sector scope) when building the row list -- so
-  // selecting a category highlights it without making every other category
-  // disappear from the list, matching the "always show all rows, highlight
-  // the active one" pattern in the plain-map Stats panel's ClassAreaTable.
-  const filtersIgnoringClassGroups: InsightsFilters = { ...filters, classGroups: undefined }
+  const [expandedClasses, setExpandedClasses] = useState<Set<string>>(new Set())
+  const [uncappedClasses, setUncappedClasses] = useState<Set<string>>(new Set())
+
+  function toggleExpanded(cls: string) {
+    setExpandedClasses((prev) => {
+      const next = new Set(prev)
+      if (next.has(cls)) next.delete(cls)
+      else next.add(cls)
+      return next
+    })
+  }
+
+  // Deliberately ignores the classGroups/subclasses filters themselves (though not the other
+  // filter types, or sector scope) when building the row list -- so selecting a category
+  // highlights it without making every other category disappear from the list, matching the
+  // "always show all rows, highlight the active one" pattern in the plain-map Stats panel's
+  // ClassAreaTable.
+  const filtersIgnoringClassGroups: InsightsFilters = {
+    ...filters,
+    classGroups: undefined,
+    subclasses: undefined,
+  }
   const filtered = scopeTuples(insightsData.tickets, sector).filter((t) =>
     matchesFilters(
       t,
@@ -527,16 +607,30 @@ function Categories({
       insightsData.priorities,
       insightsData.classGroups,
       filtersIgnoringClassGroups,
+      undefined,
+      insightsData.subclasses,
     ),
   )
 
   const byClass = new Map<string, { open: number; resolved: number }>()
+  const bySubclass = new Map<string, Map<string, { open: number; resolved: number }>>()
   for (const t of filtered) {
     const cls = insightsData.classGroups[t[TicketField.ClassGroupIdx]] ?? 'Other'
     const entry = byClass.get(cls) ?? { open: 0, resolved: 0 }
-    if (isOpenTicket(t, insightsData.statuses)) entry.open++
+    const isOpen = isOpenTicket(t, insightsData.statuses)
+    if (isOpen) entry.open++
     else entry.resolved++
     byClass.set(cls, entry)
+
+    const subIdx = t[TicketField.SubclassIdx]
+    const sub = subIdx >= 0 ? insightsData.subclasses[subIdx] : undefined
+    if (!sub) continue
+    const subMap = bySubclass.get(cls) ?? new Map<string, { open: number; resolved: number }>()
+    const subEntry = subMap.get(sub) ?? { open: 0, resolved: 0 }
+    if (isOpen) subEntry.open++
+    else subEntry.resolved++
+    subMap.set(sub, subEntry)
+    bySubclass.set(cls, subMap)
   }
   // Once a sector or a status/priority/time filter narrows the data, a category with 0 tickets in
   // that scope is just noise (an invisible zero-width bar padding out the scroll) -- keep zero rows
@@ -548,7 +642,18 @@ function Categories({
     filters.createdWithinMs !== undefined
   const showZeroRows = sector === null && !otherFiltersActive
   const rows = Array.from(byClass.entries())
-    .map(([name, counts]) => ({ name, ...counts, total: counts.open + counts.resolved }))
+    .map(([name, counts]) => ({
+      name,
+      ...counts,
+      total: counts.open + counts.resolved,
+      subs: Array.from((bySubclass.get(name) ?? new Map()).entries())
+        .map(([subName, subCounts]) => ({
+          name: subName,
+          ...subCounts,
+          total: subCounts.open + subCounts.resolved,
+        }))
+        .sort((a, b) => b.open - a.open),
+    }))
     .filter((r) => showZeroRows || r.total > 0)
     .sort((a, b) => b.open - a.open)
 
@@ -562,7 +667,9 @@ function Categories({
     )
   }
 
-  const selectedCount = filters.classGroups?.length ?? 0
+  const selectedCount =
+    (filters.classGroups?.length ?? 0) +
+    Object.values(filters.subclasses ?? {}).reduce((sum, subs) => sum + subs.length, 0)
 
   return (
     <Section
@@ -586,51 +693,137 @@ function Categories({
       <div className="flex flex-col gap-1.5">
         {rows.map((row) => {
           const color = CLASS_GROUP_COLORS[row.name] ?? CLASS_GROUP_COLORS.Other
-          const active = filters.classGroups?.includes(row.name) ?? false
+          const hasChildren = row.subs.length > 1
+          const isFullySelected = filters.classGroups?.includes(row.name) ?? false
+          const partialSubs = filters.subclasses?.[row.name]
+          const isActive = isFullySelected || (!!partialSubs && partialSubs.length > 0)
+          const isExpanded = expandedClasses.has(row.name)
           const rowTint = `color-mix(in srgb, ${color} var(--map-row-tint-pct), transparent)`
+          const capped = !uncappedClasses.has(row.name)
+          const visibleSubs = capped ? row.subs.slice(0, CATEGORY_SUBCLASS_ROW_CAP) : row.subs
+          const hiddenCount = row.subs.length - visibleSubs.length
           return (
-            <button
-              key={row.name}
-              type="button"
-              onClick={() => onFilterClassGroup(row.name)}
-              aria-pressed={active}
-              title={`${active ? 'Clear' : 'Filter to'} ${row.name}`}
-              className="relative flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors"
-              style={{ backgroundColor: active ? rowTint : 'transparent' }}
-            >
-              {active && (
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-y-1 left-0 w-[3px] rounded-full"
-                  style={{ backgroundColor: color }}
+            <div key={row.name}>
+              <button
+                type="button"
+                onClick={() => onFilterClassGroup(row.name)}
+                aria-pressed={isActive}
+                title={`${isActive ? 'Clear' : 'Filter to'} ${row.name}`}
+                className="relative flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors"
+                style={{ backgroundColor: isActive ? rowTint : 'transparent' }}
+              >
+                {isActive && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-y-1 left-0 w-[3px] rounded-full"
+                    style={{ backgroundColor: color }}
+                  />
+                )}
+                {hasChildren ? (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      toggleExpanded(row.name)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        toggleExpanded(row.name)
+                      }
+                    }}
+                    aria-expanded={isExpanded}
+                    aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${row.name} sub-classes`}
+                    title={`${isExpanded ? 'Collapse' : 'Expand'} sub-classes`}
+                    style={{ color: 'var(--map-fg-faint)' }}
+                    className="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-[var(--map-surface-hover)]"
+                  >
+                    <ChevronDownIcon
+                      className={`h-3 w-3 transition-transform ${isExpanded ? '' : '-rotate-90'}`}
+                    />
+                  </span>
+                ) : (
+                  <span className="h-4 w-4 shrink-0" />
+                )}
+                <RowCheckbox
+                  checked={isActive}
+                  indeterminate={!isFullySelected && !!partialSubs && partialSubs.length > 0}
+                  color={color}
                 />
+                <span
+                  className={`min-w-0 flex-1 truncate text-[11.5px] ${isActive ? 'font-semibold' : ''}`}
+                  style={{ color: isActive ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
+                >
+                  {row.name}
+                </span>
+                <AnimatedBar
+                  percent={row.total > 0 ? (row.open / row.total) * 100 : 0}
+                  fill={color}
+                  height={5}
+                  trackClassName="w-16 shrink-0"
+                  delayMs={pillEntranceDelayMs(2)}
+                />
+                <span
+                  className="w-6 shrink-0 text-right text-[11px] tabular-nums"
+                  style={{ color: 'var(--map-fg-faint)' }}
+                  title={`${row.open} open · ${row.resolved} resolved`}
+                >
+                  {row.total}
+                </span>
+              </button>
+              {hasChildren && isExpanded && (
+                <div
+                  className="ml-[22px] flex flex-col gap-0.5 border-l pl-2"
+                  style={{ borderColor: 'var(--map-border)' }}
+                >
+                  {visibleSubs.map((sub) => {
+                    const subChecked = isFullySelected || (partialSubs?.includes(sub.name) ?? false)
+                    return (
+                      <button
+                        key={sub.name}
+                        type="button"
+                        onClick={() => onFilterSubclass(row.name, sub.name)}
+                        aria-pressed={subChecked}
+                        title={`${subChecked ? 'Clear' : 'Filter to'} ${row.name} · ${sub.name}`}
+                        className="flex cursor-pointer items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors"
+                        style={{
+                          backgroundColor: subChecked
+                            ? `color-mix(in srgb, ${color} calc(var(--map-row-tint-pct) * 0.6), transparent)`
+                            : 'transparent',
+                        }}
+                      >
+                        <RowCheckbox checked={subChecked} color={color} size="sm" />
+                        <span
+                          className={`min-w-0 flex-1 truncate text-[11px] ${subChecked ? 'font-semibold' : ''}`}
+                          style={{ color: subChecked ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
+                        >
+                          {sub.name}
+                        </span>
+                        <span
+                          className="w-6 shrink-0 text-right text-[10.5px] tabular-nums"
+                          style={{ color: 'var(--map-fg-faint)' }}
+                          title={`${sub.open} open · ${sub.resolved} resolved`}
+                        >
+                          {sub.total}
+                        </span>
+                      </button>
+                    )
+                  })}
+                  {hiddenCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setUncappedClasses((prev) => new Set(prev).add(row.name))}
+                      className="cursor-pointer rounded-lg px-1.5 py-1 text-left text-[10.5px] font-semibold underline-offset-2 hover:underline"
+                      style={{ color: 'var(--map-accent)' }}
+                    >
+                      Show {hiddenCount} more…
+                    </button>
+                  )}
+                </div>
               )}
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: color }}
-                aria-hidden
-              />
-              <span
-                className={`min-w-0 flex-1 truncate text-[11.5px] ${active ? 'font-semibold' : ''}`}
-                style={{ color: active ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
-              >
-                {row.name}
-              </span>
-              <AnimatedBar
-                percent={row.total > 0 ? (row.open / row.total) * 100 : 0}
-                fill={color}
-                height={5}
-                trackClassName="w-16 shrink-0"
-                delayMs={pillEntranceDelayMs(2)}
-              />
-              <span
-                className="w-6 shrink-0 text-right text-[11px] tabular-nums"
-                style={{ color: 'var(--map-fg-faint)' }}
-                title={`${row.open} open · ${row.resolved} resolved`}
-              >
-                {row.total}
-              </span>
-            </button>
+            </div>
           )
         })}
       </div>
@@ -659,6 +852,8 @@ function PriorityTrend({
         insightsData.priorities,
         insightsData.classGroups,
         filters,
+        undefined,
+        insightsData.subclasses,
       ) && isOpenTicket(t, insightsData.statuses),
   )
   const byPriority = new Map<string, number>()
@@ -775,7 +970,10 @@ function Assignees({
             <div key={a.id} className="flex items-center gap-2 text-[11.5px]">
               <span
                 className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold"
-                style={{ backgroundColor: 'var(--map-surface-active)', color: 'var(--map-fg-muted)' }}
+                style={{
+                  backgroundColor: 'var(--map-surface-active)',
+                  color: 'var(--map-fg-muted)',
+                }}
                 aria-hidden
               >
                 {a.name.slice(0, 1).toUpperCase()}
@@ -837,12 +1035,15 @@ function TicketListBlock({
       !filters.prioritySlugs.includes(t.prioritySlug)
     )
       return false
-    if (
-      filters.classGroups &&
-      filters.classGroups.length > 0 &&
-      !filters.classGroups.includes(t.classGroup)
-    )
-      return false
+    const hasClassFilter = filters.classGroups && filters.classGroups.length > 0
+    const hasSubclassFilter =
+      filters.subclasses && Object.values(filters.subclasses).some((subs) => subs.length > 0)
+    if (hasClassFilter || hasSubclassFilter) {
+      const classMatches = filters.classGroups?.includes(t.classGroup) ?? false
+      const subclassMatches =
+        !!t.subclass && (filters.subclasses?.[t.classGroup]?.includes(t.subclass) ?? false)
+      if (!classMatches && !subclassMatches) return false
+    }
     return true
   })
 
@@ -857,7 +1058,8 @@ function TicketListBlock({
     q.length > 0 ||
     (filters.statusSlugs?.length ?? 0) > 0 ||
     (filters.prioritySlugs?.length ?? 0) > 0 ||
-    (filters.classGroups?.length ?? 0) > 0
+    (filters.classGroups?.length ?? 0) > 0 ||
+    Object.values(filters.subclasses ?? {}).some((subs) => subs.length > 0)
 
   return (
     <Section

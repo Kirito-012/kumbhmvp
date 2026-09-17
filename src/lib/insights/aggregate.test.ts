@@ -36,6 +36,7 @@ function ticket(
     lat: number
     createdAt: number
     resolvedAt: number | null
+    subclassIdx: number
   }>,
 ): InsightsTicketTuple {
   const t = {
@@ -49,6 +50,7 @@ function ticket(
     lat: 0,
     createdAt: NOW,
     resolvedAt: null,
+    subclassIdx: -1,
     ...overrides,
   }
   return [
@@ -62,6 +64,7 @@ function ticket(
     t.lat,
     t.createdAt,
     t.resolvedAt,
+    t.subclassIdx,
   ]
 }
 

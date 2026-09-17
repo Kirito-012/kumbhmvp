@@ -20,6 +20,7 @@ export type InsightsTicketTuple = [
   number, // location.lat
   number, // createdAt (ms since epoch)
   number | null, // resolvedAt (ms since epoch), null if still unresolved
+  number, // index into `subclasses`, or -1 if location.subclass is null
 ]
 
 export type InsightsTicketData = {
@@ -27,6 +28,7 @@ export type InsightsTicketData = {
   statuses: InsightsStatusRow[]
   priorities: InsightsPriorityRow[]
   classGroups: string[]
+  subclasses: string[]
   tickets: InsightsTicketTuple[]
 }
 
@@ -42,6 +44,7 @@ export const enum TicketField {
   Lat = 7,
   CreatedAt = 8,
   ResolvedAt = 9,
+  SubclassIdx = 10,
 }
 
 // Per-sector Insights panel detail (Phase 5) -- shapes returned by getSectorInsights and consumed
@@ -56,6 +59,7 @@ export type SectorTicketRow = {
   statusSlug: string
   prioritySlug: string
   classGroup: string
+  subclass: string | null
   sectorPlanId: number
   lng: number
   lat: number

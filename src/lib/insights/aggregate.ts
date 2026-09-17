@@ -7,6 +7,10 @@ export type InsightsFilters = {
   statusSlugs?: string[]
   prioritySlugs?: string[]
   classGroups?: string[]
+  /** Sub-class picks that stand on their own (not implied by a fully-selected parent in
+   *  `classGroups`) -- keyed by class group, same tri-state "class OR (class,subclass) pair"
+   *  shape as Map-mode's own classFilter/subclassFilter (see MapView's toggleSubclassFilter). */
+  subclasses?: Record<string, string[]>
   /** Only tickets created within this many ms of "now" (e.g. 7d in ms). Omit for no time filter. */
   createdWithinMs?: number
 }
@@ -39,6 +43,7 @@ export function matchesFilters(
   classGroups: string[],
   filters: InsightsFilters,
   now: number = Date.now(),
+  subclasses: string[] = [],
 ): boolean {
   if (filters.statusSlugs && filters.statusSlugs.length > 0) {
     const status = statuses[tuple[TicketField.StatusIdx]]
@@ -48,9 +53,17 @@ export function matchesFilters(
     const priority = priorities[tuple[TicketField.PriorityIdx]]
     if (!priority || !filters.prioritySlugs.includes(priority.slug)) return false
   }
-  if (filters.classGroups && filters.classGroups.length > 0) {
+  const hasClassFilter = filters.classGroups && filters.classGroups.length > 0
+  const hasSubclassFilter =
+    filters.subclasses && Object.values(filters.subclasses).some((subs) => subs.length > 0)
+  if (hasClassFilter || hasSubclassFilter) {
     const classGroup = classGroups[tuple[TicketField.ClassGroupIdx]]
-    if (!classGroup || !filters.classGroups.includes(classGroup)) return false
+    const classMatches = !!classGroup && (filters.classGroups?.includes(classGroup) ?? false)
+    const subclassIdx = tuple[TicketField.SubclassIdx]
+    const subclass = subclassIdx >= 0 ? subclasses[subclassIdx] : undefined
+    const subclassMatches =
+      !!classGroup && !!subclass && (filters.subclasses?.[classGroup]?.includes(subclass) ?? false)
+    if (!classMatches && !subclassMatches) return false
   }
   if (filters.createdWithinMs !== undefined) {
     const createdAt = tuple[TicketField.CreatedAt]
@@ -72,11 +85,13 @@ export function rollupBySector(
   classGroups: string[],
   filters: InsightsFilters = {},
   now: number = Date.now(),
+  subclasses: string[] = [],
 ): Map<number | null, SectorRollup> {
   const rollups = new Map<number | null, SectorRollup>()
 
   for (const tuple of tickets) {
-    if (!matchesFilters(tuple, statuses, priorities, classGroups, filters, now)) continue
+    if (!matchesFilters(tuple, statuses, priorities, classGroups, filters, now, subclasses))
+      continue
 
     const sectorNo = tuple[TicketField.SectorNo]
     let rollup = rollups.get(sectorNo)
@@ -129,11 +144,20 @@ export function bucketBySectorPlanId(
   classGroups: string[],
   filters: InsightsFilters = {},
   now: number = Date.now(),
+  subclasses: string[] = [],
 ): Map<number, SectorPlanBucket> {
   const result = new Map<number, SectorPlanBucket>()
   for (const tuple of tickets) {
     const status = statuses[tuple[TicketField.StatusIdx]]
-    const matches = matchesFilters(tuple, statuses, priorities, classGroups, filters, now)
+    const matches = matchesFilters(
+      tuple,
+      statuses,
+      priorities,
+      classGroups,
+      filters,
+      now,
+      subclasses,
+    )
     result.set(
       tuple[TicketField.SectorPlanId],
       !status ? 'muted' : matches ? status.bucket : 'muted',

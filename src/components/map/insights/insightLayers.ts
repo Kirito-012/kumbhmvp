@@ -279,29 +279,18 @@ export function setInsightLabelVisible(map: MLMap, visible: boolean): void {
   }
 }
 
-// A parcel whose ticket fails the active filters gets this instead of vanishing -- a translucent
-// slate wash distinct enough from BUCKET_COLORS.closed (which is opaque) that "filtered out" never
-// reads as "actually Closed" (PLAN-heatmap.md §5.3/§9).
-const MUTED_TICKET_FILL: Record<Theme, string> = {
-  light: 'rgba(100,116,139,0.28)',
-  dark: 'rgba(148,163,184,0.22)',
-}
-const MUTED_TICKET_OUTLINE: Record<Theme, string> = {
-  light: 'rgba(71,85,105,0.55)',
-  dark: 'rgba(148,163,184,0.45)',
-}
-
 /** `['match', ['feature-state','bucket'], ...]` colour expression shared by fill/outline --
  *  `colorForBucket` supplies each bucket's colour so the two call sites (fill: bucket colour,
  *  outline: darkened bucket colour) can share the match/fallback plumbing. A parcel with no
- *  feature-state set yet (no ticket, e.g. a Road/Parking parcel) falls through to 'transparent'
- *  so the class-group wash underneath (sector-plan-fill) still shows through untouched. */
+ *  feature-state set yet (no ticket, e.g. a Road/Parking parcel), and a parcel whose ticket fails
+ *  the active filters ('muted'), both fall through to fully-transparent -- a filter (e.g. the
+ *  Categories panel's class/sub-class picks) is meant to isolate just the matching parcels, not
+ *  leave the rest visible as a washed-out outline. */
 function ticketBucketExpr(
-  colorForBucket: (bucket: SectorPlanBucket) => string,
+  colorForBucket: (bucket: Exclude<SectorPlanBucket, 'muted'>) => string,
 ): ExpressionSpecification {
   const pairs: string[] = []
   for (const bucket of BUCKET_ORDER) pairs.push(bucket, colorForBucket(bucket))
-  pairs.push('muted', colorForBucket('muted'))
   return [
     'match',
     ['feature-state', 'bucket'],
@@ -311,15 +300,11 @@ function ticketBucketExpr(
 }
 
 function ticketFillExpr(theme: Theme): ExpressionSpecification {
-  return ticketBucketExpr((b) =>
-    b === 'muted' ? MUTED_TICKET_FILL[theme] : BUCKET_COLORS[b][theme],
-  )
+  return ticketBucketExpr((b) => BUCKET_COLORS[b][theme])
 }
 
 function ticketOutlineExpr(theme: Theme): ExpressionSpecification {
-  return ticketBucketExpr((b) =>
-    b === 'muted' ? MUTED_TICKET_OUTLINE[theme] : darkenHex(BUCKET_COLORS[b][theme], 0.25),
-  )
+  return ticketBucketExpr((b) => darkenHex(BUCKET_COLORS[b][theme], 0.25))
 }
 
 /**
@@ -542,10 +527,11 @@ export function buildHeatFeatureCollection(
   filters: InsightsFilters,
   metric: HeatMetric,
   now: number = Date.now(),
+  subclasses: string[] = [],
 ): FeatureCollection<Point, HeatFeatureProps> {
   const features: Feature<Point, HeatFeatureProps>[] = []
   for (const t of tickets) {
-    if (!matchesFilters(t, statuses, priorities, classGroups, filters, now)) continue
+    if (!matchesFilters(t, statuses, priorities, classGroups, filters, now, subclasses)) continue
     if (metric !== 'total' && !isOpenTicket(t, statuses)) continue
     features.push({
       type: 'Feature',

@@ -57,6 +57,7 @@ export async function getInsightsTicketData(): Promise<InsightsTicketData> {
         'location.sectorPlanId': 1,
         'location.sectorNo': 1,
         'location.classGroup': 1,
+        'location.subclass': 1,
         'location.lng': 1,
         'location.lat': 1,
         createdAt: 1,
@@ -96,6 +97,21 @@ export async function getInsightsTicketData(): Promise<InsightsTicketData> {
     return idx
   }
 
+  // Sub-classes are indexed the same way as class groups (first-seen order, no null slot) --
+  // a ticket with no sub-class on its location just stores -1 in the tuple (see indexOfSubclass
+  // below and TicketField.SubclassIdx).
+  const subclasses: string[] = []
+  const subclassIndex = new Map<string, number>()
+  function indexOfSubclass(name: string): number {
+    let idx = subclassIndex.get(name)
+    if (idx === undefined) {
+      idx = subclasses.length
+      subclasses.push(name)
+      subclassIndex.set(name, idx)
+    }
+    return idx
+  }
+
   const ticketTuples: InsightsTicketTuple[] = tickets
     .filter((t) => t.location) // narrows for TS; HAS_LOCATION already guarantees this at the DB level
     .map((t) => {
@@ -111,6 +127,7 @@ export async function getInsightsTicketData(): Promise<InsightsTicketData> {
         loc.lat,
         t.createdAt ? new Date(t.createdAt).getTime() : 0,
         t.resolvedAt ? new Date(t.resolvedAt).getTime() : null,
+        loc.subclass ? indexOfSubclass(loc.subclass) : -1,
       ]
     })
 
@@ -119,6 +136,7 @@ export async function getInsightsTicketData(): Promise<InsightsTicketData> {
     statuses,
     priorities,
     classGroups,
+    subclasses,
     tickets: ticketTuples,
   }
 }
@@ -221,7 +239,7 @@ export async function getSectorInsights(
         .lean(),
       TicketModel.find(baseMatch)
         .select(
-          'number subject lastActivityAt location.sectorPlanId location.classGroup location.lng location.lat',
+          'number subject lastActivityAt location.sectorPlanId location.classGroup location.subclass location.lng location.lat',
         )
         .populate([
           { path: 'statusId', select: 'slug isResolved' },
@@ -301,6 +319,7 @@ export async function getSectorInsights(
     statusSlug: t.statusId?.slug ?? 'unknown',
     prioritySlug: t.priorityId?.slug ?? 'unknown',
     classGroup: t.location?.classGroup ?? 'Other',
+    subclass: t.location?.subclass ?? null,
     sectorPlanId: t.location!.sectorPlanId,
     lng: t.location!.lng,
     lat: t.location!.lat,

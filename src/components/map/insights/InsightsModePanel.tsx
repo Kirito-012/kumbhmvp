@@ -199,6 +199,8 @@ function InsightsModeBody({
     insightsData.priorities,
     insightsData.classGroups,
     filters,
+    undefined,
+    insightsData.subclasses,
   )
 
   const bucketCounts: Record<StatusBucket, number> = {

@@ -1272,6 +1272,8 @@ function FloatingLegend({
     insightsData.priorities,
     insightsData.classGroups,
     filters,
+    undefined,
+    insightsData.subclasses,
   )
   const counts: Record<StatusBucket, number> = { new: 0, progress: 0, resolved: 0, closed: 0 }
   for (const rollup of rollups.values()) {
@@ -2172,7 +2174,7 @@ export default function MapView({
 
     return `
       <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 16px 12px;border-bottom:1px solid var(--map-popup-row-border)">
-        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;backgroundColor:${iconBg};color:${iconFg}">
+        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;background-color:${iconBg};color:${iconFg}">
           <svg viewBox="0 0 24 24" fill="none" width="17" height="17">${POPUP_ICON_PATHS[kind]}</svg>
         </span>
         <div style="min-width:0">
@@ -2291,9 +2293,14 @@ export default function MapView({
   }
 
   function statusBadgeHtml(label: string, color: string, isActiveStatus: boolean) {
-    return `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;backgroundColor:${color}18;color:${color};font-size:10.5px;font-weight:700">${
+    // background-color, not backgroundColor -- this is a raw HTML style attribute, not a React
+    // style object, so the camelCase form is silently invalid CSS: the pill rendered with no fill
+    // at all, just colored text, which is why status/priority read as barely distinguishable.
+    // The fill is a stronger 2a (~16%) tint with a matching-color border so the pill reads as a
+    // filled chip against the popup background instead of a faint tint, in both themes.
+    return `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;background-color:${color}2a;border:1px solid ${color}55;color:${color};font-size:10.5px;font-weight:700">${
       isActiveStatus
-        ? `<span style="width:5px;height:5px;border-radius:999px;backgroundColor:${color}"></span>`
+        ? `<span style="width:5px;height:5px;border-radius:999px;background-color:${color}"></span>`
         : ''
     }${escapeHtml(label)}</span>`
   }
@@ -2319,9 +2326,9 @@ export default function MapView({
             ${photos
               .map(
                 (photo, i) =>
-                  `<div data-popup-photo-index="${i}" style="cursor:pointer;flex:1;min-width:0;border-radius:10px;overflow:hidden;position:relative;aspect-ratio:4/3;backgroundColor:var(--map-popup-row-border)">
+                  `<div data-popup-photo-index="${i}" style="cursor:pointer;flex:1;min-width:0;border-radius:10px;overflow:hidden;position:relative;aspect-ratio:4/3;background-color:var(--map-popup-row-border)">
                     <img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.phase)} site photo" style="width:100%;height:100%;object-fit:cover;display:block" />
-                    <span style="position:absolute;left:4px;bottom:4px;padding:1px 6px;border-radius:999px;font-size:9.5px;font-weight:700;text-transform:capitalize;backgroundColor:rgba(0,0,0,0.55);color:#fff">${escapeHtml(photo.phase)}</span>
+                    <span style="position:absolute;left:4px;bottom:4px;padding:1px 6px;border-radius:999px;font-size:9.5px;font-weight:700;text-transform:capitalize;background-color:rgba(0,0,0,0.55);color:#fff">${escapeHtml(photo.phase)}</span>
                   </div>`,
               )
               .join('')}
@@ -2338,7 +2345,7 @@ export default function MapView({
             ${metaChips
               .map(
                 (c) =>
-                  `<span style="padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:600;backgroundColor:var(--map-popup-row-border);color:var(--map-popup-subtle)">${escapeHtml(c)}</span>`,
+                  `<span style="padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:600;background-color:var(--map-popup-row-border);color:var(--map-popup-subtle)">${escapeHtml(c)}</span>`,
               )
               .join('')}
           </div>`
@@ -2511,7 +2518,7 @@ export default function MapView({
     const visibleRows = rows.filter(([, v]) => v !== undefined)
     const headerHtml = `
       <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 16px 12px;${visibleRows.length ? 'border-bottom:1px solid var(--map-popup-row-border)' : ''}">
-        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;backgroundColor:color-mix(in srgb, var(--map-accent) 9%, transparent);color:var(--map-accent)">
+        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;background-color:color-mix(in srgb, var(--map-accent) 9%, transparent);color:var(--map-accent)">
           <svg viewBox="0 0 24 24" fill="none" width="17" height="17">${POPUP_ICON_PATHS.evac}</svg>
         </span>
         <div style="min-width:0">
@@ -3740,7 +3747,7 @@ export default function MapView({
             const headerSubtitle = single ? `Ticket #${single.number}` : null
             const headerHtml = `
               <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 16px 12px;border-bottom:1px solid var(--map-popup-row-border)">
-                <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;backgroundColor:color-mix(in srgb, var(--map-accent) 9%, transparent);color:var(--map-accent)">
+                <span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:9px;background-color:color-mix(in srgb, var(--map-accent) 9%, transparent);color:var(--map-accent)">
                   <svg viewBox="0 0 24 24" fill="none" width="17" height="17">${POPUP_ICON_PATHS.ticket}</svg>
                 </span>
                 <div style="min-width:0">
@@ -4467,6 +4474,8 @@ export default function MapView({
       insightsData.classGroups,
       insightFilters,
       heatMetric,
+      undefined,
+      insightsData.subclasses,
     )
     setInsightHeatData(map, collection)
     // MapLibre's heatmap-density is relative to what's on screen, so a filter that drops most
@@ -4521,6 +4530,8 @@ export default function MapView({
       insightsData.priorities,
       insightsData.classGroups,
       insightFilters,
+      undefined,
+      insightsData.subclasses,
     )
     if (ticketFeatureStateRafRef.current !== null) {
       cancelAnimationFrame(ticketFeatureStateRafRef.current)
@@ -6730,14 +6741,54 @@ export default function MapView({
           filters={insightFilters}
           sectors={sectors}
           onFilterClassGroup={(classGroup) =>
-            setInsightFilters((f) => ({
-              ...f,
-              classGroups: f.classGroups?.includes(classGroup)
-                ? f.classGroups.filter((c) => c !== classGroup)
-                : [...(f.classGroups ?? []), classGroup],
-            }))
+            setInsightFilters((f) => {
+              // Tri-state parent, mirroring toggleClassFilter (Map mode's own class/sub-class
+              // filter): a partial sub-class selection promotes to the whole class rather than
+              // being silently discarded, and only a fully-selected class clears.
+              const hasPartial = (f.subclasses?.[classGroup]?.length ?? 0) > 0
+              const isSelecting = hasPartial || !f.classGroups?.includes(classGroup)
+              const nextClassGroups = isSelecting
+                ? f.classGroups?.includes(classGroup)
+                  ? f.classGroups
+                  : [...(f.classGroups ?? []), classGroup]
+                : f.classGroups?.filter((c) => c !== classGroup)
+              const nextSubclasses = { ...f.subclasses }
+              delete nextSubclasses[classGroup]
+              return {
+                ...f,
+                classGroups:
+                  nextClassGroups && nextClassGroups.length > 0 ? nextClassGroups : undefined,
+                subclasses: Object.keys(nextSubclasses).length > 0 ? nextSubclasses : undefined,
+              }
+            })
           }
-          onClearClassGroups={() => setInsightFilters((f) => ({ ...f, classGroups: undefined }))}
+          onFilterSubclass={(classGroup, subclass) =>
+            setInsightFilters((f) => {
+              // Toggling a sub-class while its whole class is checked narrows the selection down
+              // to just that sub-class (unlike Map mode's toggleSubclassFilter, this doesn't
+              // enumerate every sibling to keep them implicitly selected -- Ticket mode's
+              // Categories list doesn't need that "split off" nuance, just "pick one to narrow").
+              const wasFullyChecked = f.classGroups?.includes(classGroup) ?? false
+              const current = f.subclasses?.[classGroup] ?? []
+              const isSelecting = wasFullyChecked ? true : !current.includes(subclass)
+              const nextClassGroups = f.classGroups?.filter((c) => c !== classGroup)
+              const nextSubs = isSelecting
+                ? [...current, subclass]
+                : current.filter((s) => s !== subclass)
+              const nextSubclasses = { ...f.subclasses }
+              if (nextSubs.length > 0) nextSubclasses[classGroup] = nextSubs
+              else delete nextSubclasses[classGroup]
+              return {
+                ...f,
+                classGroups:
+                  nextClassGroups && nextClassGroups.length > 0 ? nextClassGroups : undefined,
+                subclasses: Object.keys(nextSubclasses).length > 0 ? nextSubclasses : undefined,
+              }
+            })
+          }
+          onClearClassGroups={() =>
+            setInsightFilters((f) => ({ ...f, classGroups: undefined, subclasses: undefined }))
+          }
           onFilterPriority={(prioritySlug) =>
             setInsightFilters((f) => ({
               ...f,
