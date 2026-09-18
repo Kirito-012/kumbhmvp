@@ -89,6 +89,8 @@ const LAYERS_BY_KEY: Record<EvacKey, string[]> = {
   footpath: [],
   fh_location: [],
   public_service_facilities: [],
+  ghat_area: [],
+  river: [],
   zone_outline: ['evac-zone-outline-line', 'evac-zone-outline-label'],
 }
 
@@ -761,11 +763,12 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
 }
 
 /** Toggles every evac-* layer's layout visibility per `evacVisibility`, called whenever the mode,
- *  the visibility store, or `evacFilters` changes (see MapView's mode-visibility effect). The 6
+ *  the visibility store, or `evacFilters` changes (see MapView's mode-visibility effect). The 8
  *  supporting keys with no evac-* layer of their own (thematic_gate/junction/bridge/footpath/
- *  fh_location/public_service_facilities) reuse Map mode's own `poi-*` layers directly -- the
- *  caller (which owns `applyLayerVisibility`'s force-off list in `visibilityForMode`) un-hides
- *  exactly the ones this mode wants, without this module reaching into Map-mode layer ids itself.
+ *  fh_location/public_service_facilities/ghat_area/river) reuse Map mode's own `poi-*` layers
+ *  directly -- the caller (which owns `applyLayerVisibility`'s force-off list in
+ *  `visibilityForMode`) un-hides exactly the ones this mode wants, without this module reaching
+ *  into Map-mode layer ids itself.
  *
  *  traffic_route's peak/normal layers are special-cased: their visibility is the AND of the
  *  `traffic_route` evacVisibility toggle AND the plan filter's own choice of which of the two to

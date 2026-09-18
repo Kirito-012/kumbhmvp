@@ -1126,7 +1126,14 @@ const VISIBILITY_STORAGE_KEY = 'tcsticket:mapView:visibility'
 
 function defaultVisibility(): Record<string, boolean> {
   return {
-    sector_plan: true,
+    // sector_plan/sector_boundary/sector_names are the one visibility store Evacuation mode
+    // shares with Map mode (decision #6 -- see visibilityForMode's own comment), so there's no
+    // separate "evacuation default" to flip for just this one; sector_plan starts off here for
+    // BOTH modes now, per an explicit request to declutter Evacuation mode's default view (the
+    // parcel outlines competed with the entry/exit points and routes the mode exists to show).
+    // Still on by one click in either mode's own layer panel -- this only changes what a fresh
+    // session (no VISIBILITY_STORAGE_KEY yet) starts with.
+    sector_plan: false,
     sector_boundary: true,
     sector_names: true,
     ...Object.fromEntries(ROAD_TYPE_DEFS.map((d) => [d.key, false])),
