@@ -3,7 +3,12 @@
 import type { ReactNode } from 'react'
 import Panel from '@/components/map/Panel'
 import { EvacuationIcon, MapPinIcon } from '@/components/map/icons'
-import { useInsightTheme, Reveal, AnimatedBar, pillEntranceDelayMs } from '@/components/map/insights/charts'
+import {
+  useInsightTheme,
+  Reveal,
+  AnimatedBar,
+  pillEntranceDelayMs,
+} from '@/components/map/insights/charts'
 import { EVAC_COLORS, type EvacFocus } from '@/lib/evacuation/layers'
 import type { EvacSummary, EvacSummaryFeature } from './useEvacuationSummary'
 import { EVAC_LAYER_LABELS } from '@/lib/evacuation/layers'
@@ -140,7 +145,10 @@ function LegendSwatch({ color, opacity = 1 }: { color: string; opacity?: number 
 
 function LegendRow({ sample, label }: { sample: ReactNode; label: string }) {
   return (
-    <div className="flex items-center gap-2 py-0.5 text-[11px]" style={{ color: 'var(--map-fg-muted)' }}>
+    <div
+      className="flex items-center gap-2 py-0.5 text-[11px]"
+      style={{ color: 'var(--map-fg-muted)' }}
+    >
       {sample}
       <span className="truncate">{label}</span>
     </div>
@@ -219,7 +227,10 @@ export default function EvacuationPanel({
     >
       <div className="flex flex-col gap-4">
         {loading && !summary && (
-          <div className="relative h-1 overflow-hidden rounded-full" style={{ backgroundColor: 'var(--map-border)' }}>
+          <div
+            className="relative h-1 overflow-hidden rounded-full"
+            style={{ backgroundColor: 'var(--map-border)' }}
+          >
             <div className="absolute inset-y-0 w-1/3 animate-[loading-sweep_1.1s_ease-in-out_infinite] rounded-full bg-[var(--map-accent)]" />
           </div>
         )}
@@ -280,7 +291,9 @@ export default function EvacuationPanel({
                   <ClickableFeatureRow
                     key={item.id}
                     feature={item}
-                    onClick={() => onSelectResult('public_service_facilities', asSearchResult(item))}
+                    onClick={() =>
+                      onSelectResult('public_service_facilities', asSearchResult(item))
+                    }
                   />
                 ))}
               </div>
@@ -290,13 +303,15 @@ export default function EvacuationPanel({
 
         <Reveal index={focus ? 2 : 1}>
           <EvacSection title="Legend">
-            <p className="mb-1.5 text-[10.5px]" style={{ color: 'var(--map-fg-faint)' }}>
-              Routes and signage are colored green for entry, red for exit — solid vs. dashed marks
-              peak vs. normal day.
-            </p>
             <div className="flex flex-col">
-              <LegendRow sample={<LegendBadge text="EN" color={EVAC_COLORS.entry[theme]} />} label="Entry point" />
-              <LegendRow sample={<LegendBadge text="EXT" color={EVAC_COLORS.exit[theme]} />} label="Exit point" />
+              <LegendRow
+                sample={<LegendBadge text="EN" color={EVAC_COLORS.entry[theme]} />}
+                label="Entry point"
+              />
+              <LegendRow
+                sample={<LegendBadge text="EXT" color={EVAC_COLORS.exit[theme]} />}
+                label="Exit point"
+              />
               <LegendRow
                 sample={<LegendLine color={EVAC_COLORS.entry[theme]} />}
                 label="Entry/exit route"
@@ -341,7 +356,8 @@ export default function EvacuationPanel({
                         className="mb-0.5 px-1.5 text-[10px] font-semibold uppercase tracking-wide"
                         style={{ color: 'var(--map-fg-faint)' }}
                       >
-                        {EVAC_LAYER_LABELS[group.layer as keyof typeof EVAC_LAYER_LABELS] ?? group.layer}
+                        {EVAC_LAYER_LABELS[group.layer as keyof typeof EVAC_LAYER_LABELS] ??
+                          group.layer}
                       </h4>
                       <div className="flex flex-col">
                         {group.features.slice(0, 8).map((feature) => (

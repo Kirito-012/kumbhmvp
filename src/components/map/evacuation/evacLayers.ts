@@ -677,20 +677,19 @@ export function addEvacLayers(map: MLMap, theme: EvacTheme): void {
       'icon-ignore-placement': true,
     },
     paint: {
-      // Per user testing: a flat 1 still read as "not fully solid" zoomed out -- at region zoom
-      // dozens of badges packed together genuinely do want to sit back a bit (a wall of fully
-      // solid pills reads as visual noise), but that same softness was carrying over to close
-      // zoom, where a single badge has room to be the obvious focus and should look completely
-      // solid, not a shade of it. Ramping 0.7 -> 1 over zoom 12-15 keeps the zoomed-out look
-      // (already fine, don't touch it) while guaranteeing a true 100%-opaque badge by the time
-      // you're zoomed in on it.
+      // At city-wide zoom dozens of badges pack together and should sit back (a wall of solid
+      // pills reads as noise); zoomed in on a sector each badge must be fully solid. The low-zoom
+      // stop (0.35) reproduces the zoomed-out look users signed off on -- which until
+      // 'evac-entry-exit-points' joined MapView's APP_SOURCE_IDS was really an old 0.7 ramp
+      // halved by setBasemapLabelsDimmed. That same halving is what kept close-zoom badges at 50%,
+      // so this ramp now owns the whole curve and reaches a true 1 by street zoom.
       'icon-opacity': [
         'interpolate',
         ['linear'],
         ['zoom'],
         12,
-        0.7,
-        15,
+        0.35,
+        13.5,
         1,
       ] as unknown as ExpressionSpecification,
     },

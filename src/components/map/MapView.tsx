@@ -854,6 +854,12 @@ const APP_SOURCE_IDS = new Set([
   'evac-traffic-route-arrows',
   'evac-direction-line-arrows',
   'evac-zone-outline',
+  // Evacuation mode's unclustered EN/EXT badge source (evacLayers.ts's ENTRY_EXIT_POINTS_SOURCE).
+  // Missing from this set, setBasemapLabelsDimmed treated its badge layer as a basemap label and
+  // halved its icon-opacity whenever Evacuation mode was active -- capping the badges at 50% even
+  // fully zoomed in, which read as low-contrast/washed out no matter what the layer's own
+  // icon-opacity said.
+  'evac-entry-exit-points',
   'measure-line',
   'measure-label',
   'measure-preview',
@@ -3005,6 +3011,7 @@ export default function MapView({
         // exactly when the wide view would make it most useful to see.
         const isEntryExit = def.key === 'entry_exit_line'
         const isTertiary = def.key === 'tertiary_road'
+        const isFootpath = def.key === 'footpath'
         if (isEntryExit) {
           // Entry/exit routes are short real-world segments (tens to a few
           // hundred metres) -- at whole-region zoom levels (4-9) even a wide
@@ -3074,11 +3081,31 @@ export default function MapView({
             // line-join/line-cap produce, which stand out badly at this width.
             ...(isTertiary ? { layout: { 'line-join': 'round', 'line-cap': 'round' } } : {}),
             paint: {
+              // Footpaths get a dashed stroke -- the classic cartographic "trail" convention
+              // (Google/OSM both dash pedestrian paths) -- so they read as a distinct path TYPE
+              // at a glance instead of just another thin line competing with the basemap's own
+              // road strokes and every other neutral-gray POI line. line-dasharray is a PAINT
+              // property (not layout) in the MapLibre style spec, despite living next to
+              // line-join/line-cap conceptually -- putting it under layout throws "unknown
+              // property" at addLayer time.
+              ...(isFootpath ? { 'line-dasharray': [2, 1.5] } : {}),
               // tertiary_road gets its own theme-aware color/opacity
               // (TERTIARY_ROAD_STYLE) instead of def.color -- see that
               // constant's comment for why a flat colour doesn't survive at
-              // this feature density in both themes.
-              'line-color': isTertiary ? tertiaryRoadColorExpr(readMapTheme()) : def.color,
+              // this feature density in both themes. footpath overrides def.color's near-neutral
+              // #6b7280 (deliberately muted for its LINE_LAYER_COLORS swatch/legend role) with a
+              // warmer taupe-brown here on the actual map layer -- the neutral gray was nearly
+              // indistinguishable from the basemap's own road/building linework (the "not
+              // highlighted" complaint), but the first fix (#b45309, amber-700) leaned close
+              // enough to orange-red that thin anti-aliased dashes read as "red" -- easily
+              // confused with the emergency-exit legend color. This is a duller, more
+              // gray-leaning brown (classic dirt-trail color) that stays clearly distinct from
+              // both red and the plain gray it replaced.
+              'line-color': isTertiary
+                ? tertiaryRoadColorExpr(readMapTheme())
+                : isFootpath
+                  ? '#8d6748'
+                  : def.color,
               // The core line is drawn fully opaque -- TERTIARY_ROAD_STYLE's
               // opacity now applies only to the casing below it (a
               // semi-transparent core over a semi-transparent casing reads as
@@ -3102,7 +3129,12 @@ export default function MapView({
                     // highways draw thicker than main roads, and lanes
                     // thinner still, instead of one flat width for all three.
                     TERTIARY_ROAD_CORE_WIDTH
-                  : 2,
+                  : isFootpath
+                    ? // Wider than the flat 2px every other neutral POI line gets, and growing
+                      // further at close zoom so the dash pattern itself stays legible instead
+                      // of collapsing into a blurry thin streak.
+                      ['interpolate', ['linear'], ['zoom'], 12, 2, 16, 3.5]
+                    : 2,
             },
           },
           // Rendered beneath road-line (added earlier, above) so the curated
