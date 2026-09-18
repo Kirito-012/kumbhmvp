@@ -93,8 +93,13 @@ export const EVAC_COLORS = {
   exit: { light: '#e11d48', dark: '#fb7185' },
   emergencyExit: { light: '#dc2626', dark: '#f87171' },
   emergencyExitCasing: { light: '#ffffff', dark: '#0b0f19' },
-  floodArea: { light: '#2563eb', dark: '#60a5fa' },
-  floodLine: { light: '#1d4ed8', dark: '#93c5fd' },
+  // Purple rather than blue -- blue is already the river/water-body color on both the light and
+  // dark basemap, so a blue flood-risk fill/outline visually merged straight into the Ganga
+  // itself instead of reading as a distinct hazard extent. Purple has no other meaning elsewhere
+  // in this mode's palette (entry=green, exit/emergencyExit=red/rose, zone=amber), so it stays
+  // unambiguous against every basemap feature it's likely to overlap.
+  floodArea: { light: '#9333ea', dark: '#c084fc' },
+  floodLine: { light: '#7e22ce', dark: '#d8b4fe' },
   unknown: { light: '#64748b', dark: '#94a3b8' },
   /** The 5-zone outline/label (§2.4/§6.2 item 3) -- amber to match this mode's own
    *  `--map-mode-evacuation` accent, distinct from every other line color here so a zone boundary
