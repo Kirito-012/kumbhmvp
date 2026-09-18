@@ -25,8 +25,11 @@ import {
   type EvacKey,
 } from '@/lib/evacuation/layers'
 import {
+  ENTRY_EXIT_CATEGORIES,
+  ENTRY_EXIT_CATEGORY_LABELS,
   EVAC_CORRIDOR_LABELS,
   isEvacFiltersEmpty,
+  type EntryExitCategory,
   type EvacCorridor,
   type EvacDirection,
   type EvacFilters,
@@ -174,7 +177,7 @@ function Chip({
       style={{
         borderColor: active ? 'var(--map-accent)' : 'var(--map-border)',
         backgroundColor: active ? 'var(--map-accent)' : 'var(--map-input-bg)',
-        color: active ? '#fff' : 'var(--map-fg-muted)',
+        color: active ? 'var(--map-accent-on-fg)' : 'var(--map-fg-muted)',
       }}
       className="cursor-pointer rounded-full border px-2.5 py-1 text-[11.5px] font-medium transition-colors"
     >
@@ -430,6 +433,21 @@ export default function EvacuationModePanel({
   function clearAll() {
     onFiltersChange({})
     setQuery('')
+  }
+  // "Solo" click behaviour: clicking a category that's already active while more than one is
+  // active isolates it (e.g. starting from the all-3-active default, one click narrows to just
+  // that category) -- clicking an inactive category instead ADDS it, so a soloed selection can be
+  // built back up into a multi-select one click at a time. Clicking the one remaining active
+  // category deselects it (shows nothing), same as a plain toggle would.
+  function toggleEntryExitCategory(category: EntryExitCategory) {
+    const current = evacFilters.entryExitCategories ?? ENTRY_EXIT_CATEGORIES
+    const isActive = current.includes(category)
+    const next = isActive
+      ? current.length > 1
+        ? [category]
+        : current.filter((c) => c !== category)
+      : [...current, category]
+    onFiltersChange({ ...evacFilters, entryExitCategories: next })
   }
 
   return (
@@ -744,6 +762,28 @@ export default function EvacuationModePanel({
             </div>
           </div>
         </Reveal>
+
+        {evacVisibility.entry_exit && (
+          <Reveal index={3}>
+            <div>
+              <SectionLabel>Entry/exit points</SectionLabel>
+              <div className="flex flex-wrap gap-1.5">
+                {ENTRY_EXIT_CATEGORIES.map((category) => (
+                  <Chip
+                    key={category}
+                    active={(evacFilters.entryExitCategories ?? ENTRY_EXIT_CATEGORIES).includes(
+                      category,
+                    )}
+                    onClick={() => toggleEntryExitCategory(category)}
+                  >
+                    {ENTRY_EXIT_CATEGORY_LABELS[category]}
+                    {category !== 'kumbh' && ' (no data yet)'}
+                  </Chip>
+                ))}
+              </div>
+            </div>
+          </Reveal>
+        )}
 
         {filtersActive && (
           <button

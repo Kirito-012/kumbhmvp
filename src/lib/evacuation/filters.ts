@@ -22,14 +22,44 @@ export type EvacPlan = 'Normal day' | 'Peak day'
  *  labels.ts, added in Phase 3). */
 export type EvacDirection = 'Entry' | 'Exit'
 
+/** Entry/exit points split into 3 real-world categories: the highway-level points where traffic
+ *  enters/exits the whole Kumbh area (today's entire `kumbh.entry_exit` table -- 63 points, every
+ *  one tagged 'kumbh' client-side in evacLayers.ts's setEvacEntryExitPoints, since that column
+ *  doesn't exist on the table itself), per-sector entry/exit points, and parking-lot entry/exit
+ *  points. 'sector'/'parking' have no data source yet -- their toggle exists so the UI and filter
+ *  plumbing are ready the moment that data lands, without another round of wiring. */
+export type EntryExitCategory = 'kumbh' | 'sector' | 'parking'
+
+export const ENTRY_EXIT_CATEGORIES: EntryExitCategory[] = ['kumbh', 'sector', 'parking']
+
+export const ENTRY_EXIT_CATEGORY_LABELS: Record<EntryExitCategory, string> = {
+  kumbh: 'Whole Kumbh area',
+  sector: 'Sector entry/exit',
+  parking: 'Parking entry/exit',
+}
+
 export type EvacFilters = {
   plan?: EvacPlan
   direction?: EvacDirection
   corridors?: EvacCorridor[]
+  /** Unlike `corridors`/`direction` (an optional narrowing filter -- empty/undefined both mean
+   *  "show everything"), this is a true 3-way on/off toggle: undefined means the default
+   *  all-3-on state, but an explicit empty array means the user turned every category off and
+   *  the map should show zero entry/exit points, not fall back to "no filter". See
+   *  entryExitCategoryFilterExpr below. */
+  entryExitCategories?: EntryExitCategory[]
 }
 
 export function isEvacFiltersEmpty(filters: EvacFilters): boolean {
-  return !filters.plan && !filters.direction && !(filters.corridors && filters.corridors.length > 0)
+  return (
+    !filters.plan &&
+    !filters.direction &&
+    !(filters.corridors && filters.corridors.length > 0) &&
+    !(
+      filters.entryExitCategories &&
+      filters.entryExitCategories.length < ENTRY_EXIT_CATEGORIES.length
+    )
+  )
 }
 
 // --- Map filter builders (PLAN-evacuation.md §6.3) --------------------------------------------
@@ -92,9 +122,37 @@ export function buildEvacFilters(
     if (key === 'traffic_route' && corridorExpr) parts.push(corridorExpr)
 
     result[key] =
-      parts.length === 0 ? (base ?? null) : parts.length === 1 ? parts[0] : (['all', ...parts] as unknown as FilterSpecification)
+      parts.length === 0
+        ? (base ?? null)
+        : parts.length === 1
+          ? parts[0]
+          : (['all', ...parts] as unknown as FilterSpecification)
   }
   return result
+}
+
+/** Entry/exit badge filter by category (Whole Kumbh area / Sector / Parking -- see
+ *  EntryExitCategory's own comment). Returns `null` (no filter -- show everything) once every
+ *  category is on, same as the default/untouched state; an explicit empty array correctly
+ *  produces `['any']`, which evaluates false for every feature, showing none. Deliberately NOT
+ *  folded into buildEvacFilters/DIRECTION_FIELDS above: `category` doesn't come from any real
+ *  kumbh.* column, it's a property evacLayers.ts tags onto each GeoJSON feature client-side, so
+ *  this stays a separate, dedicated builder rather than pretending it's one more data-driven
+ *  column filter like direction/corridor.
+ *
+ *  Each feature carries a `categories` ARRAY (not a single value) -- the pre-existing 63
+ *  entry/exit points have no real sector-vs-parking split yet, so evacLayers.ts tags all of them
+ *  with BOTH `['sector', 'parking']`, meaning either toggle alone shows the full existing set;
+ *  only the handful of highway-level points tagged `['kumbh']` are exclusive to "Whole Kumbh
+ *  area". Matched with `in` (array membership) rather than `==` for that reason. */
+export function entryExitCategoryFilterExpr(
+  categories: EntryExitCategory[],
+): FilterSpecification | null {
+  if (categories.length >= ENTRY_EXIT_CATEGORIES.length) return null
+  return [
+    'any',
+    ...categories.map((c) => ['in', c, ['get', 'categories']]),
+  ] as unknown as FilterSpecification
 }
 
 /** Whether traffic_route's `plan`-split layer (`'Peak day' | 'Normal day'`) should be visible

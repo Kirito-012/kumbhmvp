@@ -9,7 +9,9 @@ import { badgeIconId, makeBadgeIcon, chevronIconId, makeChevronIcon } from '@/li
 import { EVAC_COLORS, type EvacKey, type EvacTheme } from '@/lib/evacuation/layers'
 import {
   buildEvacFilters,
+  entryExitCategoryFilterExpr,
   trafficRoutePlanVisible,
+  ENTRY_EXIT_CATEGORIES,
   type EvacFilters,
 } from '@/lib/evacuation/filters'
 
@@ -803,13 +805,15 @@ export function setEvacLayersVisible(
 
 /** Applies the direction/corridor filters (PLAN-evacuation.md §6.3) to every evac-* layer whose
  *  underlying table has those columns, ANDed onto traffic_route's own permanent peak/normal
- *  split. Called whenever `evacFilters` changes.
+ *  split, plus the entry/exit category toggle (Whole Kumbh area / Sector / Parking). Called
+ *  whenever `evacFilters` changes.
  *
- *  `entry_exit` (the point badges) is deliberately NOT filtered here: it sits on a clustered
- *  geojson source, and a style `setFilter` can't change which points get clustered together in
- *  the first place (CONTEXT.md §9 "Clustering") -- doing this properly needs the server-side
- *  `?remark=` refetch path this file's own header comment and the plan's §6.3 describe, which
- *  isn't wired up yet. The Direction chip currently has no visible effect on entry/exit points. */
+ *  `entry_exit` (the point badges) only gets the category filter here, not direction/corridor:
+ *  it now sits on ENTRY_EXIT_POINTS_SOURCE, a plain unclustered geojson source (no longer the
+ *  clustered one a style `setFilter` couldn't act on -- that limitation this comment used to
+ *  describe no longer applies), so direction filtering is technically just as easy to wire up
+ *  here if ever wanted; it's left out for now since it wasn't part of the category-toggle work
+ *  that added this filter. The Direction chip still has no visible effect on entry/exit points. */
 export function applyEvacFilters(map: MLMap, filters: EvacFilters): void {
   if (!map.getLayer('evac-traffic-route-casing')) return // not created yet (canUseInsights false)
 
@@ -850,6 +854,14 @@ export function applyEvacFilters(map: MLMap, filters: EvacFilters): void {
   if (map.getLayer('evac-direction-line-arrows')) {
     map.setFilter('evac-direction-line-arrows', asFilter(plain.direction_line))
   }
+
+  if (map.getLayer('evac-entry-exit-badge')) {
+    const categoryFilter = entryExitCategoryFilterExpr(
+      filters.entryExitCategories ?? ENTRY_EXIT_CATEGORIES,
+    )
+    map.setFilter('evac-entry-exit-badge', categoryFilter)
+    map.setFilter('evac-entry-exit-hit', categoryFilter)
+  }
 }
 
 /** Feeds the two arrow geojson sources their data -- called once from MapView after
@@ -864,16 +876,34 @@ export function setEvacArrowsData(
   directionSource?.setData(data.directionLine)
 }
 
+/** ids of the highway-level whole-Kumbh-area entry/exit points added 2026-09-18 (NH-334 x
+ *  BAHADRABAD-01, NH-34 x GAURISHANKAR-07), each an Entry+Exit pair snapped onto the real road
+ *  geometry -- see setEvacEntryExitPoints's own comment for why these are the only rows tagged
+ *  'kumbh'. Extend this set (not the id RANGE) if more whole-Kumbh-area points are added later at
+ *  non-contiguous ids. */
+const WHOLE_KUMBH_ENTRY_EXIT_IDS = new Set([64, 65, 66, 67])
+
 /** Feeds evac-* mode's own unclustered entry/exit points source -- called once from MapView after
  *  its one-time `/api/poi/points/entry_exit` fetch (the same raw features Map mode's own clustered
  *  `entry_exit` source gets clustered from) resolves. See ENTRY_EXIT_POINTS_SOURCE's own comment
- *  for why this is a separate source rather than reusing that clustered one. */
+ *  for why this is a separate source rather than reusing that clustered one.
+ *
+ *  Tags every feature with a `categories` ARRAY (see entryExitCategoryFilterExpr's own comment on
+ *  why array, not a single value): the pre-existing 63 points have no real sector-vs-parking split
+ *  yet, so they're tagged with BOTH `['sector', 'parking']` -- either toggle alone shows the full
+ *  existing set, "as is", per the explicit instruction not to invent a split that doesn't exist in
+ *  the data. Only WHOLE_KUMBH_ENTRY_EXIT_IDS' rows get `['kumbh']`. */
 export function setEvacEntryExitPoints(
   map: MLMap,
   features: FeatureCollection<Point>['features'],
 ): void {
   const source = map.getSource(ENTRY_EXIT_POINTS_SOURCE) as GeoJSONSource | undefined
-  source?.setData({ type: 'FeatureCollection', features })
+  const tagged = features.map((f) => {
+    const id = f.properties?.id
+    const categories = WHOLE_KUMBH_ENTRY_EXIT_IDS.has(id) ? ['kumbh'] : ['sector', 'parking']
+    return { ...f, properties: { ...f.properties, categories } }
+  })
+  source?.setData({ type: 'FeatureCollection', features: tagged })
 }
 
 /** Feeds the zone-outline geojson source its data -- called from MapView whenever
