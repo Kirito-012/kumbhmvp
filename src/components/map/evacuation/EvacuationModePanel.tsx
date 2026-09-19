@@ -1,13 +1,22 @@
 'use client'
 
-import { Fragment, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import Panel from '@/components/map/Panel'
-import { EvacuationIcon, GridIcon, MapPinIcon, ParcelIcon, TagIcon } from '@/components/map/icons'
+import {
+  EvacuationIcon,
+  GridIcon,
+  LayersIcon,
+  MapPinIcon,
+  ParcelIcon,
+  TagIcon,
+  XIcon,
+} from '@/components/map/icons'
 import { Reveal } from '@/components/map/insights/charts'
 import SearchInput from '@/components/map/search/SearchInput'
 import SearchGroupHeader from '@/components/map/search/SearchGroupHeader'
 import SearchResultRow from '@/components/map/search/SearchResultRow'
 import {
+  EVAC_ALL_KEYS,
   EVAC_CORE_KEYS,
   EVAC_FLOOD_KEYS,
   EVAC_LAYER_LABELS,
@@ -16,8 +25,11 @@ import {
   type EvacKey,
 } from '@/lib/evacuation/layers'
 import {
+  ENTRY_EXIT_CATEGORIES,
+  ENTRY_EXIT_CATEGORY_LABELS,
   EVAC_CORRIDOR_LABELS,
   isEvacFiltersEmpty,
+  type EntryExitCategory,
   type EvacCorridor,
   type EvacDirection,
   type EvacFilters,
@@ -165,7 +177,7 @@ function Chip({
       style={{
         borderColor: active ? 'var(--map-accent)' : 'var(--map-border)',
         backgroundColor: active ? 'var(--map-accent)' : 'var(--map-input-bg)',
-        color: active ? '#fff' : 'var(--map-fg-muted)',
+        color: active ? 'var(--map-accent-on-fg)' : 'var(--map-fg-muted)',
       }}
       className="cursor-pointer rounded-full border px-2.5 py-1 text-[11.5px] font-medium transition-colors"
     >
@@ -226,7 +238,37 @@ export default function EvacuationModePanel({
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [highlightIndex, setHighlightIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const dropdownContainerRef = useRef<HTMLDivElement>(null)
   const { groups, loading, error } = useEvacuationSearch(query)
+  // Same browsable-catalogue pattern as Map mode's own unified search (MapView's
+  // searchGroups/collapsedGroups/isGroupCollapsed): the dropdown opens on focus/click even with
+  // an empty query and lists every layer catalogue group, collapsed or expanded per this set.
+  // "Evacuation layers" (the 6 core, on-by-default keys) starts expanded since it's what most
+  // sessions actually touch; the other 3 -- the ~14 mostly-off toggles that made the panel a long
+  // scroll (the original complaint) -- start collapsed.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    () => new Set(['Supporting layers', 'Flood risk', 'Base layers']),
+  )
+  function toggleCollapsedGroup(group: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(group)) next.delete(group)
+      else next.add(group)
+      return next
+    })
+  }
+
+  // Closes the dropdown on an outside click -- needed now that it opens on focus/empty-query
+  // browse (not just while actively typing a non-empty query), same as MapView's own
+  // searchDropdownRef/onPointerDown pair for its unified search.
+  useEffect(() => {
+    if (!dropdownOpen) return
+    function onPointerDown(e: PointerEvent) {
+      if (!dropdownContainerRef.current?.contains(e.target as Node)) setDropdownOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [dropdownOpen])
 
   const zoneEntries = useMemo<ZoneEntry[]>(() => {
     const byZone = new Map<string, SectorSummary[]>()
@@ -259,10 +301,87 @@ export default function EvacuationModePanel({
   const matchedZones =
     trimmed.length > 0 ? zoneEntries.filter((z) => z.zone.toLowerCase().includes(trimmed)) : []
 
+  // Layer catalogue, browsable inside the dropdown exactly like Map mode's own "Sector classes" /
+  // "Roads" / "POI layers" groups -- an empty query shows every layer (collapsed per
+  // collapsedGroups), a non-empty one narrows each group down to matching labels and force-
+  // expands every group that still has a match (same isGroupCollapsed rule MapView uses).
+  function matchesLabel(label: string): boolean {
+    return trimmed === '' || label.toLowerCase().includes(trimmed)
+  }
+  const visibleCoreKeys = EVAC_CORE_KEYS.filter((key) => matchesLabel(EVAC_LAYER_LABELS[key]))
+  const visibleSupportKeys = EVAC_SUPPORT_KEYS.filter((key) => matchesLabel(EVAC_LAYER_LABELS[key]))
+  const visibleFloodKeys = EVAC_FLOOD_KEYS.filter((key) => matchesLabel(EVAC_LAYER_LABELS[key]))
+  const visibleBaseLayers = BASE_LAYER_ROWS.filter((b) => matchesLabel(b.label))
+
+  type CatalogGroupName = 'Evacuation layers' | 'Supporting layers' | 'Flood risk' | 'Base layers'
+  const catalogGroups: Array<{ group: CatalogGroupName; rows: number }> = []
+  if (visibleCoreKeys.length > 0)
+    catalogGroups.push({ group: 'Evacuation layers', rows: visibleCoreKeys.length })
+  if (visibleSupportKeys.length > 0)
+    catalogGroups.push({ group: 'Supporting layers', rows: visibleSupportKeys.length })
+  if (visibleFloodKeys.length > 0)
+    catalogGroups.push({ group: 'Flood risk', rows: visibleFloodKeys.length })
+  if (visibleBaseLayers.length > 0)
+    catalogGroups.push({ group: 'Base layers', rows: visibleBaseLayers.length })
+
+  const catalogGroupIcon: Record<CatalogGroupName, typeof ParcelIcon> = {
+    'Evacuation layers': EvacuationIcon,
+    'Supporting layers': LayersIcon,
+    'Flood risk': GridIcon,
+    'Base layers': ParcelIcon,
+  }
+  const catalogGroupTheme: Record<CatalogGroupName, 'blue' | 'teal' | 'amber' | 'violet'> = {
+    'Evacuation layers': 'violet',
+    'Supporting layers': 'amber',
+    'Flood risk': 'blue',
+    'Base layers': 'teal',
+  }
+  function isGroupCollapsed(group: string): boolean {
+    // While actively searching, every matching group is always expanded -- collapsedGroups only
+    // governs the empty-query browse view. Matches MapView's own isGroupCollapsed exactly.
+    return trimmed === '' && collapsedGroups.has(group)
+  }
+  function selectAllKeys(keys: readonly EvacKey[]) {
+    for (const key of keys) if (!evacVisibility[key]) onToggleLayer(key)
+  }
+  function selectAllBaseLayers() {
+    for (const b of BASE_LAYER_ROWS) if (!mapVisibility[b.key]) onToggleMapLayer(b.key)
+  }
+
+  // Every layer that's currently ON, across all 4 catalogue groups -- rendered as a removable
+  // chip row right under the search box so "what's currently showing on the map" is visible at a
+  // glance without opening the dropdown. Includes the 6 core "Evacuation layers" too (on by
+  // default): the point is a complete, at-a-glance picture of what's active, not just what the
+  // user changed from default.
+  const activeLayers: Array<{ key: string; label: string; onToggle: () => void }> = [
+    ...EVAC_CORE_KEYS.filter((key) => evacVisibility[key]).map((key) => ({
+      key,
+      label: EVAC_LAYER_LABELS[key],
+      onToggle: () => onToggleLayer(key),
+    })),
+    ...EVAC_SUPPORT_KEYS.filter((key) => evacVisibility[key]).map((key) => ({
+      key,
+      label: EVAC_LAYER_LABELS[key],
+      onToggle: () => onToggleLayer(key),
+    })),
+    ...EVAC_FLOOD_KEYS.filter((key) => evacVisibility[key]).map((key) => ({
+      key,
+      label: EVAC_LAYER_LABELS[key],
+      onToggle: () => onToggleLayer(key),
+    })),
+    ...BASE_LAYER_ROWS.filter((b) => mapVisibility[b.key]).map((b) => ({
+      key: b.key,
+      label: b.label,
+      onToggle: () => onToggleMapLayer(b.key),
+    })),
+  ]
+
   const flatRows: FlatRow[] = [
     ...matchedSectors.map((sector): FlatRow => ({ kind: 'sector', sector })),
     ...matchedZones.map((entry): FlatRow => ({ kind: 'zone', entry })),
-    ...groups.flatMap((g) => g.results.map((result): FlatRow => ({ kind: 'result', layer: g.layer, result }))),
+    ...groups.flatMap((g) =>
+      g.results.map((result): FlatRow => ({ kind: 'result', layer: g.layer, result })),
+    ),
   ]
 
   function activateRow(row: FlatRow) {
@@ -315,6 +434,21 @@ export default function EvacuationModePanel({
     onFiltersChange({})
     setQuery('')
   }
+  // "Solo" click behaviour: clicking a category that's already active while more than one is
+  // active isolates it (e.g. starting from the all-3-active default, one click narrows to just
+  // that category) -- clicking an inactive category instead ADDS it, so a soloed selection can be
+  // built back up into a multi-select one click at a time. Clicking the one remaining active
+  // category deselects it (shows nothing), same as a plain toggle would.
+  function toggleEntryExitCategory(category: EntryExitCategory) {
+    const current = evacFilters.entryExitCategories ?? ENTRY_EXIT_CATEGORIES
+    const isActive = current.includes(category)
+    const next = isActive
+      ? current.length > 1
+        ? [category]
+        : current.filter((c) => c !== category)
+      : [...current, category]
+    onFiltersChange({ ...evacFilters, entryExitCategories: next })
+  }
 
   return (
     <Panel
@@ -330,7 +464,7 @@ export default function EvacuationModePanel({
       overlayOpen={dropdownOpen}
     >
       <div className="flex flex-col gap-4">
-        <div className="relative">
+        <div ref={dropdownContainerRef} className="relative">
           <SearchInput
             ref={inputRef}
             value={query}
@@ -341,21 +475,36 @@ export default function EvacuationModePanel({
             }}
             onFocus={() => setDropdownOpen(true)}
             onKeyDown={onInputKeyDown}
-            placeholder="Search exits, routes, signage, sectors, zones…"
+            placeholder="What do you want to see?"
             ariaLabel="Search evacuation layers, sectors and zones"
             combobox={{
-              expanded: dropdownOpen && trimmed.length > 0,
+              expanded: dropdownOpen,
               controls: 'evac-search-listbox',
               activeDescendant:
-                dropdownOpen && flatRows[highlightIndex] ? `evac-option-${highlightIndex}` : undefined,
+                dropdownOpen && flatRows[highlightIndex]
+                  ? `evac-option-${highlightIndex}`
+                  : undefined,
             }}
             onClear={() => {
               setQuery('')
               inputRef.current?.focus()
             }}
           />
+          {/* Collapsed, the panel is just a placeholder and 3 filter-chip rows below, which
+              advertises none of the 15 layers actually behind it. Same "name the catalogue"
+              affordance as MapView's own unified search hint line. */}
+          {!dropdownOpen && !query && (
+            <button
+              type="button"
+              onClick={() => setDropdownOpen(true)}
+              style={{ color: 'var(--map-fg-faint)' }}
+              className="mt-1.5 w-full cursor-pointer px-1 text-left text-[11px] hover:text-[var(--map-fg-muted)]"
+            >
+              {sectors.length} sectors · {EVAC_ALL_KEYS.length + BASE_LAYER_ROWS.length} layers
+            </button>
+          )}
 
-          {dropdownOpen && trimmed.length > 0 && (
+          {dropdownOpen && (
             <ul
               id="evac-search-listbox"
               role="listbox"
@@ -369,15 +518,83 @@ export default function EvacuationModePanel({
                 </li>
               )}
               {error && (
-                <li role="presentation" className="px-3 py-2 text-[12px]" style={{ color: 'var(--danger)' }}>
+                <li
+                  role="presentation"
+                  className="px-3 py-2 text-[12px]"
+                  style={{ color: 'var(--danger)' }}
+                >
                   {error}
                 </li>
               )}
-              {!loading && !error && flatRows.length === 0 && (
-                <li role="presentation" className="px-3 py-3 text-[12.5px]" style={{ color: 'var(--map-fg-faint)' }}>
-                  No evacuation features match &ldquo;{query}&rdquo;
-                </li>
-              )}
+              {!loading &&
+                !error &&
+                trimmed !== '' &&
+                flatRows.length === 0 &&
+                catalogGroups.length === 0 && (
+                  <li
+                    role="presentation"
+                    className="px-3 py-3 text-[12.5px]"
+                    style={{ color: 'var(--map-fg-faint)' }}
+                  >
+                    No matches for &ldquo;{query}&rdquo;
+                  </li>
+                )}
+              {catalogGroups.map(({ group, rows }) => {
+                const collapsed = isGroupCollapsed(group)
+                return (
+                  <li key={group} role="presentation">
+                    <SearchGroupHeader
+                      label={group}
+                      icon={catalogGroupIcon[group]}
+                      theme={catalogGroupTheme[group]}
+                      count={rows}
+                      collapsed={collapsed}
+                      onToggleCollapsed={() => toggleCollapsedGroup(group)}
+                      onSelectAll={
+                        group === 'Evacuation layers'
+                          ? () => selectAllKeys(visibleCoreKeys)
+                          : group === 'Supporting layers'
+                            ? () => selectAllKeys(visibleSupportKeys)
+                            : group === 'Flood risk'
+                              ? () => selectAllKeys(visibleFloodKeys)
+                              : selectAllBaseLayers
+                      }
+                    />
+                    {!collapsed && group === 'Base layers' && (
+                      <ul>
+                        {visibleBaseLayers.map((b) => (
+                          <li key={b.key} className="px-3">
+                            <BaseLayerRow
+                              icon={b.icon}
+                              label={b.label}
+                              on={mapVisibility[b.key]}
+                              onToggle={() => onToggleMapLayer(b.key)}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {!collapsed && group !== 'Base layers' && (
+                      <ul>
+                        {(group === 'Evacuation layers'
+                          ? visibleCoreKeys
+                          : group === 'Supporting layers'
+                            ? visibleSupportKeys
+                            : visibleFloodKeys
+                        ).map((key) => (
+                          <li key={key} className="px-3">
+                            <LayerToggleRow
+                              evacKey={key}
+                              on={evacVisibility[key]}
+                              onToggle={() => onToggleLayer(key)}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                )
+              })}
               {matchedSectors.length > 0 && (
                 <>
                   <li role="presentation">
@@ -448,17 +665,22 @@ export default function EvacuationModePanel({
                   </li>
                   {group.results.map((result) => {
                     const index = flatRows.findIndex(
-                      (r) => r.kind === 'result' && r.layer === group.layer && r.result.id === result.id,
+                      (r) =>
+                        r.kind === 'result' && r.layer === group.layer && r.result.id === result.id,
                     )
                     return (
                       <li key={`${group.layer}-${result.id}`}>
                         <SearchResultRow
                           id={`evac-option-${index}`}
                           label={result.label}
-                          sublabel={[result.sublabel, result.sectorName].filter(Boolean).join(' · ') || null}
+                          sublabel={
+                            [result.sublabel, result.sectorName].filter(Boolean).join(' · ') || null
+                          }
                           highlighted={index === highlightIndex}
                           onMouseEnter={() => setHighlightIndex(index)}
-                          onClick={() => activateRow({ kind: 'result', layer: group.layer, result })}
+                          onClick={() =>
+                            activateRow({ kind: 'result', layer: group.layer, result })
+                          }
                         />
                       </li>
                     )
@@ -468,6 +690,24 @@ export default function EvacuationModePanel({
             </ul>
           )}
         </div>
+
+        {activeLayers.length > 0 && (
+          <div className="-mt-2 flex flex-wrap gap-1.5">
+            {activeLayers.map((l) => (
+              <button
+                key={l.key}
+                type="button"
+                onClick={l.onToggle}
+                title={`Hide ${l.label}`}
+                style={{ backgroundColor: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
+                className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
+              >
+                <span className="max-w-[9rem] truncate">{l.label}</span>
+                <XIcon className="h-2.5 w-2.5 shrink-0" />
+              </button>
+            ))}
+          </div>
+        )}
 
         <Reveal index={0}>
           <div>
@@ -489,10 +729,16 @@ export default function EvacuationModePanel({
           <div>
             <SectionLabel>Direction</SectionLabel>
             <div className="flex gap-1.5">
-              <Chip active={evacFilters.direction === 'Entry'} onClick={() => toggleDirection('Entry')}>
+              <Chip
+                active={evacFilters.direction === 'Entry'}
+                onClick={() => toggleDirection('Entry')}
+              >
                 Entry
               </Chip>
-              <Chip active={evacFilters.direction === 'Exit'} onClick={() => toggleDirection('Exit')}>
+              <Chip
+                active={evacFilters.direction === 'Exit'}
+                onClick={() => toggleDirection('Exit')}
+              >
                 Exit
               </Chip>
             </div>
@@ -517,59 +763,27 @@ export default function EvacuationModePanel({
           </div>
         </Reveal>
 
-        <Reveal index={3}>
-          <div>
-            <SectionLabel>Evacuation layers</SectionLabel>
-            {EVAC_CORE_KEYS.map((key) => (
-              <LayerToggleRow
-                key={key}
-                evacKey={key}
-                on={evacVisibility[key]}
-                onToggle={() => onToggleLayer(key)}
-              />
-            ))}
-          </div>
-        </Reveal>
-        <Reveal index={4}>
-          <div>
-            <SectionLabel>Supporting layers</SectionLabel>
-            {EVAC_SUPPORT_KEYS.map((key) => (
-              <LayerToggleRow
-                key={key}
-                evacKey={key}
-                on={evacVisibility[key]}
-                onToggle={() => onToggleLayer(key)}
-              />
-            ))}
-          </div>
-        </Reveal>
-        <Reveal index={5}>
-          <div>
-            <SectionLabel>Flood risk</SectionLabel>
-            {EVAC_FLOOD_KEYS.map((key) => (
-              <LayerToggleRow
-                key={key}
-                evacKey={key}
-                on={evacVisibility[key]}
-                onToggle={() => onToggleLayer(key)}
-              />
-            ))}
-          </div>
-        </Reveal>
-        <Reveal index={6}>
-          <div>
-            <SectionLabel>Base layers</SectionLabel>
-            {BASE_LAYER_ROWS.map(({ key, label, icon }) => (
-              <BaseLayerRow
-                key={key}
-                icon={icon}
-                label={label}
-                on={mapVisibility[key]}
-                onToggle={() => onToggleMapLayer(key)}
-              />
-            ))}
-          </div>
-        </Reveal>
+        {evacVisibility.entry_exit && (
+          <Reveal index={3}>
+            <div>
+              <SectionLabel>Entry/exit points</SectionLabel>
+              <div className="flex flex-wrap gap-1.5">
+                {ENTRY_EXIT_CATEGORIES.map((category) => (
+                  <Chip
+                    key={category}
+                    active={(evacFilters.entryExitCategories ?? ENTRY_EXIT_CATEGORIES).includes(
+                      category,
+                    )}
+                    onClick={() => toggleEntryExitCategory(category)}
+                  >
+                    {ENTRY_EXIT_CATEGORY_LABELS[category]}
+                    {category !== 'kumbh' && ' (no data yet)'}
+                  </Chip>
+                ))}
+              </div>
+            </div>
+          </Reveal>
+        )}
 
         {filtersActive && (
           <button

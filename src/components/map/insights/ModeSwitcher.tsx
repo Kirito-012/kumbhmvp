@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef } from 'react'
-import { LayersIcon, TicketIcon } from '@/components/map/icons'
+import { EvacuationIcon, LayersIcon, TicketIcon } from '@/components/map/icons'
 
 export type MapMode = 'map' | 'heatmap' | 'tickets' | 'evacuation'
 
@@ -9,10 +9,10 @@ export type MapMode = 'map' | 'heatmap' | 'tickets' | 'evacuation'
 // keep meaning what they always have -- see PLAN-evacuation.md §5.2. 4 selects Evacuation.
 const SEGMENTS: { mode: MapMode; label: string; icon: typeof LayersIcon }[] = [
   { mode: 'map', label: 'Map', icon: LayersIcon },
-  // Hidden for now -- Heatmap and Evacuation mode are not ready to show yet.
+  // Hidden for now -- Heatmap mode is not ready to show yet.
   // { mode: 'heatmap', label: 'Heatmap', icon: FlameIcon },
   { mode: 'tickets', label: 'Tickets', icon: TicketIcon },
-  // { mode: 'evacuation', label: 'Evacuation', icon: EvacuationIcon },
+  { mode: 'evacuation', label: 'Evacuation', icon: EvacuationIcon },
 ]
 
 /** Per-mode indicator tint, as `--map-*` tokens (see globals.css) so it re-themes with the rest

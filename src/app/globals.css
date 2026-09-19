@@ -86,6 +86,13 @@
   --map-accent-bg: rgba(96, 165, 250, 0.18);
   --map-accent-bg-hover: rgba(96, 165, 250, 0.28);
   --map-accent-fg: #93c5fd;
+  /* Text color for a SOLID --map-accent fill (e.g. an active filter Chip) -- dark: --map-accent
+     itself (#60a5fa) is a pale, low-saturation blue chosen to pop against the dark glass panel
+     elsewhere, but that same paleness means white text on top of it only hits ~2.5:1 contrast,
+     well under WCAG AA's 4.5:1. Dark, near-black text reads clearly against it instead. Light
+     mode's --map-accent (#2563eb) is dark/saturated enough that white text already clears AA, so
+     it keeps using white. */
+  --map-accent-on-fg: #0b1220;
   --map-switch-track: #454b58;
   --map-switch-thumb: #f4f5f7;
   --map-scrollbar-thumb: rgba(255, 255, 255, 0.2);
@@ -210,6 +217,9 @@
   --map-accent-bg: #eff6ff;
   --map-accent-bg-hover: #dbeafe;
   --map-accent-fg: #1d4ed8;
+  /* Text color for a SOLID --map-accent fill -- see the dark theme's own comment on this token.
+     Light mode's --map-accent is dark/saturated enough that white clears WCAG AA already. */
+  --map-accent-on-fg: #ffffff;
   --map-switch-track: #cbd5e1;
   --map-switch-thumb: #ffffff;
   --map-scrollbar-thumb: rgba(15, 23, 42, 0.18);

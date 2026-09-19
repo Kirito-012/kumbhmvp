@@ -23,7 +23,14 @@ export const EVAC_CORE_KEYS = [
 
 /** Supporting context, off by default -- decision #5. `zone_outline` isn't a kumbh table; it's
  *  generated from `/api/evacuation/summary`'s per-zone `ST_Union` of sector_boundary (§8.2), not a
- *  tile source, but it toggles the same way as every other supporting layer. */
+ *  tile source, but it toggles the same way as every other supporting layer.
+ *
+ *  `ghat_area`/`river` were audited in against a requested evacuation-planning checklist (ghats,
+ *  water bodies/river edge) and found present in kumbh.* but never wired into this mode -- both
+ *  are already Map-mode POI_LAYER_DEFS polygon layers (classColors.ts), so adding their keys here
+ *  is enough: evacLayers.ts's LAYERS_BY_KEY maps them to `[]` (no evac-* layer of their own) and
+ *  MapView's visibilityForMode already drives ANY EVAC_SUPPORT_KEYS member through
+ *  evacVisibility, not just the original 6 -- no new rendering code needed. */
 export const EVAC_SUPPORT_KEYS = [
   'thematic_gate',
   'junction',
@@ -31,6 +38,8 @@ export const EVAC_SUPPORT_KEYS = [
   'footpath',
   'fh_location',
   'public_service_facilities',
+  'ghat_area',
+  'river',
   'zone_outline',
 ] as const
 
@@ -62,6 +71,8 @@ export const EVAC_LAYER_LABELS: Record<EvacKey, string> = {
   footpath: 'Footpaths',
   fh_location: 'Fire hydrants',
   public_service_facilities: 'Public service facilities',
+  ghat_area: 'Ghats',
+  river: 'Water bodies (river)',
   zone_outline: 'Zone outlines',
   hfl_area: 'Flood risk areas',
   hfl_line: 'Flood lines',
@@ -81,6 +92,13 @@ export function defaultEvacVisibility(): Record<EvacKey, boolean> {
     ...Object.fromEntries(EVAC_CORE_KEYS.map((k) => [k, true])),
     ...Object.fromEntries(EVAC_SUPPORT_KEYS.map((k) => [k, false])),
     ...Object.fromEntries(EVAC_FLOOD_KEYS.map((k) => [k, false])),
+    // Overrides 3 of the 6 core keys back off -- on a first open these three (moving traffic,
+    // location-entry pins, emergency exits) made the map busy enough to obscure the entry/exit
+    // points and routes the mode exists to show. Still core keys (still searchable/toggleable
+    // in the Evacuation layers group same as the other 3), just not pre-enabled.
+    traffic_route: false,
+    location_entry: false,
+    emergency_exit: false,
   } as Record<EvacKey, boolean>
 }
 
