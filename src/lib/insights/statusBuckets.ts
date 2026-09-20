@@ -34,8 +34,8 @@ export const BUCKET_LABELS: Record<StatusBucket, string> = {
 }
 
 export const BUCKET_COLORS: Record<StatusBucket, { light: string; dark: string }> = {
-  new: { light: '#2563eb', dark: '#60a5fa' },
-  progress: { light: '#d97706', dark: '#fbbf24' },
-  resolved: { light: '#059669', dark: '#34d399' },
-  closed: { light: '#64748b', dark: '#94a3b8' },
+  new: { light: '#1d6fe0', dark: '#38a3ff' },
+  progress: { light: '#ca8a04', dark: '#ffc933' },
+  resolved: { light: '#16a34a', dark: '#22c55e' },
+  closed: { light: '#dc2626', dark: '#ff5a5f' },
 }

@@ -9,10 +9,10 @@ import {
 import type { InsightsStatusRow, InsightsTicketTuple } from './types'
 
 const statuses: InsightsStatusRow[] = [
-  { slug: 'new', name: 'New', bucket: 'new', color: '#2563eb' },
+  { slug: 'new', name: 'New', bucket: 'new', color: '#1d6fe0' },
   { slug: 'in-progress', name: 'In progress', bucket: 'progress', color: '#d97706' },
-  { slug: 'resolved', name: 'Resolved', bucket: 'resolved', color: '#059669' },
-  { slug: 'closed', name: 'Closed', bucket: 'closed', color: '#64748b' },
+  { slug: 'resolved', name: 'Resolved', bucket: 'resolved', color: '#16a34a' },
+  { slug: 'closed', name: 'Closed', bucket: 'closed', color: '#dc2626' },
 ]
 const priorities = [
   { slug: 'low', name: 'Low', color: '#94a3b8', order: 0 },

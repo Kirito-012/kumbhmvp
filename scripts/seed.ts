@@ -97,12 +97,12 @@ const ROLES = [
 ] as const
 
 const STATUSES = [
-  { name: 'New', slug: 'new', color: '#818cf8', order: 0, isResolved: false, isDefault: true },
-  { name: 'Open', slug: 'open', color: '#10b981', order: 1, isResolved: false, isDefault: false },
+  { name: 'New', slug: 'new', color: '#38a3ff', order: 0, isResolved: false, isDefault: true },
+  { name: 'Open', slug: 'open', color: '#ffc933', order: 1, isResolved: false, isDefault: false },
   {
     name: 'Pending',
     slug: 'pending',
-    color: '#f59e0b',
+    color: '#f5a623',
     order: 2,
     isResolved: false,
     isDefault: false,
@@ -110,7 +110,7 @@ const STATUSES = [
   {
     name: 'Resolved',
     slug: 'resolved',
-    color: '#34d399',
+    color: '#22c55e',
     order: 3,
     isResolved: true,
     isDefault: false,
@@ -118,7 +118,7 @@ const STATUSES = [
   {
     name: 'Closed',
     slug: 'closed',
-    color: '#6b7280',
+    color: '#ff5a5f',
     order: 4,
     isResolved: true,
     isDefault: false,

@@ -23,6 +23,9 @@ export function readableTextOn(hex: string): string {
 // are already fine and don't need it).
 const SOLID_FILL_COLOR_OVERRIDES: Record<string, string> = {
   '#34d399': '#047a54', // "Resolved" status -- matches statusSolidStyles.resolved in Badge.tsx
+  '#22c55e': '#047a54', // "Resolved" status (current seed colour)
+  '#38a3ff': '#1d64d8', // "New" status
+  '#ff5a5f': '#c62828', // "Closed" status
   '#10b981': '#047a54', // --accent, used as the dashboard sector filter's solid fill
 }
 

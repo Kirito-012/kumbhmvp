@@ -35,11 +35,11 @@ export function PriorityBadge({ priority, className }: { priority: Priority; cla
 }
 
 const statusStyles: Record<Status, string> = {
-  new: 'bg-violet-soft text-violet ring-1 ring-inset ring-violet/20',
-  open: 'bg-info-soft text-info ring-1 ring-inset ring-info/20',
+  new: 'bg-info-soft text-info ring-1 ring-inset ring-info/20',
+  open: 'bg-warning-soft text-warning ring-1 ring-inset ring-warning/20',
   pending: 'bg-warning-soft text-warning ring-1 ring-inset ring-warning/20',
   resolved: 'bg-accent-soft text-accent-strong ring-1 ring-inset ring-accent/20',
-  closed: 'bg-overlay text-muted ring-1 ring-inset ring-overlay-strong',
+  closed: 'bg-danger-soft text-danger ring-1 ring-inset ring-danger/20',
 }
 
 /** Solid-fill counterpart of `statusStyles`, e.g. for an active filter tab where the status's
@@ -48,14 +48,13 @@ const statusStyles: Record<Status, string> = {
  *  not as fill backgrounds -- several fail WCAG AA against white text once used as a solid fill
  *  (worst case: violet in dark mode is ~3:1). So these use fixed, deliberately deeper shades in
  *  the same hue family, calibrated for >=4.5:1 with white text in both themes, rather than the
- *  raw tokens. `closed` has no distinct brand colour (it's the neutral/muted status) so it
- *  solidifies the overlay tokens instead of introducing a one-off grey. */
+ *  raw tokens. */
 export const statusSolidStyles: Record<Status, string> = {
-  new: 'bg-[#5b52d6] text-white',
-  open: 'bg-[#1d64d8] text-white',
+  new: 'bg-[#1d64d8] text-white',
+  open: 'bg-[#a85d00] text-white',
   pending: 'bg-[#a85d00] text-white',
   resolved: 'bg-[#047a54] text-white',
-  closed: 'bg-overlay-strong text-foreground',
+  closed: 'bg-[#c62828] text-white',
 }
 
 const statusLabel: Record<Status, string> = {

@@ -41,6 +41,7 @@ jobs:
         run: npm run build
         env:
           NEXT_PUBLIC_MAPTILER_KEY: ${{ secrets.NEXT_PUBLIC_MAPTILER_KEY }}
+          NEXT_PUBLIC_ARCGIS_API_KEY: ${{ secrets.NEXT_PUBLIC_ARCGIS_API_KEY }}
 
       - name: Assemble the standalone server
         # next.config.ts sets output:'standalone', so the build emits .next/standalone
@@ -107,6 +108,7 @@ jobs:
           PORT=3987 HOSTNAME=127.0.0.1 AUTH_TRUST_HOST=true \
             NEXTAUTH_SECRET=smoke NEXTAUTH_URL=http://127.0.0.1:3987 \
             NEXT_PUBLIC_MAPTILER_KEY=smoke \
+            NEXT_PUBLIC_ARCGIS_API_KEY=smoke \
             node server.js > /tmp/smoke-server.log 2>&1 &
           server_pid=$!
           trap 'kill $server_pid 2>/dev/null || true' EXIT
