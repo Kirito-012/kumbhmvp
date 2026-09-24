@@ -2,15 +2,11 @@ import { Topbar } from '@/components/layout/Topbar'
 import { Card } from '@/components/ui/Card'
 import { NewTicketForm } from '@/components/tickets/NewTicketForm'
 import { dbConnect } from '@/server/db/connect'
-import { TicketTypeModel } from '@/server/db/models/ticket-type.model'
-import { TicketPriorityModel } from '@/server/db/models/ticket-priority.model'
+import { getPriorities, getTypes } from '@/server/services/lookups'
 
 export default async function NewTicketPage() {
   await dbConnect()
-  const [types, priorities] = await Promise.all([
-    TicketTypeModel.find({ isActive: true }).sort({ name: 1 }).lean(),
-    TicketPriorityModel.find().sort({ order: 1 }).lean(),
-  ])
+  const [types, priorities] = await Promise.all([getTypes(), getPriorities()])
 
   return (
     <>

@@ -25,6 +25,7 @@ export function NotificationBell() {
   const [isPending, startTransition] = useTransition()
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const position = usePopoverPosition(triggerRef, open, 'right')
 
   const refresh = useCallback(async () => {
@@ -40,10 +41,38 @@ export function NotificationBell() {
   // eslint-disable-next-line react-hooks/set-state-in-effect -- SSR/hydration guard before the portal can touch document.body, same pattern as ui/Select.tsx
   useEffect(() => setMounted(true), [])
 
+  // Poll only while the tab is actually visible, and re-sync immediately on becoming visible again
+  // so the badge is never stale when the user comes back. Same pattern, and the same reason, as
+  // DashboardAutoRefresh -- but this one runs on *every* page, so without the gate a backgrounded
+  // tab left open overnight fired ~2,880 polls, each of which is 5 DB round trips (~271ms measured)
+  // including an unindexed read of the append-only ticketevents collection.
   useEffect(() => {
+    const start = () => {
+      if (timerRef.current) return
+      timerRef.current = setInterval(refresh, POLL_INTERVAL_MS)
+    }
+    const stop = () => {
+      if (!timerRef.current) return
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stop()
+      } else {
+        refresh()
+        start()
+      }
+    }
+
     refresh()
-    const interval = setInterval(refresh, POLL_INTERVAL_MS)
-    return () => clearInterval(interval)
+    if (!document.hidden) start()
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      stop()
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
   }, [refresh])
 
   useEffect(() => {

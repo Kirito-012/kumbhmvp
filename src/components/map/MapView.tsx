@@ -1,9 +1,10 @@
 'use client'
 
 import { Fragment, useEffect, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import type { Feature, Point } from 'geojson'
-import { clusterPoints } from '@/lib/poiClustering'
+import { clusterPoints, CLUSTER_MAX_ZOOM } from '@/lib/poiClustering'
 import { badgeIconId, makeBadgeIcon } from '@/lib/mapBadgeIcon'
 import {
   Map as MLMap,
@@ -47,8 +48,22 @@ import StatsPanel from '@/components/map/StatsPanel'
 import SectorReportDrawer from '@/components/map/SectorReportDrawer'
 import Panel from '@/components/map/Panel'
 import ModeSwitcher, { type MapMode } from '@/components/map/insights/ModeSwitcher'
-import InsightsModePanel from '@/components/map/insights/InsightsModePanel'
-import InsightsPanel from '@/components/map/insights/InsightsPanel'
+
+// The four mode panels are loaded on demand. Between them they own every recharts import in the map
+// route (~112 KB gzipped via insights/charts.tsx) plus ~2,900 lines of panel code, none of which
+// renders in Map mode -- the default, and the only mode a Surveyor can reach at all (canUseInsights
+// is false for them). The render gates below already scope each panel to its own mode; before this
+// only the *import* was eager, so every visitor paid for all four.
+//
+// `ssr: false` on all four: they are client-only panels that read localStorage/viewport and mount
+// against the live map, and Map mode is what the server renders anyway. ModeSwitcher stays static --
+// it is small and always visible, and it is what the user clicks to pull a panel's chunk in.
+const InsightsModePanel = dynamic(() => import('@/components/map/insights/InsightsModePanel'), {
+  ssr: false,
+})
+const InsightsPanel = dynamic(() => import('@/components/map/insights/InsightsPanel'), {
+  ssr: false,
+})
 import { useTicketInsights } from '@/components/map/insights/useTicketInsights'
 import {
   addInsightLayers,
@@ -91,7 +106,7 @@ import {
   BUCKET_COLORS,
   type StatusBucket,
 } from '@/lib/insights/statusBuckets'
-import { useInsightTheme } from '@/components/map/insights/charts'
+import { useInsightTheme } from '@/components/map/insights/useInsightTheme'
 import type { InsightsTicketData } from '@/lib/insights/types'
 import {
   ChartBarIcon,
@@ -108,8 +123,13 @@ import {
   UndoIcon,
   XIcon,
 } from '@/components/map/icons'
-import EvacuationModePanel from '@/components/map/evacuation/EvacuationModePanel'
-import EvacuationPanel from '@/components/map/evacuation/EvacuationPanel'
+const EvacuationModePanel = dynamic(
+  () => import('@/components/map/evacuation/EvacuationModePanel'),
+  { ssr: false },
+)
+const EvacuationPanel = dynamic(() => import('@/components/map/evacuation/EvacuationPanel'), {
+  ssr: false,
+})
 import SearchInput from '@/components/map/search/SearchInput'
 import SearchGroupHeader from '@/components/map/search/SearchGroupHeader'
 import { PhotoLightbox } from '@/components/tickets/PhotoLightbox'
@@ -1191,9 +1211,9 @@ async function refetchClusteredPoiSource(
   layerKey: string,
   subs: string[] | undefined,
   rawFeaturesRef: React.RefObject<Record<string, Feature<Point>[]>>,
-) {
+): Promise<boolean> {
   const source = map.getSource(layerKey) as GeoJSONSource | undefined
-  if (!source) return
+  if (!source) return false
 
   const token = (poiSourceFetchTokens[layerKey] ?? 0) + 1
   poiSourceFetchTokens[layerKey] = token
@@ -1206,13 +1226,20 @@ async function refetchClusteredPoiSource(
 
   try {
     const res = await fetch(url)
+    if (!res.ok) throw new Error(`Request failed: ${res.status}`)
     const data: { features: Feature<Point>[] } = await res.json()
-    if (poiSourceFetchTokens[layerKey] !== token) return // superseded by a newer request
+    // Superseded by a newer request for the same layer: that one owns the source now, and it will
+    // report its own outcome, so this counts as handled rather than failed.
+    if (poiSourceFetchTokens[layerKey] !== token) return true
     rawFeaturesRef.current[layerKey] = data.features
     source.setData(clusterPoints(data.features, map.getZoom(), 40, CLUSTER_TAG_PROPERTY[layerKey]))
+    return true
   } catch {
     // Network hiccup -- leave the source showing its last-known data rather
-    // than clearing it out from under the user.
+    // than clearing it out from under the user. The `false` matters for the on-demand loader
+    // (ensurePoiPoints in initMap): a layer whose first fetch failed must not stay marked as
+    // loaded, or toggling it off and on again would never retry and it would paint nothing forever.
+    return false
   }
 }
 
@@ -1728,12 +1755,13 @@ export default function MapView({
       })),
     })
   }, [sectors, mapReady])
-  // Sub-class names + counts per class_group, for the left panel's search
-  // tree -- fetched independently of StatsPanel's own /api/stats call (same
-  // self-fetching pattern as `sectors` above) rather than threading it down.
-  // Re-fetched whenever selectedSector changes so counts here match the
-  // Stats panel's own sector-scoped numbers instead of always showing every
-  // sector's total.
+  // Sub-class names + counts per class_group, for the left panel's search tree -- handed up from
+  // StatsPanel's own /api/stats response via its onStats callback, so the two panels share one
+  // request. This used to be a second, identical fetch right here: both effects built the same URL
+  // from the same selected sector, so every map load and every sector click ran /api/stats' 7
+  // PostGIS aggregates (including a 45-table UNION ALL and ST_Area over sector_plan) twice.
+  // StatsPanel re-fetches on every sectorNo change, so these counts still track the selected
+  // sector exactly as before.
   const [subclassStats, setSubclassStats] = useState<
     // subclass can be null -- see the comment where it's read in the search panel below for why.
     { class_group: string; subclass: string | null; features: number }[]
@@ -1870,6 +1898,13 @@ export default function MapView({
   useEffect(() => {
     visibilityRef.current = visibility
   }, [visibility])
+  /** Point-layer datasets already requested from /api/poi/points/[layer], so each is fetched at most
+   *  once per session -- see ensurePoiPoints in initMap for why they load on demand at all. */
+  const poiPointsRequestedRef = useRef<Set<string>>(new Set())
+  /** initMap's own ensurePoiPoints, exposed so the visibility effect below can reach it: it closes
+   *  over the `map` instance and the pointDefs built inside the one-time 'load' handler, the same
+   *  reason insightsDataRef and friends exist. */
+  const ensurePoiPointsRef = useRef<((keys: readonly string[]) => void) | null>(null)
   /** Same staleness reason as visibilityRef, for evacVisibility's own store. */
   const evacVisibilityRef = useRef<Record<EvacKey, boolean>>(evacVisibility)
   useEffect(() => {
@@ -2337,17 +2372,6 @@ export default function MapView({
     }
   }, [basemap])
 
-  useEffect(() => {
-    const url = selectedSector !== 'all' ? `/api/stats?sector=${selectedSector}` : '/api/stats'
-    fetch(url)
-      .then((r) => r.json())
-      .then((data) => {
-        setSubclassStats(data.bySubclass ?? [])
-        setPoiSubclassStats(data.poiBySubclass ?? [])
-      })
-      .catch(() => {})
-  }, [selectedSector])
-
   // Applies the real localStorage-persisted visibility/expanded state after
   // mount, once hydration (which needs the SSR-matching defaults above) has
   // already reconciled. Runs once; the effects below take over persisting
@@ -2599,6 +2623,17 @@ export default function MapView({
     }${escapeHtml(label)}</span>`
   }
 
+  /** A Cloudinary delivery transform for the popup's photo thumbnails, mirroring SitePhotos.tsx's
+   *  own `f_auto,q_auto,w_600` rewrite. Uploads are client-compressed to a 1600px long edge at
+   *  JPEG q=0.8 (src/lib/image-compress.ts), i.e. roughly 200-500 KB each, and the popup paints two
+   *  of them into ~60 CSS px boxes -- so the untransformed URL fetched the better part of a
+   *  megabyte per parcel click to fill about 1% of those pixels. 160px covers the box at 2x DPR.
+   *  A URL that isn't a Cloudinary delivery URL is returned untouched; the lightbox (PhotoLightbox,
+   *  opened from these same thumbnails) deliberately still loads the full-size original. */
+  function popupThumbUrl(url: string) {
+    return url.replace('/upload/', '/upload/f_auto,q_auto,w_160,c_fill/')
+  }
+
   // Every parcel popup (every mode -- see showPopup) renders this: badges, before/after photo
   // thumbnails (clickable, opens PhotoLightbox via the popup's click delegation), questionnaire-
   // attempted status, and assignee/due date.
@@ -2621,7 +2656,7 @@ export default function MapView({
               .map(
                 (photo, i) =>
                   `<div data-popup-photo-index="${i}" style="cursor:pointer;flex:1;min-width:0;border-radius:10px;overflow:hidden;position:relative;aspect-ratio:4/3;background-color:var(--map-popup-row-border)">
-                    <img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.phase)} site photo" style="width:100%;height:100%;object-fit:cover;display:block" />
+                    <img src="${escapeHtml(popupThumbUrl(photo.url))}" alt="${escapeHtml(photo.phase)} site photo" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;display:block" />
                     <span style="position:absolute;left:4px;bottom:4px;padding:1px 6px;border-radius:999px;font-size:9.5px;font-weight:700;text-transform:capitalize;background-color:rgba(0,0,0,0.55);color:#fff">${escapeHtml(photo.phase)}</span>
                   </div>`,
               )
@@ -3625,8 +3660,16 @@ export default function MapView({
       // zoom-fixed world-pixel grid (not viewport-relative), so panning
       // alone never changes which points belong to which cluster.
       const pointDefs = byGeomType('point')
+      // Skips the re-cluster entirely when the zoom crossed no clustering boundary. Past
+      // CLUSTER_MAX_ZOOM clusterPoints returns its input unchanged (poiClustering.ts), so every
+      // zoomend above that used to hand MapLibre an identical FeatureCollection per loaded layer via
+      // setData() -- which still re-indexes the source -- for a guaranteed no-op result.
+      let lastClusterZoom: number | null = null
       function syncPoiClusters() {
         const zoom = map.getZoom()
+        const above = zoom >= CLUSTER_MAX_ZOOM
+        if (lastClusterZoom !== null && above && lastClusterZoom >= CLUSTER_MAX_ZOOM) return
+        lastClusterZoom = zoom
         for (const def of pointDefs) {
           const raw = poiRawFeaturesRef.current[def.key]
           if (!raw) continue
@@ -3634,24 +3677,62 @@ export default function MapView({
           source?.setData(clusterPoints(raw, zoom, 40, CLUSTER_TAG_PROPERTY[def.key]))
         }
       }
-      Promise.all(
-        pointDefs.map((def) =>
-          fetch(`${location.origin}/api/poi/points/${def.key}`)
-            .then((r) => r.json())
-            .then((fc: { features: Feature<Point>[] }) => {
-              poiRawFeaturesRef.current[def.key] = fc.features
-            })
-            .catch(() => {
-              poiRawFeaturesRef.current[def.key] = []
-            }),
-        ),
-      ).then(() => {
-        syncPoiClusters()
-        // Evacuation mode's own entry/exit badges never cluster (see ENTRY_EXIT_POINTS_SOURCE's
-        // comment in evacLayers.ts) -- fed the same raw features entry_exit's clustered Map-mode
-        // source above was just built from, once, since they never need re-clustering on zoom.
-        setEvacEntryExitPoints(map, poiRawFeaturesRef.current.entry_exit ?? [])
-      })
+      // Loads one point layer's raw dataset on demand and clusters it in. This used to be an
+      // unconditional Promise.all over all 23 point layers on every cold map load -- 23 HTTP
+      // requests, each a full-table jsonb_agg GeoJSON build in /api/poi/points/[layer], for data
+      // that rendered nothing, because defaultVisibility() starts every POI layer OFF. Now a layer's
+      // data arrives the first time something actually asks to show it (the visibility effect below,
+      // or a sub-class refetch), keyed off poiPointsRequestedRef so it is fetched at most once.
+      //
+      // Routed through refetchClusteredPoiSource rather than a bare fetch so the initial load and
+      // the sub-class-scoped refetch share one code path -- including its per-layer monotonic token,
+      // which is what keeps a slow first load from clobbering a newer filtered result. It also means
+      // a layer first shown while a sub-class filter is already active fetches the narrowed dataset
+      // straight away, which matters because a clustered source's point_count can't be corrected by
+      // a style filter afterwards (see the poiSubclassFilter effect).
+      function ensurePoiPoints(keys: readonly string[]) {
+        for (const key of keys) {
+          if (poiPointsRequestedRef.current.has(key)) continue
+          poiPointsRequestedRef.current.add(key)
+          void refetchClusteredPoiSource(
+            map,
+            key,
+            poiSubclassFilterRef.current[key],
+            poiRawFeaturesRef,
+          ).then((ok) => {
+            if (!ok) {
+              // Un-mark on failure so the next thing that shows this layer tries again. Marking
+              // before the await is deliberate -- it is what stops two near-simultaneous callers
+              // racing the same request -- but leaving the mark on a failure would strand the layer
+              // empty for the rest of the session, with no console error to explain it.
+              poiPointsRequestedRef.current.delete(key)
+              return
+            }
+            if (key === 'entry_exit') {
+              // Evacuation mode's own entry/exit badges never cluster (see ENTRY_EXIT_POINTS_SOURCE's
+              // comment in evacLayers.ts) -- fed the same raw features entry_exit's clustered
+              // Map-mode source was just built from, since they never need re-clustering on zoom.
+              setEvacEntryExitPoints(map, poiRawFeaturesRef.current.entry_exit ?? [])
+            }
+          })
+        }
+      }
+      ensurePoiPointsRef.current = ensurePoiPoints
+
+      // entry_exit is the one layer still loaded eagerly: Evacuation mode's non-clustered EN/EXT
+      // badges are fed from its raw features by the callback above, and that mode can be entered by
+      // a `?mode=evacuation` cold link before any visibility effect has run.
+      ensurePoiPoints([
+        'entry_exit',
+        ...pointDefs
+          .map((d) => d.key)
+          .filter(
+            (key) =>
+              visibilityForMode(visibilityRef.current, modeRef.current, evacVisibilityRef.current)[
+                key
+              ],
+          ),
+      ])
       map.on('zoomend', syncPoiClusters)
 
       // Invisible hit-target covering each sector's full boundary polygon
@@ -4684,7 +4765,24 @@ export default function MapView({
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
-    applyLayerVisibility(map, visibilityForMode(visibility, mode, evacVisibility))
+    const effective = visibilityForMode(visibility, mode, evacVisibility)
+    // Pull in the raw dataset for any clustered point layer that just became visible -- the
+    // counterpart to initMap dropping the unconditional 23-layer prefetch (see ensurePoiPoints
+    // there). Runs before applyLayerVisibility so the fetch is already in flight while MapLibre
+    // flips the layer on; until it resolves the source holds its empty initial FeatureCollection, so
+    // the layer simply paints nothing rather than erroring. Both Map mode's own toggles and
+    // Evacuation mode's supporting-layer toggles land here, since `effective` is what
+    // visibilityForMode already resolved from both stores.
+    ensurePoiPointsRef.current?.(
+      POI_LAYER_DEFS.filter((d) => d.geomType === 'point' && effective[d.key]).map((d) => d.key),
+    )
+    applyLayerVisibility(map, effective)
+    // applyLayerVisibility ties the class hairline to the Sector plan toggle; Ticket mode shows it
+    // unconditionally (see the sector/class filter effect), so re-assert that here too or a
+    // toggle-only rerun of this effect would hide it again.
+    if (mode === 'tickets' && map.getLayer('sector-plan-class-outline')) {
+      map.setLayoutProperty('sector-plan-class-outline', 'visibility', 'visible')
+    }
     setInsightLayersVisible(map, mode === 'heatmap')
     setTicketLayersVisible(map, mode === 'tickets')
     setInsightLabelVisible(map, mode === 'tickets')
@@ -5143,8 +5241,13 @@ export default function MapView({
     // (see SECTOR_FILL_OPACITY's note) -- it must track the exact same
     // filter or a filtered-out parcel would keep its coloured edge with no
     // fill behind it, reading as a ghost outline.
+    // Ticket mode shows every parcel's hairline regardless of Map mode's own sector/class
+    // filters, since its ticket fill/outline layers aren't filtered by them either.
     if (map.getLayer('sector-plan-class-outline')) {
-      map.setFilter('sector-plan-class-outline', finalFilter as FilterSpecification | null)
+      map.setFilter(
+        'sector-plan-class-outline',
+        mode === 'tickets' ? null : (finalFilter as FilterSpecification | null),
+      )
     }
 
     // Visual emphasis (glow + outline) tracks the exact same combined
@@ -5190,11 +5293,13 @@ export default function MapView({
         sectorFillOpacityForMode(readMapTheme(), mode),
       )
     }
+    // Ticket mode keeps the class wash off (its status fill is the only area colour there) but
+    // always shows the parcel hairline, so parcels without a ticket still read as distinct shapes.
     if (map.getLayer('sector-plan-class-outline')) {
       map.setLayoutProperty(
         'sector-plan-class-outline',
         'visibility',
-        showClassWash ? 'visible' : 'none',
+        showClassWash || mode === 'tickets' ? 'visible' : 'none',
       )
     }
     if (map.getLayer('sector-plan-hit-target')) {
@@ -5329,6 +5434,11 @@ export default function MapView({
         const isClustered = POI_LAYER_DEFS.find((d) => d.key === layerKey)?.geomType === 'point'
 
         if (isClustered) {
+          // Only layers whose data has already been requested (i.e. something showed them at some
+          // point -- see ensurePoiPoints in initMap). A sub-class selection made while the layer is
+          // still hidden needs no request: ensurePoiPoints reads poiSubclassFilterRef when the layer
+          // is first shown, so it fetches the narrowed dataset directly.
+          if (!poiPointsRequestedRef.current.has(layerKey)) continue
           // amenities/sanitation are clustered point layers (see initMap) --
           // clustering happens client-side over the layer's full raw dataset
           // (clusterPoints in src/lib/poiClustering.ts), so a cluster's
@@ -7040,6 +7150,10 @@ export default function MapView({
       {mode === 'map' ? (
         <StatsPanel
           icon={<ChartBarIcon className="h-full w-full" />}
+          onStats={(data) => {
+            setSubclassStats(data.bySubclass)
+            setPoiSubclassStats(data.poiBySubclass)
+          }}
           sectorNo={selectedSector === 'all' ? null : selectedSector}
           sectorLabel={
             selectedSector !== 'all'

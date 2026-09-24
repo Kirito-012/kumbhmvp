@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { getPool } from '@/server/db/postgres'
+import { SEARCH_CACHE_HEADERS } from '@/server/http/cache'
 import { getCurrentUser } from '@/server/auth/session'
 import { defineAbilityFor } from '@/server/auth/ability'
 import {
@@ -211,7 +212,11 @@ export async function GET(req: NextRequest) {
     }),
   )
 
-  return Response.json({
-    groups: results.filter((g) => g.results.length > 0),
-  })
+  // A short `private` window: search is typed, so backspacing to a prefix already requested (or
+  // re-running the same query after a filter change) is common, and each miss is 13 parallel
+  // Postgres queries. Never `public` -- like every other route in this mode it is ability-gated.
+  return Response.json(
+    { groups: results.filter((g) => g.results.length > 0) },
+    { headers: SEARCH_CACHE_HEADERS },
+  )
 }

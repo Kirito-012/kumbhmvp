@@ -1,4 +1,5 @@
 import { getPool } from '@/server/db/postgres'
+import { GIS_CACHE_HEADERS } from '@/server/http/cache'
 
 export const runtime = 'nodejs'
 
@@ -12,5 +13,5 @@ export async function GET() {
     FROM kumbh.sector_boundary
     ORDER BY sector_no;
   `)
-  return Response.json(rows)
+  return Response.json(rows, { headers: GIS_CACHE_HEADERS })
 }

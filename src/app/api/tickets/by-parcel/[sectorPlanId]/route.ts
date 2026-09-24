@@ -1,5 +1,6 @@
 import { getTicketByParcelId, getTicketPopupExtras } from '@/server/services/ticket.service'
 import { toAttachmentView, toPerson } from '@/lib/ticket-view'
+import { TICKET_POPUP_CACHE_HEADERS } from '@/server/http/cache'
 
 export const runtime = 'nodejs'
 
@@ -12,7 +13,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ sectorPl
 
   const ticket = await getTicketByParcelId(id)
   if (!ticket) {
-    return Response.json({ ticket: null })
+    return Response.json({ ticket: null }, { headers: TICKET_POPUP_CACHE_HEADERS })
   }
 
   const status = ticket.statusId as unknown as { name: string; color: string } | null
@@ -24,22 +25,25 @@ export async function GET(req: Request, { params }: { params: Promise<{ sectorPl
   const rich = new URL(req.url).searchParams.get('rich') === '1'
   const extras = rich ? await getTicketPopupExtras(String(ticket._id)) : null
 
-  return Response.json({
-    ticket: {
-      number: ticket.number,
-      subject: ticket.subject,
-      status: status ? { name: status.name, color: status.color } : null,
-      priority: priority ? { name: priority.name, color: priority.color } : null,
-      ...(extras
-        ? {
-            assignee: toPerson(ticket.assigneeId),
-            dueDate: ticket.dueDate ? new Date(ticket.dueDate).toISOString() : null,
-            photos: [extras.beforePhoto, extras.afterPhoto]
-              .filter((p) => p !== null)
-              .map(toAttachmentView),
-            questionnaireCount: extras.questionnaireCount,
-          }
-        : null),
+  return Response.json(
+    {
+      ticket: {
+        number: ticket.number,
+        subject: ticket.subject,
+        status: status ? { name: status.name, color: status.color } : null,
+        priority: priority ? { name: priority.name, color: priority.color } : null,
+        ...(extras
+          ? {
+              assignee: toPerson(ticket.assigneeId),
+              dueDate: ticket.dueDate ? new Date(ticket.dueDate).toISOString() : null,
+              photos: [extras.beforePhoto, extras.afterPhoto]
+                .filter((p) => p !== null)
+                .map(toAttachmentView),
+              questionnaireCount: extras.questionnaireCount,
+            }
+          : null),
+      },
     },
-  })
+    { headers: TICKET_POPUP_CACHE_HEADERS },
+  )
 }

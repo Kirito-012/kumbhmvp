@@ -9,9 +9,8 @@ import {
   countTicketsByStatus,
   getLocationFilterOptions,
 } from '@/server/services/ticket.service'
-import { TicketPriorityModel } from '@/server/db/models/ticket-priority.model'
-import { TicketStatusModel } from '@/server/db/models/ticket-status.model'
 import { UserModel } from '@/server/db/models/user.model'
+import { getPriorities, getStatuses } from '@/server/services/lookups'
 import { dbConnect } from '@/server/db/connect'
 import { toTicketListItem } from '@/lib/ticket-view'
 import { cn } from '@/lib/utils'
@@ -58,8 +57,8 @@ export default async function TicketsPage({
     await Promise.all([
       listTickets(params),
       countTicketsByStatus(forcedAssigneeId),
-      TicketPriorityModel.find().sort({ order: 1 }).lean(),
-      TicketStatusModel.find().sort({ order: 1 }).lean(),
+      getPriorities(),
+      getStatuses(),
       canAssign
         ? UserModel.find({ isActive: true, deletedAt: null }).select('fullname email').lean()
         : Promise.resolve([]),

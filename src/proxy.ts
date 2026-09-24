@@ -39,6 +39,12 @@ export const config = {
   // purely to read the session cookie for route guarding; letting it also intercept
   // /api/auth/* makes it try to dispatch sign-in/callback/session actions itself,
   // which it can't do without providers — that surfaces as `UnknownAction` errors
-  // and breaks login entirely.
-  matcher: ['/((?!api/auth|_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt).*)'],
+  // and breaks login entirely. `api/auth` stays first and unchanged.
+  //
+  // The vendored map assets in public/ are excluded for the same reason _next/static is: they are
+  // static files with no session to guard, and the map fetches ~593 KB across them on every load,
+  // each request otherwise costing a middleware invocation and a JWT decode for nothing.
+  matcher: [
+    '/((?!api/auth|_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|maplibre-gl-worker\.mjs|maplibre-gl-shared\.mjs|.*-style\.json).*)',
+  ],
 }
