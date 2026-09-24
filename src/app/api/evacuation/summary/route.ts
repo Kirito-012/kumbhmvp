@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { getPool } from '@/server/db/postgres'
+import { GIS_PRIVATE_CACHE_HEADERS } from '@/server/http/cache'
 import { getCurrentUser } from '@/server/auth/session'
 import { defineAbilityFor } from '@/server/auth/ability'
 import {
@@ -89,7 +90,10 @@ const FEATURE_LIST_LAYERS: Record<
  *  the `type` values actually present in kumbh.public_service_facilities (checked 2026-09-15). */
 const CARE_TYPES = ['Hospital', 'Health Camping', 'Police Station', 'Fire Station']
 
-function areaFilter(sectorNo: number | null, zone: string | null): { sql: string; params: unknown[] } {
+function areaFilter(
+  sectorNo: number | null,
+  zone: string | null,
+): { sql: string; params: unknown[] } {
   if (sectorNo !== null) {
     return {
       sql: 'EXISTS (SELECT 1 FROM kumbh.sector_boundary b WHERE b.sector_no = $1 AND ST_Intersects(b.geom, t.geom))',
@@ -103,6 +107,59 @@ function areaFilter(sectorNo: number | null, zone: string | null): { sql: string
     }
   }
   return { sql: '', params: [] }
+}
+
+type ZoneOutline = { zone: string; geojson: unknown; bbox: [number, number, number, number] }
+
+/** Process-lifetime memo of the zone outlines. The query takes no parameters and depends on nothing
+ *  in the request -- it is `ST_Union` + `ST_SimplifyPreserveTopology` over all 32 rows of
+ *  `kumbh.sector_boundary`, the single most expensive statement this route runs -- yet it was
+ *  recomputed on every request, including every sector/zone focus change while the user pans around.
+ *  `kumbh.sector_boundary` only changes when `scripts/load_kumbh_2027.py` runs, which means a process
+ *  restart in every deployment shape this app has (Azure App Service runs `node server.js`; the
+ *  loader runs against the database out-of-band, so the TTL below is what bounds staleness if it is
+ *  ever run against a live instance). Cached as the finished response shape so a hit costs nothing at
+ *  all, and as a promise so N concurrent cold requests still issue exactly one query. */
+const ZONE_OUTLINES_TTL_MS = 60 * 60 * 1000
+let zoneOutlinesCache: { at: number; value: Promise<ZoneOutline[]> } | null = null
+
+function getZoneOutlines(pool: ReturnType<typeof getPool>): Promise<ZoneOutline[]> {
+  if (zoneOutlinesCache && Date.now() - zoneOutlinesCache.at < ZONE_OUTLINES_TTL_MS) {
+    return zoneOutlinesCache.value
+  }
+  const value = pool
+    .query(
+      `
+    SELECT zone,
+           ST_AsGeoJSON(ST_SimplifyPreserveTopology(ST_Union(geom), 0.0005)) AS geojson,
+           ST_XMin(ST_Extent(geom)) AS xmin, ST_YMin(ST_Extent(geom)) AS ymin,
+           ST_XMax(ST_Extent(geom)) AS xmax, ST_YMax(ST_Extent(geom)) AS ymax
+    FROM kumbh.sector_boundary
+    WHERE zone IS NOT NULL
+    GROUP BY zone
+    ORDER BY zone;
+  `,
+    )
+    .then((result) =>
+      result.rows.map((row) => ({
+        zone: row.zone as string,
+        geojson: JSON.parse(row.geojson),
+        bbox: [Number(row.xmin), Number(row.ymin), Number(row.xmax), Number(row.ymax)] as [
+          number,
+          number,
+          number,
+          number,
+        ],
+      })),
+    )
+    .catch((err) => {
+      // Never cache a failure -- otherwise one transient pool timeout would blank the zone outlines
+      // for a full hour. Same reasoning as connect.ts resetting its cached promise on failure.
+      zoneOutlinesCache = null
+      throw err
+    })
+  zoneOutlinesCache = { at: Date.now(), value }
+  return value
 }
 
 export async function GET(req: NextRequest) {
@@ -122,39 +179,39 @@ export async function GET(req: NextRequest) {
 
   const pool = getPool()
 
-  const countsPromise = Promise.all(
-    Object.entries(COUNTED_LAYERS).map(async ([key, table]) => {
-      const { rows } = await pool.query(
-        `SELECT count(*) AS n FROM ${table} t ${whereClause}`,
-        areaParams,
-      )
-      return [key, Number(rows[0].n)] as const
-    }),
-  )
+  // One UNION ALL rather than 14 separate `count(*)` queries. Each layer's count is independent, so
+  // the old shape was a Promise.all of 14 round-trips -- and since the focused case below adds 8 more
+  // plus the corridor and zone queries, a single focused request could ask for up to 25 connections
+  // from a pool whose max is 15 (src/server/db/postgres.ts), pushing the tail onto the 10s
+  // connectionTimeoutMillis queue and making concurrent tile requests wait behind it. Same shape
+  // /api/stats' POI branch already uses.
+  //
+  // Both the layer key and the table name are literals authored in COUNTED_LAYERS above -- nothing
+  // here is interpolated from the request, which is the documented SQL-injection boundary for every
+  // GIS route (CONTEXT.md §8/§15). `whereClause`/`areaParams` are the same for every branch, so the
+  // one `$1` placeholder is shared across them.
+  const countsSql = Object.entries(COUNTED_LAYERS)
+    .map(([key, table]) => `SELECT '${key}' AS layer, count(*) AS n FROM ${table} t ${whereClause}`)
+    .join(' UNION ALL ')
+  const countsPromise = pool.query<{ layer: string; n: string }>(countsSql, areaParams)
 
   // Per-corridor traffic_route counts for the Corridor filter chips (PLAN-evacuation.md §7.2 item
   // 4 -- "chips for the non-empty corridors, with counts"). naj_dir excluded: it's never offered
   // as a chip (§2.2 -- Najibabad has 0 routes region-wide).
-  const corridorCountsPromise = pool.query<{ deh_dir: string; sah_dir: string; meer_dir: string }>(`
+  const corridorCountsPromise = pool.query<{ deh_dir: string; sah_dir: string; meer_dir: string }>(
+    `
     SELECT count(*) FILTER (WHERE deh_dir = 1) AS deh_dir,
            count(*) FILTER (WHERE sah_dir = 1) AS sah_dir,
            count(*) FILTER (WHERE meer_dir = 1) AS meer_dir
     FROM kumbh.traffic_route t
     ${whereClause};
-  `, areaParams)
+  `,
+    areaParams,
+  )
 
   // Zone outlines (§8.2) -- always returned, regardless of focus, since the "Zone outlines"
   // supporting layer can be toggled independently of any sector/zone being focused.
-  const zonesPromise = pool.query(`
-    SELECT zone,
-           ST_AsGeoJSON(ST_SimplifyPreserveTopology(ST_Union(geom), 0.0005)) AS geojson,
-           ST_XMin(ST_Extent(geom)) AS xmin, ST_YMin(ST_Extent(geom)) AS ymin,
-           ST_XMax(ST_Extent(geom)) AS xmax, ST_YMax(ST_Extent(geom)) AS ymax
-    FROM kumbh.sector_boundary
-    WHERE zone IS NOT NULL
-    GROUP BY zone
-    ORDER BY zone;
-  `)
+  const zonesPromise = getZoneOutlines(pool)
 
   const focusPromise =
     sectorNo !== null || zone !== null
@@ -211,26 +268,20 @@ export async function GET(req: NextRequest) {
         ])
       : null
 
-  const [countsEntries, corridorCountsResult, zonesResult, focusResult] = await Promise.all([
+  const [countsResult, corridorCountsResult, zones, focusResult] = await Promise.all([
     countsPromise,
     corridorCountsPromise,
     zonesPromise,
     focusPromise,
   ])
 
-  const counts = Object.fromEntries(countsEntries)
+  const counts = Object.fromEntries(countsResult.rows.map((row) => [row.layer, Number(row.n)]))
   const corridorRow = corridorCountsResult.rows[0]
   const corridors = {
     deh_dir: Number(corridorRow.deh_dir),
     sah_dir: Number(corridorRow.sah_dir),
     meer_dir: Number(corridorRow.meer_dir),
   }
-  const zones = zonesResult.rows.map((row) => ({
-    zone: row.zone,
-    geojson: JSON.parse(row.geojson),
-    bbox: [Number(row.xmin), Number(row.ymin), Number(row.xmax), Number(row.ymax)],
-  }))
-
   const focus = focusResult
     ? {
         sectorNo,
@@ -249,8 +300,9 @@ export async function GET(req: NextRequest) {
       }
     : null
 
-  return Response.json(
-    { counts, corridors, zones, focus },
-    { headers: { 'Cache-Control': 'public, max-age=60, s-maxage=300' } },
-  )
+  // `private`, not `public`: this response is gated on `ability.can('read:all', 'ticket')` above, so
+  // a shared cache in front of the app could otherwise hand an admin's copy to a Surveyor who is not
+  // permitted to see it. The browser's own reuse -- the part that actually helps here, since the
+  // panels refetch on every focus change -- is unaffected.
+  return Response.json({ counts, corridors, zones, focus }, { headers: GIS_PRIVATE_CACHE_HEADERS })
 }

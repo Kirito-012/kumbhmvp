@@ -523,6 +523,25 @@ body {
   background: var(--map-panel-bg);
   color: var(--map-fg-faint);
 }
+/* The attribution runs in MapLibre's compact mode (see MapView's attributionControl option for
+   why), and its .maplibregl-compact rules hardcode a white pill -- background-color:#fff and
+   color:#000 -- at the same specificity as the rule above, from a stylesheet that loads later.
+   Source order therefore won, and the credits rendered as a bright white strip over the map
+   regardless of theme. The extra class here lifts these above MapLibre's own in the cascade so
+   the attribution follows the same tokens as every other control. */
+.kumbh-map .maplibregl-ctrl-attrib.maplibregl-compact {
+  background: var(--map-panel-bg);
+  color: var(--map-fg-faint);
+  backdrop-filter: blur(12px);
+}
+.kumbh-map .maplibregl-ctrl-attrib.maplibregl-compact-show .maplibregl-ctrl-attrib-button {
+  background-color: var(--map-surface-hover);
+}
+/* The "i" glyph is a near-black SVG data URI, invisible against the dark panel background --
+   inverted in dark mode by the same token the zoom/compass icons already use. */
+.kumbh-map .maplibregl-ctrl-attrib-button {
+  filter: var(--map-ctrl-icon-filter);
+}
 .kumbh-map .maplibregl-ctrl-attrib a {
   color: var(--map-fg-muted);
 }

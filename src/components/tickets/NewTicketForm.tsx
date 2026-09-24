@@ -4,7 +4,7 @@ import { useMemo, useState, useActionState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Select } from '@/components/ui/Select'
-import { RichTextEditor } from '@/components/editor/RichTextEditor'
+import { RichTextEditor } from '@/components/editor/RichTextEditorLazy'
 import { createTicketAction, type ActionState } from '@/server/actions/ticket.actions'
 
 type TypeOption = {

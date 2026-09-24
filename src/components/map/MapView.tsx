@@ -1,9 +1,10 @@
 'use client'
 
 import { Fragment, useEffect, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import type { Feature, Point } from 'geojson'
-import { clusterPoints } from '@/lib/poiClustering'
+import { clusterPoints, CLUSTER_MAX_ZOOM } from '@/lib/poiClustering'
 import { badgeIconId, makeBadgeIcon } from '@/lib/mapBadgeIcon'
 import {
   Map as MLMap,
@@ -47,8 +48,22 @@ import StatsPanel from '@/components/map/StatsPanel'
 import SectorReportDrawer from '@/components/map/SectorReportDrawer'
 import Panel from '@/components/map/Panel'
 import ModeSwitcher, { type MapMode } from '@/components/map/insights/ModeSwitcher'
-import InsightsModePanel from '@/components/map/insights/InsightsModePanel'
-import InsightsPanel from '@/components/map/insights/InsightsPanel'
+
+// The four mode panels are loaded on demand. Between them they own every recharts import in the map
+// route (~112 KB gzipped via insights/charts.tsx) plus ~2,900 lines of panel code, none of which
+// renders in Map mode -- the default, and the only mode a Surveyor can reach at all (canUseInsights
+// is false for them). The render gates below already scope each panel to its own mode; before this
+// only the *import* was eager, so every visitor paid for all four.
+//
+// `ssr: false` on all four: they are client-only panels that read localStorage/viewport and mount
+// against the live map, and Map mode is what the server renders anyway. ModeSwitcher stays static --
+// it is small and always visible, and it is what the user clicks to pull a panel's chunk in.
+const InsightsModePanel = dynamic(() => import('@/components/map/insights/InsightsModePanel'), {
+  ssr: false,
+})
+const InsightsPanel = dynamic(() => import('@/components/map/insights/InsightsPanel'), {
+  ssr: false,
+})
 import { useTicketInsights } from '@/components/map/insights/useTicketInsights'
 import {
   addInsightLayers,
@@ -91,7 +106,7 @@ import {
   BUCKET_COLORS,
   type StatusBucket,
 } from '@/lib/insights/statusBuckets'
-import { useInsightTheme } from '@/components/map/insights/charts'
+import { useInsightTheme } from '@/components/map/insights/useInsightTheme'
 import type { InsightsTicketData } from '@/lib/insights/types'
 import {
   ChartBarIcon,
@@ -108,8 +123,13 @@ import {
   UndoIcon,
   XIcon,
 } from '@/components/map/icons'
-import EvacuationModePanel from '@/components/map/evacuation/EvacuationModePanel'
-import EvacuationPanel from '@/components/map/evacuation/EvacuationPanel'
+const EvacuationModePanel = dynamic(
+  () => import('@/components/map/evacuation/EvacuationModePanel'),
+  { ssr: false },
+)
+const EvacuationPanel = dynamic(() => import('@/components/map/evacuation/EvacuationPanel'), {
+  ssr: false,
+})
 import SearchInput from '@/components/map/search/SearchInput'
 import SearchGroupHeader from '@/components/map/search/SearchGroupHeader'
 import { PhotoLightbox } from '@/components/tickets/PhotoLightbox'
@@ -193,7 +213,64 @@ const BASEMAP_STYLE_URL: Record<'light' | 'dark', string> = {
   dark: '/carto-dark-matter-style.json',
 }
 
-async function loadBasemapStyle(theme: 'light' | 'dark') {
+/** Which ground the map draws over. 'map' is the pair of vendored vector styles above;
+ *  'satellite' is Esri's hybrid imagery (aerial photography + its own place/road labels).
+ *  Unlike theme, this is a user choice persisted in localStorage -- see BASEMAP_STORAGE_KEY. */
+type BasemapKind = 'map' | 'satellite'
+
+// Esri's Basemap Styles v2 service returns a MapLibre-compatible style JSON, so satellite
+// merges into the map's own style through exactly the same path the vendored vector styles
+// take (see syncBasemap) rather than needing a second rendering mechanism.
+//
+// "arcgis/imagery" is the HYBRID variant -- imagery plus Esri's own road/place labels.
+// The two siblings are "arcgis/imagery/standard" (bare imagery, no labels) and
+// "arcgis/imagery/labels" (labels only); swap the constant if the hybrid ever needs splitting.
+//
+// Deliberately NOT the key-free server.arcgisonline.com/World_Imagery tile endpoint, which is
+// the ArcGIS Online basemap and is not licensed for commercial use. This endpoint is the
+// ArcGIS Location Platform service, whose subscription does permit commercial deployment --
+// it requires a token, which is exactly why the free URL is the tempting wrong answer here.
+const ESRI_IMAGERY_STYLE_URL =
+  'https://basemapstyles-api.arcgis.com/arcgis/rest/services/styles/v2/styles/arcgis/imagery'
+
+type LoadedBasemapStyle = {
+  sprite?: string
+  sources: Record<string, unknown>
+  layers: unknown[]
+}
+
+/** Env values are inlined verbatim at build time and the two sources disagree about quoting --
+ *  dotenv strips them from KEY="abc" locally, a CI secret is a raw string -- so a value pasted
+ *  with quotes would ship as ?token="abc" and 401 every tile. Same failure (and same fix) the
+ *  MapTiler key hit in production; see loadVectorBasemapStyle's own note. */
+function readEnvKey(raw: string | undefined) {
+  return (raw ?? '').trim().replace(/^["']|["']$/g, '')
+}
+
+async function loadSatelliteStyle(): Promise<LoadedBasemapStyle> {
+  const token = readEnvKey(process.env.NEXT_PUBLIC_ARCGIS_API_KEY)
+  if (!token) throw new Error('NEXT_PUBLIC_ARCGIS_API_KEY is not set')
+  const res = await fetch(`${ESRI_IMAGERY_STYLE_URL}?token=${encodeURIComponent(token)}`)
+  if (!res.ok) throw new Error(`Esri basemap style request failed (${res.status})`)
+  const style = (await res.json()) as LoadedBasemapStyle
+
+  // A MapLibre style has exactly ONE glyphs endpoint, and this map's is the shared demotiles
+  // server set in initMap (it serves the "Noto Sans" stack every other label layer in this file
+  // already asks for). Esri's style asks for its own font names from its own glyphs URL, which
+  // is discarded along with every other vendored style's -- so without rewriting the stacks,
+  // every Esri label requests a font demotiles 404s on and the hybrid renders as bare imagery
+  // with no labels at all, silently and with no console error.
+  for (const layer of style.layers as { type?: string; layout?: Record<string, unknown> }[]) {
+    if (layer.type !== 'symbol' || !layer.layout) continue
+    const font = layer.layout['text-font']
+    if (!Array.isArray(font)) continue
+    const wantsBold = font.some((f) => typeof f === 'string' && /bold|medium/i.test(f))
+    layer.layout['text-font'] = [wantsBold ? 'Noto Sans Bold' : 'Noto Sans Regular']
+  }
+  return style
+}
+
+async function loadVectorBasemapStyle(theme: 'light' | 'dark'): Promise<LoadedBasemapStyle> {
   const res = await fetch(BASEMAP_STYLE_URL[theme])
   const text = await res.text()
   // Only the light (MapTiler) style has any "{key}" placeholders -- the dark
@@ -207,17 +284,80 @@ async function loadBasemapStyle(theme: 'light' | 'dark') {
   // MapTiler 403s every tile and glyph. That failure is silent and light-mode-only
   // (CARTO needs no key), so it reads as "the map doesn't render in light mode"
   // rather than as a bad credential. Has happened in production; don't remove.
-  const key = (process.env.NEXT_PUBLIC_MAPTILER_KEY ?? '').trim().replace(/^["']|["']$/g, '')
+  const key = readEnvKey(process.env.NEXT_PUBLIC_MAPTILER_KEY)
   const withKey = text.replaceAll('{key}', key)
-  return JSON.parse(withKey) as {
-    sprite?: string
-    sources: Record<string, unknown>
-    layers: unknown[]
-  }
+  return JSON.parse(withKey) as LoadedBasemapStyle
+}
+
+/** Satellite imagery is one fixed set of pixels, so it has no per-theme variant the way the
+ *  vector basemaps do -- both themes load the same Esri style and differ only in how hard
+ *  SATELLITE_TONE_SCRIM tones it down underneath the app's own overlays. */
+function loadBasemapStyle(theme: 'light' | 'dark', kind: BasemapKind): Promise<LoadedBasemapStyle> {
+  return kind === 'satellite' ? loadSatelliteStyle() : loadVectorBasemapStyle(theme)
 }
 
 function readMapTheme(): 'light' | 'dark' {
   return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
+}
+
+const BASEMAP_STORAGE_KEY = 'tcsticket:mapView:basemap'
+
+function loadStoredBasemap(): BasemapKind {
+  try {
+    return localStorage.getItem(BASEMAP_STORAGE_KEY) === 'satellite' ? 'satellite' : 'map'
+  } catch {
+    return 'map'
+  }
+}
+
+/** A second scrim, separate from basemap-dim-scrim, because the two answer to different things
+ *  and would otherwise clobber each other: the class-filter effect writes basemap-dim-scrim's
+ *  opacity back to 0 whenever no filter is active, which would wipe the satellite toning every
+ *  time a filter cleared. Stacking two background layers lets the two compose instead. */
+const SATELLITE_TONE_SCRIM = 'satellite-tone-scrim'
+
+// Aerial imagery is a busy mid-tone ground, and this map's overlay palettes were each tuned
+// against a flat one (pale MapTiler Bright / near-black Dark Matter). Dark mode carries the
+// heavier scrim because its palette is bright and saturated and needs the imagery pushed well
+// back; light mode's darker strokes hold up against imagery on their own, so it gets only
+// enough to stop the photography overpowering the parcel washes.
+const SATELLITE_SCRIM_OPACITY: Record<'light' | 'dark', number> = { light: 0.12, dark: 0.38 }
+
+/** Background-type layers this component owns, as opposed to the lone 'background' layer every
+ *  vendored basemap style ships. syncBasemap tears out old basemap layers by type rather than
+ *  by id (see its own comment on why), so without this exclusion both scrims were swept up and
+ *  removed on the first theme toggle and never re-added -- leaving the class-filter emphasis
+ *  dimming silently dead for the rest of the session, since its every write is getLayer-guarded. */
+const APP_BACKGROUND_LAYER_IDS = new Set([SATELLITE_TONE_SCRIM, 'basemap-dim-scrim'])
+
+/** MapLibre's compact attribution initialises *expanded* -- its own `_updateCompact` adds both
+ *  `maplibregl-compact` and `maplibregl-compact-show` -- so the credits still paint as a bar
+ *  across the bottom of the map despite compact mode being on. With Esri's ~230-character
+ *  imagery attribution that bar spans the map's full width.
+ *
+ *  Removing just `-compact-show` leaves MapLibre's own collapsed state (the same one its "i"
+ *  summary toggles to), so the credits are one click away and stay in the DOM throughout --
+ *  which is what Esri's terms and OpenStreetMap's ODbL actually require. Deliberately not
+ *  `details.open = false`: MapLibre's collapsed state keeps the `open` attribute set and
+ *  distinguishes the two purely by this class.
+ *
+ *  Must run after MapLibre's first `_updateCompact` (hence the 'load' handler, not initMap's
+ *  top) but needs no re-applying: that method only re-adds the pair when `maplibregl-compact`
+ *  is absent, so later style/source events leave this collapsed. */
+function collapseAttribution(map: MLMap) {
+  map
+    .getContainer()
+    .querySelector('.maplibregl-ctrl-attrib')
+    ?.classList.remove('maplibregl-compact-show')
+}
+
+function applySatelliteScrim(map: MLMap, kind: BasemapKind, theme: 'light' | 'dark') {
+  if (!map.getLayer(SATELLITE_TONE_SCRIM)) return
+  map.setPaintProperty(
+    SATELLITE_TONE_SCRIM,
+    'background-opacity',
+    kind === 'satellite' ? SATELLITE_SCRIM_OPACITY[theme] : 0,
+  )
 }
 
 // Fixed emphasis color for the active class/sub-class filter's glow+outline
@@ -270,6 +410,30 @@ const SECTOR_COLORS = {
 // color (SECTOR_COLORS.dark.boundary) for extra presence as the primary
 // navigation shape.
 const SECTOR_BOUNDARY_WIDTH = { light: 1, dark: 1.5 } as const
+
+/** Satellite-only sector hover treatment. Over imagery the shared dark-mode hover (thin cyan
+ *  #22d3ee) sits right next to the near-white resting boundary and reads as barely different from
+ *  it -- cyan is also a colour water/shadow/haze in aerial photos already are. Hot magenta appears
+ *  nowhere in natural imagery, differs in hue from both the white boundary and the orange
+ *  selected outline, and the heavier line + stronger fill make the hovered sector unmistakable. */
+const SATELLITE_SECTOR_HOVER = { color: '#ff2bd6', outlineWidth: 4, fillOpacity: 0.16 } as const
+
+/** Which SECTOR_COLORS/SECTOR_BOUNDARY_WIDTH entry the sector chrome should use.
+ *
+ *  Both sets above are tuned against a *flat* ground -- light's near-black #111827 boundary
+ *  works because MapTiler Bright is uniformly pale. Satellite imagery isn't: it's mid-to-dark
+ *  and busy, and vegetation/shadow swallow that near-black line entirely, so in light mode the
+ *  sector outlines (the map's primary navigation shape) effectively vanished over imagery.
+ *
+ *  Satellite therefore takes dark mode's near-white boundary and its extra width in *either*
+ *  app theme. The hover/selected colours come along deliberately rather than just `boundary`:
+ *  light's slate hover has the same disappearing problem against imagery, and mixing a
+ *  near-white resting outline with a dark slate hover would read as the boundary dropping out
+ *  on hover instead of highlighting. Nothing else is themed off this -- the app's own parcel
+ *  palettes still follow the real theme, which is what the satellite scrim exists to protect. */
+function sectorChromeTheme(theme: 'light' | 'dark', kind: BasemapKind): 'light' | 'dark' {
+  return kind === 'satellite' ? 'dark' : theme
+}
 
 // The base street network (kumbh.tertiary_road, see PLAN-deferred-roads.md) is
 // the only POI line layer dense enough (21k+ features) to need a per-theme
@@ -777,6 +941,63 @@ class PitchToggleControl implements IControl {
   }
 }
 
+// Same native-control mechanism as PitchToggleControl above, for the same reason -- it stacks
+// in the bottom-right group with the zoom/compass/3D buttons under MapLibre's own layout.
+// Unlike PitchToggleControl it has no map event to listen to (pitch lives on the map, the
+// basemap choice lives in React state), so `sync` is driven from an effect instead.
+class BasemapToggleControl implements IControl {
+  private button?: HTMLButtonElement
+  private kind: BasemapKind = 'map'
+
+  constructor(private readonly onToggle: () => void) {}
+
+  sync(kind: BasemapKind) {
+    this.kind = kind
+    const button = this.button
+    if (!button) return
+    const active = kind === 'satellite'
+    button.setAttribute('aria-pressed', String(active))
+    button.title = active ? 'Switch to map view' : 'Switch to satellite view'
+    button.setAttribute('aria-label', button.title)
+    // var() references resolve live against the document's --map-* custom properties, so this
+    // follows the theme toggle without its own listener -- same as PitchToggleControl.
+    button.style.background = active ? 'var(--map-accent)' : 'var(--map-surface)'
+    button.style.color = active ? '#fff' : 'var(--map-fg-muted)'
+  }
+
+  onAdd() {
+    const container = document.createElement('div')
+    container.className = 'maplibregl-ctrl maplibregl-ctrl-group'
+
+    const button = document.createElement('button')
+    button.type = 'button'
+    // The base .maplibregl-ctrl-group button rule is a 29x29 icon slot with no centering, so
+    // the same explicit flex block PitchToggleControl needs applies here too.
+    Object.assign(button.style, {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'var(--map-surface)',
+      color: 'var(--map-fg-muted)',
+    })
+    button.innerHTML =
+      '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>' +
+      '<path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></svg>'
+    button.onclick = () => this.onToggle()
+    this.button = button
+    this.sync(this.kind)
+
+    container.appendChild(button)
+    return container
+  }
+
+  onRemove() {
+    this.button?.remove()
+  }
+}
+
 type PoiGeomType = 'point' | 'line' | 'polygon'
 
 type PoiLayerDef = {
@@ -990,9 +1211,9 @@ async function refetchClusteredPoiSource(
   layerKey: string,
   subs: string[] | undefined,
   rawFeaturesRef: React.RefObject<Record<string, Feature<Point>[]>>,
-) {
+): Promise<boolean> {
   const source = map.getSource(layerKey) as GeoJSONSource | undefined
-  if (!source) return
+  if (!source) return false
 
   const token = (poiSourceFetchTokens[layerKey] ?? 0) + 1
   poiSourceFetchTokens[layerKey] = token
@@ -1005,13 +1226,20 @@ async function refetchClusteredPoiSource(
 
   try {
     const res = await fetch(url)
+    if (!res.ok) throw new Error(`Request failed: ${res.status}`)
     const data: { features: Feature<Point>[] } = await res.json()
-    if (poiSourceFetchTokens[layerKey] !== token) return // superseded by a newer request
+    // Superseded by a newer request for the same layer: that one owns the source now, and it will
+    // report its own outcome, so this counts as handled rather than failed.
+    if (poiSourceFetchTokens[layerKey] !== token) return true
     rawFeaturesRef.current[layerKey] = data.features
     source.setData(clusterPoints(data.features, map.getZoom(), 40, CLUSTER_TAG_PROPERTY[layerKey]))
+    return true
   } catch {
     // Network hiccup -- leave the source showing its last-known data rather
-    // than clearing it out from under the user.
+    // than clearing it out from under the user. The `false` matters for the on-demand loader
+    // (ensurePoiPoints in initMap): a layer whose first fetch failed must not stay marked as
+    // loaded, or toggling it off and on again would never retry and it would paint nothing forever.
+    return false
   }
 }
 
@@ -1527,12 +1755,13 @@ export default function MapView({
       })),
     })
   }, [sectors, mapReady])
-  // Sub-class names + counts per class_group, for the left panel's search
-  // tree -- fetched independently of StatsPanel's own /api/stats call (same
-  // self-fetching pattern as `sectors` above) rather than threading it down.
-  // Re-fetched whenever selectedSector changes so counts here match the
-  // Stats panel's own sector-scoped numbers instead of always showing every
-  // sector's total.
+  // Sub-class names + counts per class_group, for the left panel's search tree -- handed up from
+  // StatsPanel's own /api/stats response via its onStats callback, so the two panels share one
+  // request. This used to be a second, identical fetch right here: both effects built the same URL
+  // from the same selected sector, so every map load and every sector click ran /api/stats' 7
+  // PostGIS aggregates (including a 45-table UNION ALL and ST_Area over sector_plan) twice.
+  // StatsPanel re-fetches on every sectorNo change, so these counts still track the selected
+  // sector exactly as before.
   const [subclassStats, setSubclassStats] = useState<
     // subclass can be null -- see the comment where it's read in the search panel below for why.
     { class_group: string; subclass: string | null; features: number }[]
@@ -1669,6 +1898,13 @@ export default function MapView({
   useEffect(() => {
     visibilityRef.current = visibility
   }, [visibility])
+  /** Point-layer datasets already requested from /api/poi/points/[layer], so each is fetched at most
+   *  once per session -- see ensurePoiPoints in initMap for why they load on demand at all. */
+  const poiPointsRequestedRef = useRef<Set<string>>(new Set())
+  /** initMap's own ensurePoiPoints, exposed so the visibility effect below can reach it: it closes
+   *  over the `map` instance and the pointDefs built inside the one-time 'load' handler, the same
+   *  reason insightsDataRef and friends exist. */
+  const ensurePoiPointsRef = useRef<((keys: readonly string[]) => void) | null>(null)
   /** Same staleness reason as visibilityRef, for evacVisibility's own store. */
   const evacVisibilityRef = useRef<Record<EvacKey, boolean>>(evacVisibility)
   useEffect(() => {
@@ -1679,6 +1915,16 @@ export default function MapView({
   useEffect(() => {
     evacFiltersRef.current = evacFilters
   }, [evacFilters])
+  /** Map vs. satellite ground. Seeded to the SSR-safe default and hydrated from localStorage
+   *  post-mount, same as `visibility` -- but note the map's *initial style* is loaded straight
+   *  from loadStoredBasemap() in the mount effect rather than from this state, so a stored
+   *  'satellite' doesn't briefly render the vector basemap and then swap. */
+  const [basemap, setBasemap] = useState<BasemapKind>('map')
+  const basemapControlRef = useRef<BasemapToggleControl | null>(null)
+  /** The `theme:kind` pair the map's style currently holds, so syncBasemap can tell a real
+   *  change from a redundant call. Seeded at map creation (not at effect setup) because the
+   *  map's first style is chosen there, from localStorage, before this state has hydrated. */
+  const appliedBasemapKeyRef = useRef<string | null>(null)
   // Empty array means "all classes" -- multiple classes can be selected at
   // once, all rendering together on the map (same on/off model as
   // poiVisibility/roadTypeVisibility rather than a single active choice).
@@ -1851,30 +2097,41 @@ export default function MapView({
   // the SAME style object as the basemap.
   useEffect(() => {
     let cancelled = false
-    // initMap loads the map's initial style from this same theme already
-    // (see loadBasemapStyle(readMapTheme()) at map creation) -- seeded here,
-    // at effect setup, from whatever theme is live *right now* (before any
-    // toggle). Seeding it lazily inside the first syncBasemap() call instead
-    // (as a previous version of this code did) is a bug: the MutationObserver
-    // below only ever fires in response to a real data-theme mutation, so
-    // that "first call" IS the user's first toggle, already carrying the NEW
-    // theme -- seeding appliedTheme to it there makes the theme===appliedTheme
-    // check below pass immediately and silently skip the map update, so the
-    // very first toggle after every page load appeared to do nothing until a
-    // full refresh (which re-mounts the map fresh with the correct theme).
-    let appliedTheme: 'light' | 'dark' = readMapTheme()
-
+    // What's already on the map is tracked as a `theme:kind` pair in a ref seeded at map
+    // creation (see the mount effect), not as a local seeded here. Two reasons: the pair has to
+    // survive this effect re-running when `basemap` changes, and the map's first style is
+    // chosen from localStorage in the mount effect rather than from this effect's own reading.
+    //
+    // Seeding it lazily inside the first syncBasemap() call instead (as a previous version of
+    // this code did) is a bug worth not re-introducing: the MutationObserver below only fires in
+    // response to a real data-theme mutation, so that "first call" IS the user's first toggle,
+    // already carrying the NEW theme -- seeding to it there makes the equality check below pass
+    // immediately and silently skip the map update, so the very first toggle after every page
+    // load appeared to do nothing until a full refresh.
     async function syncBasemap() {
       const map = mapRef.current
       const theme = readMapTheme()
       if (!map || !map.isStyleLoaded()) return
-      if (theme === appliedTheme) return
-      // Claim this theme before the await so a second MutationObserver
-      // firing (e.g. React StrictMode's double-invoke, or two rapid toggles)
-      // doesn't race in and load the same style twice.
-      appliedTheme = theme
+      const nextKey = `${theme}:${basemap}`
+      if (nextKey === appliedBasemapKeyRef.current) return
+      const previousKey = appliedBasemapKeyRef.current
+      // Claim this pair before the await so a second MutationObserver firing (e.g. React
+      // StrictMode's double-invoke, or two rapid toggles) doesn't race in and load it twice.
+      appliedBasemapKeyRef.current = nextKey
 
-      const basemap = await loadBasemapStyle(theme)
+      let nextStyle: LoadedBasemapStyle
+      try {
+        nextStyle = await loadBasemapStyle(theme, basemap)
+      } catch (err) {
+        // Satellite is the only kind that can fail here -- it's a token-gated third-party
+        // request, where the vector styles are same-origin static files. Roll back to whatever
+        // was showing rather than leaving the map on a half-applied style, and drop the toggle
+        // back to 'map' so the button doesn't sit pressed over imagery that never loaded.
+        appliedBasemapKeyRef.current = previousKey
+        console.error('Basemap style failed to load; staying on the current basemap.', err)
+        if (!cancelled && basemap === 'satellite') setBasemap('map')
+        return
+      }
       if (cancelled || mapRef.current !== map) return
 
       // Every layer currently in the style that belongs to the OLD basemap --
@@ -1898,11 +2155,16 @@ export default function MapView({
       // the second half of the old OR clause missed it too). The orphaned
       // layer was never removed, and the *next* dark->light toggle then hit
       // "Layer already exists on this map" trying to re-add "Background".
+      //
+      // APP_BACKGROUND_LAYER_IDS is excluded because this component owns two background layers
+      // of its own (the two scrims); without the exclusion they matched the type check here and
+      // were removed on the first theme toggle, never to be re-added.
       const oldBasemapLayerIds = map
         .getStyle()
         .layers.filter(
           (l) =>
-            l.type === 'background' || ('source' in l && oldBasemapSourceIds.includes(l.source)),
+            (l.type === 'background' && !APP_BACKGROUND_LAYER_IDS.has(l.id)) ||
+            ('source' in l && oldBasemapSourceIds.includes(l.source)),
         )
         .map((l) => l.id)
       const firstNonBasemapLayerId = map
@@ -1914,10 +2176,10 @@ export default function MapView({
         if (map.getSource(id)) map.removeSource(id)
       }
 
-      for (const [id, def] of Object.entries(basemap.sources)) {
+      for (const [id, def] of Object.entries(nextStyle.sources)) {
         map.addSource(id, def as never)
       }
-      for (const layer of basemap.layers as never[]) {
+      for (const layer of nextStyle.layers as never[]) {
         map.addLayer(layer, firstNonBasemapLayerId)
       }
       // Each theme's vendored style ships its own sprite sheet (icon glyphs
@@ -1926,7 +2188,7 @@ export default function MapView({
       // sprite loaded, so e.g. switching to light mode kept rendering
       // dark-matter's icons (styled to pop against near-black) on top of the
       // new pale basemap.
-      if (basemap.sprite) map.setSprite(basemap.sprite)
+      if (nextStyle.sprite) map.setSprite(nextStyle.sprite)
 
       // insight-heat must repaint below the (new) basemap's own place-name/road-label symbol
       // layers, same "labels on top of the glow" positioning addInsightLayers already gives it at
@@ -1935,11 +2197,11 @@ export default function MapView({
       // load, i.e. exactly `firstNonBasemapLayerId`, so the whole new basemap -- including its own
       // symbol layers -- gets spliced in underneath it), putting the new basemap's labels back
       // under the glow on every theme toggle (PLAN-heatmap.md §11.6). Searches the freshly loaded
-      // `basemap.layers` array itself, not map.getStyle().layers -- the style at this point would
-      // just find insight-heat again (still the lowest app layer until this moveLayer runs).
+      // `nextStyle.layers` array itself, not map.getStyle().layers -- the style at this point
+      // would just find insight-heat again (still the lowest app layer until this moveLayer runs).
       // Guarded on getLayer: a Surveyor/non-insights session never creates this layer at all.
       if (map.getLayer(INSIGHT_HEAT_LAYER)) {
-        const newBasemapSymbolId = (basemap.layers as { id: string; type: string }[]).find(
+        const newBasemapSymbolId = (nextStyle.layers as { id: string; type: string }[]).find(
           (l) => l.type === 'symbol',
         )?.id
         if (newBasemapSymbolId) map.moveLayer(INSIGHT_HEAT_LAYER, newBasemapSymbolId)
@@ -1949,10 +2211,19 @@ export default function MapView({
       // (not CSS var()s), so they don't follow the theme for free the way
       // the map's popups/controls do -- re-applied here alongside the
       // basemap itself. See SECTOR_COLORS for why these differ per theme.
-      const c = SECTOR_COLORS[theme]
+      //
+      // Resolved through sectorChromeTheme rather than `theme` directly, so switching *basemap*
+      // repaints these too -- satellite takes the dark treatment in either theme. This effect
+      // already re-runs on a basemap change (see its dep array), so that path is covered here.
+      const chromeTheme = sectorChromeTheme(theme, basemap)
+      const c = SECTOR_COLORS[chromeTheme]
       if (map.getLayer('sector-boundary-line')) {
         map.setPaintProperty('sector-boundary-line', 'line-color', c.boundary)
-        map.setPaintProperty('sector-boundary-line', 'line-width', SECTOR_BOUNDARY_WIDTH[theme])
+        map.setPaintProperty(
+          'sector-boundary-line',
+          'line-width',
+          SECTOR_BOUNDARY_WIDTH[chromeTheme],
+        )
       }
       if (map.getLayer('sector-name-label')) {
         map.setPaintProperty('sector-name-label', 'text-color', SECTOR_LABEL_TEXT_COLOR[theme])
@@ -2008,20 +2279,39 @@ export default function MapView({
           SECTOR_OUTLINE_OPACITY[theme],
         )
       }
+      const onSatellite = basemap === 'satellite'
+      const hoverColor = onSatellite ? SATELLITE_SECTOR_HOVER.color : c.hover
       if (map.getLayer('sector-hover-fill')) {
-        map.setPaintProperty('sector-hover-fill', 'fill-color', c.hover)
+        map.setPaintProperty('sector-hover-fill', 'fill-color', hoverColor)
+        map.setPaintProperty(
+          'sector-hover-fill',
+          'fill-opacity',
+          onSatellite ? SATELLITE_SECTOR_HOVER.fillOpacity : 0.08,
+        )
       }
       if (map.getLayer('sector-hover-glow')) {
-        map.setPaintProperty('sector-hover-glow', 'line-color', c.hover)
+        map.setPaintProperty('sector-hover-glow', 'line-color', hoverColor)
+        map.setPaintProperty('sector-hover-glow', 'line-opacity', onSatellite ? 0.45 : 0.2)
       }
       if (map.getLayer('sector-hover-outline')) {
-        map.setPaintProperty('sector-hover-outline', 'line-color', c.hover)
+        map.setPaintProperty('sector-hover-outline', 'line-color', hoverColor)
+        map.setPaintProperty(
+          'sector-hover-outline',
+          'line-width',
+          onSatellite ? SATELLITE_SECTOR_HOVER.outlineWidth : 2.5,
+        )
+        map.setPaintProperty('sector-hover-outline', 'line-opacity', onSatellite ? 1 : 0.9)
       }
       if (map.getLayer('sector-selected-outline')) {
         map.setPaintProperty('sector-selected-outline', 'line-color', c.selected)
       }
       if (map.getLayer('sector-selected-glow')) {
         map.setPaintProperty('sector-selected-glow', 'line-color', c.selected)
+        // Deliberately the real `theme`, not chromeTheme: this halo stays a dark-mode-only
+        // embellishment. Its other gate (in the layer-visibility list) reads the theme directly
+        // too, so routing just this one through chromeTheme would have the two disagree and the
+        // glow flicker on until the next visibility change turned it back off. The selected
+        // outline it sits under is already high-contrast orange over imagery without it.
         map.setLayoutProperty(
           'sector-selected-glow',
           'visibility',
@@ -2062,6 +2352,9 @@ export default function MapView({
         modeRef.current === 'heatmap' || modeRef.current === 'evacuation',
         (id) => APP_SOURCE_IDS.has(id),
       )
+      // Both halves of the pair that just changed feed this: satellite is toned at all, and how
+      // hard depends on the theme -- so it re-applies on a kind change and a theme change alike.
+      applySatelliteScrim(map, basemap, theme)
     }
 
     const observer = new MutationObserver(() => void syncBasemap())
@@ -2069,22 +2362,15 @@ export default function MapView({
       attributes: true,
       attributeFilter: ['data-theme'],
     })
+    // A theme change arrives via the observer, but a `basemap` change is a React state update
+    // that re-runs this effect instead -- so it needs its own kick. No-ops (on the ref equality
+    // check above) on the mount pass and on any re-run where the pair is already applied.
+    void syncBasemap()
     return () => {
       cancelled = true
       observer.disconnect()
     }
-  }, [])
-
-  useEffect(() => {
-    const url = selectedSector !== 'all' ? `/api/stats?sector=${selectedSector}` : '/api/stats'
-    fetch(url)
-      .then((r) => r.json())
-      .then((data) => {
-        setSubclassStats(data.bySubclass ?? [])
-        setPoiSubclassStats(data.poiBySubclass ?? [])
-      })
-      .catch(() => {})
-  }, [selectedSector])
+  }, [basemap])
 
   // Applies the real localStorage-persisted visibility/expanded state after
   // mount, once hydration (which needs the SSR-matching defaults above) has
@@ -2103,6 +2389,22 @@ export default function MapView({
       localStorage.setItem(VISIBILITY_STORAGE_KEY, JSON.stringify(visibility))
     } catch {}
   }, [visibility])
+
+  // Unlike `visibility` there's no separate hydrate-from-localStorage effect here: the mount
+  // effect reads the stored kind itself (to pick the map's very first style) and calls
+  // setBasemap with whichever kind actually loaded, so it is already the one place that
+  // reconciles state with storage.
+  useEffect(() => {
+    // Nothing to persist until that has happened. Writing on the mount pass instead would put
+    // the SSR-safe default ('map') over a stored 'satellite' *before* the mount effect reads it
+    // back -- effects run in declaration order and the mount effect is declared below this one
+    // -- so the satellite choice was silently lost on every reload.
+    if (appliedBasemapKeyRef.current === null) return
+    try {
+      localStorage.setItem(BASEMAP_STORAGE_KEY, basemap)
+    } catch {}
+    basemapControlRef.current?.sync(basemap)
+  }, [basemap])
 
   // Same SSR-safe-default-then-hydrate split as `visibility` above, for evacVisibility's own
   // separate store (PLAN-evacuation.md §5.1).
@@ -2321,6 +2623,17 @@ export default function MapView({
     }${escapeHtml(label)}</span>`
   }
 
+  /** A Cloudinary delivery transform for the popup's photo thumbnails, mirroring SitePhotos.tsx's
+   *  own `f_auto,q_auto,w_600` rewrite. Uploads are client-compressed to a 1600px long edge at
+   *  JPEG q=0.8 (src/lib/image-compress.ts), i.e. roughly 200-500 KB each, and the popup paints two
+   *  of them into ~60 CSS px boxes -- so the untransformed URL fetched the better part of a
+   *  megabyte per parcel click to fill about 1% of those pixels. 160px covers the box at 2x DPR.
+   *  A URL that isn't a Cloudinary delivery URL is returned untouched; the lightbox (PhotoLightbox,
+   *  opened from these same thumbnails) deliberately still loads the full-size original. */
+  function popupThumbUrl(url: string) {
+    return url.replace('/upload/', '/upload/f_auto,q_auto,w_160,c_fill/')
+  }
+
   // Every parcel popup (every mode -- see showPopup) renders this: badges, before/after photo
   // thumbnails (clickable, opens PhotoLightbox via the popup's click delegation), questionnaire-
   // attempted status, and assignee/due date.
@@ -2343,7 +2656,7 @@ export default function MapView({
               .map(
                 (photo, i) =>
                   `<div data-popup-photo-index="${i}" style="cursor:pointer;flex:1;min-width:0;border-radius:10px;overflow:hidden;position:relative;aspect-ratio:4/3;background-color:var(--map-popup-row-border)">
-                    <img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.phase)} site photo" style="width:100%;height:100%;object-fit:cover;display:block" />
+                    <img src="${escapeHtml(popupThumbUrl(photo.url))}" alt="${escapeHtml(photo.phase)} site photo" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;display:block" />
                     <span style="position:absolute;left:4px;bottom:4px;padding:1px 6px;border-radius:999px;font-size:9.5px;font-weight:700;text-transform:capitalize;background-color:rgba(0,0,0,0.55);color:#fff">${escapeHtml(photo.phase)}</span>
                   </div>`,
               )
@@ -2570,51 +2883,78 @@ export default function MapView({
     if (!mapContainer.current || mapRef.current) return
     let cancelled = false
 
-    loadBasemapStyle(readMapTheme()).then((basemap) => {
-      if (cancelled || !mapContainer.current || mapRef.current) return
+    // Read straight from localStorage rather than from `basemap` state, which is still at its
+    // SSR-safe default on this pass -- picking the stored kind here is what stops a stored
+    // 'satellite' from rendering the vector basemap first and visibly swapping a moment later.
+    const initialTheme = readMapTheme()
+    let initialBasemap = loadStoredBasemap()
 
-      const map = new MLMap({
-        container: mapContainer.current,
-        style: {
-          version: 8,
-          // Needed for any 'symbol'/text-field layer (the P/BS/G signage
-          // labels below, plus the vendored CARTO style's own place-name/
-          // road labels) -- MapLibre renders text from server-supplied SDF
-          // glyph PBFs, not local system fonts. Public, no-key demo endpoint.
-          // NOT CARTO's own glyphs URL (referenced by the style JSON but
-          // discarded here): a style has exactly one glyphs endpoint, and
-          // CARTO's font server 404s on "Noto Sans Bold" (used by our own
-          // parking/measure labels below) while every CARTO label layer
-          // already falls back to plain "Noto Sans Regular", which this
-          // endpoint does serve.
-          glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
-          sprite: basemap.sprite as string | undefined,
-          sources: basemap.sources as never,
-          layers: basemap.layers as never,
-        },
-        center: initialParcel ? [initialParcel.lng, initialParcel.lat] : CENTER,
-        zoom: initialParcel ? 16 : INITIAL_ZOOM,
-        attributionControl: { compact: false },
+    loadBasemapStyle(initialTheme, initialBasemap)
+      // Satellite needs a token, and on this path a rejection means no map renders at all --
+      // so a missing or expired key falls back to the vector basemap rather than a blank screen.
+      .catch((err) => {
+        console.error('Satellite basemap failed to load; falling back to the map basemap.', err)
+        initialBasemap = 'map'
+        return loadVectorBasemapStyle(initialTheme)
       })
-      // The constructor's own `center` places that lng/lat at the raw canvas
-      // midpoint, which is NOT the visually free area once the docked left
-      // "Kumbh Mela" panel and top-right Stats panel are drawn on top -- on
-      // first load (before any fitBounds/flyTo call ever runs) that made the
-      // initial view read as pushed up/left of where it should sit. jumpTo's
-      // own `padding` option (unlike a one-off fitBounds/flyTo padding
-      // elsewhere in this file) calls tr.setPadding under the hood, so this
-      // single call both recenters instantly (no animation) AND establishes
-      // the map's *persistent* padding that every later camera move relies
-      // on -- see reservedMapPadding/applyMapPadding above for why nothing
-      // else in this file passes its own `padding:` option anymore.
-      map.jumpTo({
-        center: initialParcel ? [initialParcel.lng, initialParcel.lat] : CENTER,
-        zoom: initialParcel ? 16 : INITIAL_ZOOM,
-        padding: reservedMapPadding(),
+      .then((basemap) => {
+        if (cancelled || !mapContainer.current || mapRef.current) return
+
+        const map = new MLMap({
+          container: mapContainer.current,
+          style: {
+            version: 8,
+            // Needed for any 'symbol'/text-field layer (the P/BS/G signage
+            // labels below, plus the vendored CARTO style's own place-name/
+            // road labels) -- MapLibre renders text from server-supplied SDF
+            // glyph PBFs, not local system fonts. Public, no-key demo endpoint.
+            // NOT CARTO's own glyphs URL (referenced by the style JSON but
+            // discarded here): a style has exactly one glyphs endpoint, and
+            // CARTO's font server 404s on "Noto Sans Bold" (used by our own
+            // parking/measure labels below) while every CARTO label layer
+            // already falls back to plain "Noto Sans Regular", which this
+            // endpoint does serve.
+            glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+            sprite: basemap.sprite as string | undefined,
+            sources: basemap.sources as never,
+            layers: basemap.layers as never,
+          },
+          center: initialParcel ? [initialParcel.lng, initialParcel.lat] : CENTER,
+          zoom: initialParcel ? 16 : INITIAL_ZOOM,
+          // Collapsed to the small "i" button rather than an expanded bar. Esri's imagery style
+          // carries two attribution strings totalling ~230 characters (imagery credits plus the
+          // vector label layer's own), which as an expanded bar stretches the full width of the
+          // map and reads as a glaring strip across the bottom. Attribution itself can't just be
+          // dropped -- Esri's terms and OSM's ODbL both require it -- so this keeps it one click
+          // away instead. The vector basemaps' shorter credits collapse the same way, so the
+          // control doesn't change shape when the basemap does.
+          attributionControl: { compact: true },
+        })
+        // The constructor's own `center` places that lng/lat at the raw canvas
+        // midpoint, which is NOT the visually free area once the docked left
+        // "Kumbh Mela" panel and top-right Stats panel are drawn on top -- on
+        // first load (before any fitBounds/flyTo call ever runs) that made the
+        // initial view read as pushed up/left of where it should sit. jumpTo's
+        // own `padding` option (unlike a one-off fitBounds/flyTo padding
+        // elsewhere in this file) calls tr.setPadding under the hood, so this
+        // single call both recenters instantly (no animation) AND establishes
+        // the map's *persistent* padding that every later camera move relies
+        // on -- see reservedMapPadding/applyMapPadding above for why nothing
+        // else in this file passes its own `padding:` option anymore.
+        map.jumpTo({
+          center: initialParcel ? [initialParcel.lng, initialParcel.lat] : CENTER,
+          zoom: initialParcel ? 16 : INITIAL_ZOOM,
+          padding: reservedMapPadding(),
+        })
+        mapRef.current = map
+        // Records what the map's style actually holds, so the sync effect can tell a real change
+        // from a redundant call. Set here rather than at that effect's setup because this is the
+        // only place that knows which kind won -- including when the satellite load fell back.
+        appliedBasemapKeyRef.current = `${initialTheme}:${initialBasemap}`
+        // Keeps state (and the toggle button) truthful when the fallback above demoted satellite.
+        setBasemap(initialBasemap)
+        initMap(map, initialBasemap)
       })
-      mapRef.current = map
-      initMap(map)
-    })
 
     return () => {
       cancelled = true
@@ -2624,7 +2964,11 @@ export default function MapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- initial-view-only prop, map is created once
   }, [])
 
-  function initMap(map: MLMap) {
+  // `initialBasemap` is the kind the map's style was actually built from, passed in rather than
+  // re-read from localStorage here: when a satellite load falls back (missing/expired key) the
+  // stored value still says 'satellite' until the persistence effect catches up, so a re-read
+  // would paint satellite's chrome over the vector basemap for that first frame.
+  function initMap(map: MLMap, initialBasemap: BasemapKind) {
     // Bottom-right, not top-right -- the Stats panel docks top-right and a
     // MapLibre control there sits on a fixed offset unaware of the panel's
     // collapsed/expanded height, so they'd visually collide.
@@ -2633,6 +2977,14 @@ export default function MapView({
     // the zoom/compass buttons using MapLibre's own layout, not a guessed
     // pixel offset that drifts out of sync and overlaps them.
     map.addControl(new PitchToggleControl(), 'bottom-right')
+    // Same corner/stacking reasoning as the two controls above. Held in a ref so the persistence
+    // effect can push the current kind into it -- a native control can't re-render off state.
+    const basemapControl = new BasemapToggleControl(() =>
+      setBasemap((current) => (current === 'satellite' ? 'map' : 'satellite')),
+    )
+    basemapControlRef.current = basemapControl
+    map.addControl(basemapControl, 'bottom-right')
+    basemapControl.sync(initialBasemap)
 
     let marker: Marker | null = null
     if (initialParcel) {
@@ -2683,6 +3035,17 @@ export default function MapView({
       // support and the vendored CARTO style's ~90 fill/line/symbol layers
       // don't have an equivalent single knob for. Starts fully transparent;
       // opacity is the only thing that effect ever touches.
+      // Added before basemap-dim-scrim so the two stack (filter dimming composes on top of
+      // satellite toning) rather than one replacing the other. Both sit above the basemap and
+      // below river/sector_plan, so neither ever touches the app's own overlays.
+      map.addLayer({
+        id: SATELLITE_TONE_SCRIM,
+        type: 'background',
+        paint: { 'background-color': '#000000', 'background-opacity': 0 },
+      })
+      applySatelliteScrim(map, initialBasemap, readMapTheme())
+      collapseAttribution(map)
+
       map.addLayer({
         id: 'basemap-dim-scrim',
         type: 'background',
@@ -2891,8 +3254,8 @@ export default function MapView({
         source: 'sector_boundary',
         'source-layer': 'sector_boundary',
         paint: {
-          'line-color': SECTOR_COLORS[readMapTheme()].boundary,
-          'line-width': SECTOR_BOUNDARY_WIDTH[readMapTheme()],
+          'line-color': SECTOR_COLORS[sectorChromeTheme(readMapTheme(), initialBasemap)].boundary,
+          'line-width': SECTOR_BOUNDARY_WIDTH[sectorChromeTheme(readMapTheme(), initialBasemap)],
         },
       })
       // Plain "NN. Name" sector label -- a Map-mode-only base layer (the "Sector names" toggle
@@ -3297,8 +3660,16 @@ export default function MapView({
       // zoom-fixed world-pixel grid (not viewport-relative), so panning
       // alone never changes which points belong to which cluster.
       const pointDefs = byGeomType('point')
+      // Skips the re-cluster entirely when the zoom crossed no clustering boundary. Past
+      // CLUSTER_MAX_ZOOM clusterPoints returns its input unchanged (poiClustering.ts), so every
+      // zoomend above that used to hand MapLibre an identical FeatureCollection per loaded layer via
+      // setData() -- which still re-indexes the source -- for a guaranteed no-op result.
+      let lastClusterZoom: number | null = null
       function syncPoiClusters() {
         const zoom = map.getZoom()
+        const above = zoom >= CLUSTER_MAX_ZOOM
+        if (lastClusterZoom !== null && above && lastClusterZoom >= CLUSTER_MAX_ZOOM) return
+        lastClusterZoom = zoom
         for (const def of pointDefs) {
           const raw = poiRawFeaturesRef.current[def.key]
           if (!raw) continue
@@ -3306,24 +3677,62 @@ export default function MapView({
           source?.setData(clusterPoints(raw, zoom, 40, CLUSTER_TAG_PROPERTY[def.key]))
         }
       }
-      Promise.all(
-        pointDefs.map((def) =>
-          fetch(`${location.origin}/api/poi/points/${def.key}`)
-            .then((r) => r.json())
-            .then((fc: { features: Feature<Point>[] }) => {
-              poiRawFeaturesRef.current[def.key] = fc.features
-            })
-            .catch(() => {
-              poiRawFeaturesRef.current[def.key] = []
-            }),
-        ),
-      ).then(() => {
-        syncPoiClusters()
-        // Evacuation mode's own entry/exit badges never cluster (see ENTRY_EXIT_POINTS_SOURCE's
-        // comment in evacLayers.ts) -- fed the same raw features entry_exit's clustered Map-mode
-        // source above was just built from, once, since they never need re-clustering on zoom.
-        setEvacEntryExitPoints(map, poiRawFeaturesRef.current.entry_exit ?? [])
-      })
+      // Loads one point layer's raw dataset on demand and clusters it in. This used to be an
+      // unconditional Promise.all over all 23 point layers on every cold map load -- 23 HTTP
+      // requests, each a full-table jsonb_agg GeoJSON build in /api/poi/points/[layer], for data
+      // that rendered nothing, because defaultVisibility() starts every POI layer OFF. Now a layer's
+      // data arrives the first time something actually asks to show it (the visibility effect below,
+      // or a sub-class refetch), keyed off poiPointsRequestedRef so it is fetched at most once.
+      //
+      // Routed through refetchClusteredPoiSource rather than a bare fetch so the initial load and
+      // the sub-class-scoped refetch share one code path -- including its per-layer monotonic token,
+      // which is what keeps a slow first load from clobbering a newer filtered result. It also means
+      // a layer first shown while a sub-class filter is already active fetches the narrowed dataset
+      // straight away, which matters because a clustered source's point_count can't be corrected by
+      // a style filter afterwards (see the poiSubclassFilter effect).
+      function ensurePoiPoints(keys: readonly string[]) {
+        for (const key of keys) {
+          if (poiPointsRequestedRef.current.has(key)) continue
+          poiPointsRequestedRef.current.add(key)
+          void refetchClusteredPoiSource(
+            map,
+            key,
+            poiSubclassFilterRef.current[key],
+            poiRawFeaturesRef,
+          ).then((ok) => {
+            if (!ok) {
+              // Un-mark on failure so the next thing that shows this layer tries again. Marking
+              // before the await is deliberate -- it is what stops two near-simultaneous callers
+              // racing the same request -- but leaving the mark on a failure would strand the layer
+              // empty for the rest of the session, with no console error to explain it.
+              poiPointsRequestedRef.current.delete(key)
+              return
+            }
+            if (key === 'entry_exit') {
+              // Evacuation mode's own entry/exit badges never cluster (see ENTRY_EXIT_POINTS_SOURCE's
+              // comment in evacLayers.ts) -- fed the same raw features entry_exit's clustered
+              // Map-mode source was just built from, since they never need re-clustering on zoom.
+              setEvacEntryExitPoints(map, poiRawFeaturesRef.current.entry_exit ?? [])
+            }
+          })
+        }
+      }
+      ensurePoiPointsRef.current = ensurePoiPoints
+
+      // entry_exit is the one layer still loaded eagerly: Evacuation mode's non-clustered EN/EXT
+      // badges are fed from its raw features by the callback above, and that mode can be entered by
+      // a `?mode=evacuation` cold link before any visibility effect has run.
+      ensurePoiPoints([
+        'entry_exit',
+        ...pointDefs
+          .map((d) => d.key)
+          .filter(
+            (key) =>
+              visibilityForMode(visibilityRef.current, modeRef.current, evacVisibilityRef.current)[
+                key
+              ],
+          ),
+      ])
       map.on('zoomend', syncPoiClusters)
 
       // Invisible hit-target covering each sector's full boundary polygon
@@ -4356,7 +4765,24 @@ export default function MapView({
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
-    applyLayerVisibility(map, visibilityForMode(visibility, mode, evacVisibility))
+    const effective = visibilityForMode(visibility, mode, evacVisibility)
+    // Pull in the raw dataset for any clustered point layer that just became visible -- the
+    // counterpart to initMap dropping the unconditional 23-layer prefetch (see ensurePoiPoints
+    // there). Runs before applyLayerVisibility so the fetch is already in flight while MapLibre
+    // flips the layer on; until it resolves the source holds its empty initial FeatureCollection, so
+    // the layer simply paints nothing rather than erroring. Both Map mode's own toggles and
+    // Evacuation mode's supporting-layer toggles land here, since `effective` is what
+    // visibilityForMode already resolved from both stores.
+    ensurePoiPointsRef.current?.(
+      POI_LAYER_DEFS.filter((d) => d.geomType === 'point' && effective[d.key]).map((d) => d.key),
+    )
+    applyLayerVisibility(map, effective)
+    // applyLayerVisibility ties the class hairline to the Sector plan toggle; Ticket mode shows it
+    // unconditionally (see the sector/class filter effect), so re-assert that here too or a
+    // toggle-only rerun of this effect would hide it again.
+    if (mode === 'tickets' && map.getLayer('sector-plan-class-outline')) {
+      map.setLayoutProperty('sector-plan-class-outline', 'visibility', 'visible')
+    }
     setInsightLayersVisible(map, mode === 'heatmap')
     setTicketLayersVisible(map, mode === 'tickets')
     setInsightLabelVisible(map, mode === 'tickets')
@@ -4815,8 +5241,13 @@ export default function MapView({
     // (see SECTOR_FILL_OPACITY's note) -- it must track the exact same
     // filter or a filtered-out parcel would keep its coloured edge with no
     // fill behind it, reading as a ghost outline.
+    // Ticket mode shows every parcel's hairline regardless of Map mode's own sector/class
+    // filters, since its ticket fill/outline layers aren't filtered by them either.
     if (map.getLayer('sector-plan-class-outline')) {
-      map.setFilter('sector-plan-class-outline', finalFilter as FilterSpecification | null)
+      map.setFilter(
+        'sector-plan-class-outline',
+        mode === 'tickets' ? null : (finalFilter as FilterSpecification | null),
+      )
     }
 
     // Visual emphasis (glow + outline) tracks the exact same combined
@@ -4862,11 +5293,13 @@ export default function MapView({
         sectorFillOpacityForMode(readMapTheme(), mode),
       )
     }
+    // Ticket mode keeps the class wash off (its status fill is the only area colour there) but
+    // always shows the parcel hairline, so parcels without a ticket still read as distinct shapes.
     if (map.getLayer('sector-plan-class-outline')) {
       map.setLayoutProperty(
         'sector-plan-class-outline',
         'visibility',
-        showClassWash ? 'visible' : 'none',
+        showClassWash || mode === 'tickets' ? 'visible' : 'none',
       )
     }
     if (map.getLayer('sector-plan-hit-target')) {
@@ -5001,6 +5434,11 @@ export default function MapView({
         const isClustered = POI_LAYER_DEFS.find((d) => d.key === layerKey)?.geomType === 'point'
 
         if (isClustered) {
+          // Only layers whose data has already been requested (i.e. something showed them at some
+          // point -- see ensurePoiPoints in initMap). A sub-class selection made while the layer is
+          // still hidden needs no request: ensurePoiPoints reads poiSubclassFilterRef when the layer
+          // is first shown, so it fetches the narrowed dataset directly.
+          if (!poiPointsRequestedRef.current.has(layerKey)) continue
           // amenities/sanitation are clustered point layers (see initMap) --
           // clustering happens client-side over the layer's full raw dataset
           // (clusterPoints in src/lib/poiClustering.ts), so a cluster's
@@ -6712,6 +7150,10 @@ export default function MapView({
       {mode === 'map' ? (
         <StatsPanel
           icon={<ChartBarIcon className="h-full w-full" />}
+          onStats={(data) => {
+            setSubclassStats(data.bySubclass)
+            setPoiSubclassStats(data.poiBySubclass)
+          }}
           sectorNo={selectedSector === 'all' ? null : selectedSector}
           sectorLabel={
             selectedSector !== 'all'

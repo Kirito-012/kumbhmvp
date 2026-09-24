@@ -1,4 +1,5 @@
 import { getPool } from '@/server/db/postgres'
+import { GIS_PRIVATE_CACHE_HEADERS } from '@/server/http/cache'
 import { getCurrentUser } from '@/server/auth/session'
 import { defineAbilityFor } from '@/server/auth/ability'
 
@@ -125,7 +126,10 @@ export async function GET() {
     `),
   ])
 
-  const toFeatures = (rows: Record<string, unknown>[], extraProps: (r: Record<string, unknown>) => Record<string, unknown>): ArrowFeature[] =>
+  const toFeatures = (
+    rows: Record<string, unknown>[],
+    extraProps: (r: Record<string, unknown>) => Record<string, unknown>,
+  ): ArrowFeature[] =>
     rows.map((r) => ({
       type: 'Feature',
       id: Number(r.id),
@@ -151,6 +155,9 @@ export async function GET() {
         features: toFeatures(directionLine.rows, (r) => ({ remark: r.remark })),
       },
     },
-    { headers: { 'Cache-Control': 'public, max-age=300, s-maxage=3600' } },
+    // `private`, not `public`: this response is gated on `ability.can('read:all', 'ticket')` above,
+    // so a shared cache in front of the app could hand an admin's copy to a Surveyor who may not
+    // see it. Same correction as /api/evacuation/summary's.
+    { headers: GIS_PRIVATE_CACHE_HEADERS },
   )
 }

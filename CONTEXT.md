@@ -276,21 +276,21 @@ addition to_ the grant, so a Manager can't self-promote.
 
 All GIS routes use `runtime = 'nodejs'` and `getPool()`; ticket routes use `dbConnect()`.
 
-| Route                                   | Purpose                                                                                                                                       |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/auth/[...nextauth]`               | Auth.js handler                                                                                                                               |
-| `/api/search`                           | Topbar global search. Returns `{tickets, people}`, surveyor-scoped; people only if caller has `account:read`                                  |
-| `/api/sectors`                          | All sector boundaries + centroid + bbox                                                                                                       |
-| `/api/stats`                            | Big aggregate endpoint powering StatsPanel — class/subclass breakdowns, road stats, per-sector rollups, POI counts over a ~44-table whitelist |
-| `/api/sector-plan/locate`               | bbox + up to 200 centroids for zoom-to-fit                                                                                                    |
-| `/api/sector-plan/report`               | Sector Report drawer data                                                                                                                     |
-| `/api/poi/locate`                       | Same locate pattern, for a whitelisted POI table map                                                                                          |
-| `/api/poi/points/[layer]`               | Full GeoJSON for the 7 small point layers (client-side clustering)                                                                            |
-| `/api/tiles/[layer]/[z]/[x]/[y]`        | MVT vector tiles — see §9                                                                                                                     |
-| `/api/tickets/by-parcel/[sectorPlanId]` | Does this map parcel already have a ticket?                                                                                                   |
+| Route                                   | Purpose                                                                                                                                                                     |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/auth/[...nextauth]`               | Auth.js handler                                                                                                                                                             |
+| `/api/search`                           | Topbar global search. Returns `{tickets, people}`, surveyor-scoped; people only if caller has `account:read`                                                                |
+| `/api/sectors`                          | All sector boundaries + centroid + bbox                                                                                                                                     |
+| `/api/stats`                            | Big aggregate endpoint powering StatsPanel — class/subclass breakdowns, road stats, per-sector rollups, POI counts over a ~44-table whitelist                               |
+| `/api/sector-plan/locate`               | bbox + up to 200 centroids for zoom-to-fit                                                                                                                                  |
+| `/api/sector-plan/report`               | Sector Report drawer data                                                                                                                                                   |
+| `/api/poi/locate`                       | Same locate pattern, for a whitelisted POI table map                                                                                                                        |
+| `/api/poi/points/[layer]`               | Full GeoJSON for the 7 small point layers (client-side clustering)                                                                                                          |
+| `/api/tiles/[layer]/[z]/[x]/[y]`        | MVT vector tiles — see §9                                                                                                                                                   |
+| `/api/tickets/by-parcel/[sectorPlanId]` | Does this map parcel already have a ticket?                                                                                                                                 |
 | `/api/evacuation/search`                | Evacuation mode's search (PLAN-evacuation.md §8.1) — sector/zone-aware, labels via `src/lib/evacuation/labels.ts`. Gated on `read:all`/`ticket`, same as `/api/insights/*`. |
-| `/api/evacuation/summary`                | Per-layer counts, zone outlines, and (with `?sector=`/`?zone=`) a focused feature list + nearby care facilities (§8.2). Same gating.           |
-| `/api/v1/tickets` (POST)                | **External integration** — see below                                                                                                          |
+| `/api/evacuation/summary`               | Per-layer counts, zone outlines, and (with `?sector=`/`?zone=`) a focused feature list + nearby care facilities (§8.2). Same gating.                                        |
+| `/api/v1/tickets` (POST)                | **External integration** — see below                                                                                                                                        |
 
 ### `/api/v1/tickets` — the DroneSeva integration
 
@@ -391,14 +391,66 @@ a cluster's `point_count`.
 
 ### Theme handling — easiest thing to get wrong
 
-`readMapTheme()` reads `data-theme` off `document.documentElement`. Basemaps are **vendored style JSONs**
-in `public/` (MapTiler Bright for light, CARTO Dark Matter for dark), fetched and merged into the map's
-style object rather than applied via `setStyle()` — so the app's own sources and layers survive a theme swap.
+`readMapTheme()` reads `data-theme` off `document.documentElement`. The two "map" basemaps are
+**vendored style JSONs** in `public/` (MapTiler Bright for light, CARTO Dark Matter for dark), fetched
+and merged into the map's style object rather than applied via `setStyle()` — so the app's own sources
+and layers survive a theme swap. (Satellite is a third, remote style — see below.)
 
 **There is a dedicated theme-swap effect that re-applies every theme-dependent paint property in place.**
 If you add a new theme-aware layer and forget to register it there, it will silently keep whichever
 theme's colours it was created with. `PLAN-deferred-roads.md` calls this out as the single easiest thing
 to miss.
+
+### Satellite basemap
+
+A second axis alongside theme: `BasemapKind` is `'map' | 'satellite'`, toggled by `BasemapToggleControl`
+(the globe button in the bottom-right control stack, same native-control mechanism as the 3D button) and
+persisted under `tcsticket:mapView:basemap`. `loadBasemapStyle(theme, kind)` dispatches to either the
+vendored vector styles or **Esri's `arcgis/imagery` hybrid** (imagery + Esri's own road/place labels).
+So the swap is one matrix: satellite loads the same style in both themes and differs only in scrim.
+
+Imagery is **Maxar WorldView-3 at 0.31 m/px captured 2026-03-05** over the mela area — verified against
+Esri's own `World_Imagery/MapServer/identify` metadata endpoint, which is also how to re-check vintage
+later. MapTiler Satellite was evaluated first (the key was already in the repo) and rejected: over
+Haridwar it only has the ~2 m global mosaic and is visibly upscaled by z18.
+
+**Licensing — the tempting wrong answer.** The key-free `server.arcgisonline.com/World_Imagery` tile
+endpoint is the ArcGIS **Online** basemap and is _not_ licensed for commercial use. The endpoint used
+here is the ArcGIS **Location Platform** service, whose subscription does permit commercial deployment;
+it requires `NEXT_PUBLIC_ARCGIS_API_KEY` (free tier: 2M basemap tiles/month). The key ships in the client
+bundle, so it is scoped to Basemaps only and referrer-restricted. **It expires 2027-09-13** — mid-Kumbh.
+On expiry satellite degrades to the vector basemap with a console error rather than breaking.
+
+Gotchas, each of which cost real debugging:
+
+- **Font stacks must be rewritten.** Esri's style asks for `Arial Regular/Bold/Italic` from its own
+  glyphs URL, but a MapLibre style has exactly one glyphs endpoint and this map's serves only Noto Sans.
+  `loadSatelliteStyle` rewrites every symbol layer's `text-font`. Without it the hybrid renders as bare
+  imagery with **no labels and no console error**.
+- **`SATELLITE_TONE_SCRIM` is deliberately a second background layer**, not a reuse of
+  `basemap-dim-scrim`. The class-filter effect writes that one's opacity back to 0 whenever no filter is
+  active, which would wipe the satellite toning every time a filter cleared. Two layers compose instead.
+- **`APP_BACKGROUND_LAYER_IDS` exists because the theme swap removes old basemap layers by
+  `type === 'background'`**, which also matched the app's own scrims — they were being deleted on every
+  theme toggle and never re-added, silently killing class-filter dimming for the rest of the session
+  (every write to it is `getLayer`-guarded, so it failed quietly). Pre-existing bug, found while adding
+  the satellite scrim.
+- **`sectorChromeTheme(theme, kind)`** resolves which `SECTOR_COLORS`/`SECTOR_BOUNDARY_WIDTH` entry the
+  sector chrome uses: satellite takes dark mode's near-white boundary in _either_ theme, because light's
+  near-black `#111827` vanishes into imagery vegetation and shadow. Hover/selected come along so a
+  near-white resting outline doesn't read as dropping out on hover. The selected-sector _glow_ stays
+  gated on the real theme — it has a second gate in the layer-visibility list that does the same.
+- **Attribution runs in MapLibre's compact mode.** Esri ships ~230 characters of credits across two
+  sources, which as an expanded bar spans the whole map. MapLibre still initialises the `<details>`
+  _expanded_, so `collapseAttribution()` drops `maplibregl-compact-show` in the `load` handler — its
+  own collapsed state, which keeps `open` set, so don't "fix" this to `details.open = false`. MapLibre's
+  `.maplibregl-compact` CSS also hardcodes a white pill at the same specificity as the app's override
+  and loads later, hence the extra-specificity rules in `globals.css`.
+- **Don't persist the basemap choice on the mount pass.** The persistence effect is guarded on
+  `appliedBasemapKeyRef`: effects run in declaration order and the map-creation effect (which reads the
+  stored kind to pick the very first style) is declared _below_ it, so an unguarded write put the
+  SSR-safe `'map'` over a stored `'satellite'` before it was ever read back — losing the choice on
+  every reload.
 
 ### Colour system — [`src/lib/classColors.ts`](src/lib/classColors.ts)
 
@@ -583,7 +635,7 @@ clustered POI layer), then the evac-\* layers themselves (popup via a new `evacP
 `showEvacPopup` in MapView.tsx, using `src/lib/evacuation/labels.ts`'s pure label functions directly
 client-side -- no server round-trip, since the clicked feature's own vector-tile properties are exactly
 the row shape those functions expect), then falls back to the same `poiLayerIds` check Map mode uses
-(safe because every *other* POI layer stays hidden while this mode is active) for the 6 supporting
+(safe because every _other_ POI layer stays hidden while this mode is active) for the 6 supporting
 layers, and finally bare-sector (`evacFocus` + fly) vs. empty-area (clear selection). A clicked feature's
 exact geometry, or a search result's bbox-as-rectangle (results never carry full geometry, to keep that
 API response light), populates the `evac-selected` geojson source via a dedicated effect keyed on
@@ -592,7 +644,7 @@ which is deferred polish.
 
 **A real bug from Phase 2, only caught here:** `classColors.ts` briefly had `hfl_area`/`hfl_line` entries
 in `POLYGON_LAYER_COLORS`/`LINE_LAYER_COLORS` (added during Phase 2, commented "not yet a Map-mode
-toggle") -- but `POI_LAYER_DEFS` in MapView.tsx is *auto-derived* from those maps' keys (see §9's own POI
+toggle") -- but `POI_LAYER_DEFS` in MapView.tsx is _auto-derived_ from those maps' keys (see §9's own POI
 section), so the entries silently made Map mode's generic POI loop create a `kumbh.hfl_area` vector
 source of its own before `addEvacLayers` ever ran. `addEvacLayers`'s own idempotency guard then saw that
 source and silently returned, every time, meaning **no evac-\* layer existed at all** for the whole of
@@ -903,6 +955,7 @@ existing `_<table>_map` pattern. `SOURCE_TAG_2027`/`SOURCE_TAG_SHP` are the two 
 | `INTEGRATION_API_KEY`                                | Shared secret for `POST /api/v1/tickets`                                   |
 | `DRONESEVA_PORTAL_ORIGIN`                            | Origin for "View in DroneSeva" links                                       |
 | `NEXT_PUBLIC_MAPTILER_KEY`                           | MapTiler key for the light basemap (client-bundled)                        |
+| `NEXT_PUBLIC_ARCGIS_API_KEY`                         | ArcGIS Location Platform key for the satellite basemap (client-bundled)    |
 | `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET` | Photo upload signing (server-only)                                         |
 | `LOG_LEVEL`                                          | pino level                                                                 |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`           | In `.env.example`, but `seed.ts` now hardcodes accounts — likely vestigial |

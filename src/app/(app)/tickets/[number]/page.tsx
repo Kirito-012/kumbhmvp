@@ -16,10 +16,8 @@ import { dbConnect } from '@/server/db/connect'
 import * as ticketService from '@/server/services/ticket.service'
 import * as attachmentService from '@/server/services/attachment.service'
 import * as questionnaireService from '@/server/services/questionnaire.service'
-import { TicketStatusModel } from '@/server/db/models/ticket-status.model'
-import { TicketPriorityModel } from '@/server/db/models/ticket-priority.model'
-import { TicketTypeModel } from '@/server/db/models/ticket-type.model'
 import { UserModel } from '@/server/db/models/user.model'
+import { getPriorities, getStatuses, getTypes } from '@/server/services/lookups'
 import {
   toTicketDetailView,
   toCommentView,
@@ -64,9 +62,9 @@ export default async function TicketDetailPage({
   ] = await Promise.all([
     ticketService.listComments(String(ticketDoc._id)),
     ticketService.listEvents(String(ticketDoc._id)),
-    TicketStatusModel.find().sort({ order: 1 }).lean(),
-    TicketPriorityModel.find().sort({ order: 1 }).lean(),
-    TicketTypeModel.find({ isActive: true }).sort({ name: 1 }).lean(),
+    getStatuses(),
+    getPriorities(),
+    getTypes(),
     UserModel.find({ isActive: true, deletedAt: null }).select('fullname email').lean(),
     attachmentService.listAttachments(String(ticketDoc._id)),
     questionnaireService.listQuestionnaires(String(ticketDoc._id)),

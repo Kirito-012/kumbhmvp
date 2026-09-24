@@ -1,7 +1,9 @@
 import 'server-only'
 
+import { cache } from 'react'
 import { QueryFilter, Types } from 'mongoose'
 import { dbConnect } from '@/server/db/connect'
+import { getPriorities, getStatuses } from '@/server/services/lookups'
 import { TicketModel, type Ticket } from '@/server/db/models/ticket.model'
 import { TicketCommentModel } from '@/server/db/models/ticket-comment.model'
 import { TicketEventModel } from '@/server/db/models/ticket-event.model'
@@ -201,11 +203,16 @@ export async function getLocationFilterOptions() {
  * Counts of non-deleted tickets per status, keyed by status slug, plus a grand total.
  * Pass `assigneeId` to scope the counts to one user's queue (Surveyor role — see
  * `requireTicketScope()` in `src/server/auth/session.ts`).
+ *
+ * Wrapped in React `cache()` because `/tickets` calls it twice per request with the same argument:
+ * once from the route-group layout, for the sidebar's ticket-count badge, and once from the page
+ * itself, for the status filter chips. Neither knows about the other, and the aggregation is a
+ * full group-by over the ticket collection.
  */
-export async function countTicketsByStatus(assigneeId?: string) {
+export const countTicketsByStatus = cache(async function countTicketsByStatus(assigneeId?: string) {
   await dbConnect()
 
-  const statuses = await TicketStatusModel.find().sort({ order: 1 }).lean()
+  const statuses = await getStatuses()
   const match: QueryFilter<Ticket> = { deletedAt: null }
   // aggregate() does NOT schema-cast filter values the way find()/countDocuments() do — an
   // uncast string here silently matches zero documents against the stored ObjectId.
@@ -224,7 +231,7 @@ export async function countTicketsByStatus(assigneeId?: string) {
   const total = byStatus.reduce((sum, s) => sum + s.count, 0)
 
   return { total, byStatus }
-}
+})
 
 /**
  * Everything the dashboard page needs, in one call. All widgets accept `assigneeId` for
@@ -254,76 +261,148 @@ export async function getDashboardData(assigneeId?: string) {
   const toLocalISODate = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
-  // Fetched up front (not inside the big Promise.all below) so the priority/category aggregations
-  // can match directly against resolvedIds instead of $lookup-joining ticketstatuses per ticket —
-  // a small, cheap query traded for dropping a $lookup + $unwind from two much larger aggregations.
-  const resolvedStatusIds = await TicketStatusModel.find({ isResolved: true }).select('_id').lean()
+  // This function is the whole of /dashboard's server render, so its shape is latency: every
+  // sequential `await` here is a full round-trip to Atlas that the page's first byte waits on. It
+  // used to be 7 of them, though only 3 stages are genuinely dependent — so it is now 3.
+  //
+  // Stage 1 — the two small lookup-table reads everything below matches against. resolvedIds is
+  // fetched up front (rather than inside stage 2) so the priority/category aggregations can match
+  // directly against it instead of $lookup-joining ticketstatuses per ticket — a small, cheap query
+  // traded for dropping a $lookup + $unwind from two much larger aggregations. `priorities` depends
+  // on nothing at all and just rides along here.
+  const [resolvedStatusIds, priorities] = await Promise.all([
+    TicketStatusModel.find({ isResolved: true }).select('_id').lean(),
+    getPriorities(),
+  ])
   const resolvedIds = resolvedStatusIds.map((s) => s._id)
+  const openMatch: QueryFilter<Ticket> = { ...baseMatch, statusId: { $nin: resolvedIds } }
 
-  const [resolvedTodayCount, priorityRows, categoryRows, volumeRows, sectorNames] =
-    await Promise.all([
-      TicketModel.countDocuments({
-        ...baseMatch,
-        resolvedAt: { $gte: startOfToday },
-      }),
-      TicketModel.aggregate([
-        { $match: { ...baseMatch, statusId: { $nin: resolvedIds } } },
-        { $group: { _id: '$priorityId', count: { $sum: 1 } } },
-      ]),
-      // Grouped by class *and* sector in one pass: the dashboard's category panel ships both the
-      // all-sectors totals and a per-sector breakdown so its sector dropdown filters instantly
-      // client-side, with no round-trip per selection (~25 classes x ~32 sectors is a trivially
-      // small payload, and most pairs don't exist at all).
-      TicketModel.aggregate([
-        { $match: { ...baseMatch, 'location.classGroup': { $ne: null } } },
-        {
-          $group: {
-            _id: { classGroup: '$location.classGroup', sectorNo: '$location.sectorNo' },
-            total: { $sum: 1 },
-            completed: { $sum: { $cond: [{ $in: ['$statusId', resolvedIds] }, 1, 0] } },
-          },
+  // Stage 2 — every query that needs nothing beyond resolvedIds, which is all of them bar the two
+  // in stage 3. This Promise.all used to hold only the first five; the hero counts, the
+  // assignee-scope id list and the workload rollup each sat in their own sequential `await`
+  // afterwards despite being independent of one another.
+  const [
+    resolvedTodayCount,
+    priorityRows,
+    categoryRows,
+    volumeRows,
+    sectorNames,
+    openTicketsCount,
+    totalCount,
+    unassignedCount,
+    scopedTicketIds,
+    workloadRows,
+  ] = await Promise.all([
+    TicketModel.countDocuments({
+      ...baseMatch,
+      resolvedAt: { $gte: startOfToday },
+    }),
+    TicketModel.aggregate([
+      { $match: { ...baseMatch, statusId: { $nin: resolvedIds } } },
+      { $group: { _id: '$priorityId', count: { $sum: 1 } } },
+    ]),
+    // Grouped by class *and* sector in one pass: the dashboard's category panel ships both the
+    // all-sectors totals and a per-sector breakdown so its sector dropdown filters instantly
+    // client-side, with no round-trip per selection (~25 classes x ~32 sectors is a trivially
+    // small payload, and most pairs don't exist at all).
+    TicketModel.aggregate([
+      { $match: { ...baseMatch, 'location.classGroup': { $ne: null } } },
+      {
+        $group: {
+          _id: { classGroup: '$location.classGroup', sectorNo: '$location.sectorNo' },
+          total: { $sum: 1 },
+          completed: { $sum: { $cond: [{ $in: ['$statusId', resolvedIds] }, 1, 0] } },
         },
-      ]),
-      TicketModel.aggregate([
-        {
-          $facet: {
-            created: [
-              { $match: { ...baseMatch, createdAt: { $gte: sevenDaysAgo } } },
-              {
-                $group: {
-                  _id: {
-                    $dateToString: {
-                      format: '%Y-%m-%d',
-                      date: '$createdAt',
-                      timezone: dateToStringTimezone,
-                    },
+      },
+    ]),
+    TicketModel.aggregate([
+      {
+        $facet: {
+          created: [
+            { $match: { ...baseMatch, createdAt: { $gte: sevenDaysAgo } } },
+            {
+              $group: {
+                _id: {
+                  $dateToString: {
+                    format: '%Y-%m-%d',
+                    date: '$createdAt',
+                    timezone: dateToStringTimezone,
                   },
-                  n: { $sum: 1 },
                 },
+                n: { $sum: 1 },
               },
-            ],
-            resolved: [
-              { $match: { ...baseMatch, resolvedAt: { $gte: sevenDaysAgo } } },
-              {
-                $group: {
-                  _id: {
-                    $dateToString: {
-                      format: '%Y-%m-%d',
-                      date: '$resolvedAt',
-                      timezone: dateToStringTimezone,
-                    },
+            },
+          ],
+          resolved: [
+            { $match: { ...baseMatch, resolvedAt: { $gte: sevenDaysAgo } } },
+            {
+              $group: {
+                _id: {
+                  $dateToString: {
+                    format: '%Y-%m-%d',
+                    date: '$resolvedAt',
+                    timezone: dateToStringTimezone,
                   },
-                  n: { $sum: 1 },
                 },
+                n: { $sum: 1 },
               },
-            ],
-          },
+            },
+          ],
         },
-      ]),
-      getSectorNames(),
-    ])
+      },
+    ]),
+    getSectorNames(),
+    TicketModel.countDocuments(openMatch),
+    TicketModel.countDocuments(baseMatch),
+    // Workspace-wide, not scoped by assigneeId — "how many need a home" is inherently an
+    // Admin/Manager question. null for a Surveyor's dashboard (their view is assignee-locked to
+    // themselves, so an "unassigned" count in their own scope is always zero/meaningless).
+    // statusId excludes resolved/closed tickets — an already-resolved ticket doesn't "need" an
+    // assignee, so it shouldn't inflate this count.
+    assigneeId
+      ? null
+      : TicketModel.countDocuments({
+          deletedAt: null,
+          assigneeId: null,
+          statusId: { $nin: resolvedIds },
+        }),
+    // The caller's own ticket ids, needed to scope Recent activity in stage 3. Plain `assigneeId`
+    // (not the cast ObjectId) is correct here: find() schema-casts its filter, unlike the
+    // aggregate() pipelines above.
+    assigneeId
+      ? TicketModel.find({ deletedAt: null, assigneeId })
+          .select('_id')
+          .lean()
+          .then((rows) => rows.map((t) => t._id))
+      : null,
+    // Workload by assignee — open tickets grouped by who holds them. For a Surveyor (assigneeId
+    // set) this degenerates to at most their own row, deliberately: their dashboard shouldn't
+    // reveal other surveyors' queues.
+    TicketModel.aggregate([
+      { $match: openMatch },
+      { $match: { assigneeId: { $ne: null } } },
+      { $group: { _id: '$assigneeId', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 6 },
+    ]),
+  ])
 
-  const priorities = await TicketPriorityModel.find().sort({ order: 1 }).lean()
+  // Stage 3 — the only two queries that genuinely depend on stage 2's results: Recent activity
+  // needs scopedTicketIds, and the workload names need the ids the rollup picked.
+  const [recentEvents, workloadUsers] = await Promise.all([
+    TicketEventModel.find(scopedTicketIds ? { ticketId: { $in: scopedTicketIds } } : {})
+      .sort({ createdAt: -1 })
+      .limit(8)
+      .populate([
+        { path: 'actorId', select: 'fullname email' },
+        { path: 'ticketId', select: 'number subject' },
+      ])
+      .lean(),
+    UserModel.find({ _id: { $in: workloadRows.map((r) => r._id) } })
+      .select('fullname')
+      .lean(),
+  ])
+
   const priorityCountById = new Map(priorityRows.map((r) => [String(r._id), r.count]))
   const priorityBreakdown = priorities.map((p) => ({
     name: p.name,
@@ -401,53 +480,6 @@ export async function getDashboardData(assigneeId?: string) {
     resolved: resolvedByDay.get(iso) ?? 0,
   }))
 
-  const openMatch: QueryFilter<Ticket> = { ...baseMatch, statusId: { $nin: resolvedIds } }
-  const [openTicketsCount, totalCount, unassignedCount] = await Promise.all([
-    TicketModel.countDocuments(openMatch),
-    TicketModel.countDocuments(baseMatch),
-    // Workspace-wide, not scoped by assigneeId — "how many need a home" is inherently an
-    // Admin/Manager question. null for a Surveyor's dashboard (their view is assignee-locked to
-    // themselves, so an "unassigned" count in their own scope is always zero/meaningless).
-    // statusId excludes resolved/closed tickets — an already-resolved ticket doesn't "need" an
-    // assignee, so it shouldn't inflate this count.
-    assigneeId
-      ? null
-      : TicketModel.countDocuments({
-          deletedAt: null,
-          assigneeId: null,
-          statusId: { $nin: resolvedIds },
-        }),
-  ])
-
-  // Recent activity — most recent events, scoped to the caller's tickets when assigneeId is set.
-  const eventTicketFilter = assigneeId ? { deletedAt: null, assigneeId } : { deletedAt: null }
-  const scopedTicketIds = assigneeId
-    ? (await TicketModel.find(eventTicketFilter).select('_id').lean()).map((t) => t._id)
-    : null
-  const eventMatch = scopedTicketIds ? { ticketId: { $in: scopedTicketIds } } : {}
-  const recentEvents = await TicketEventModel.find(eventMatch)
-    .sort({ createdAt: -1 })
-    .limit(8)
-    .populate([
-      { path: 'actorId', select: 'fullname email' },
-      { path: 'ticketId', select: 'number subject' },
-    ])
-    .lean()
-
-  // Workload by assignee — open tickets grouped by who holds them. For a Surveyor (assigneeId set)
-  // this degenerates to at most their own row, deliberately: their dashboard shouldn't reveal
-  // other surveyors' queues.
-  const workloadRows = await TicketModel.aggregate([
-    { $match: openMatch },
-    { $match: { assigneeId: { $ne: null } } },
-    { $group: { _id: '$assigneeId', count: { $sum: 1 } } },
-    { $sort: { count: -1 } },
-    { $limit: 6 },
-  ])
-  const workloadUserIds = workloadRows.map((r) => r._id)
-  const workloadUsers = await UserModel.find({ _id: { $in: workloadUserIds } })
-    .select('fullname')
-    .lean()
   const nameById = new Map(workloadUsers.map((u) => [String(u._id), u.fullname]))
   const workloadByAssignee = workloadRows.map((r) => ({
     id: String(r._id),

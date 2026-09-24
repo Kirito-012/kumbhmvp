@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { getPool } from '@/server/db/postgres'
+import { GIS_CACHE_HEADERS } from '@/server/http/cache'
 
 export const runtime = 'nodejs'
 
@@ -77,9 +78,12 @@ export async function GET(req: NextRequest) {
       ? [Number(row.xmin), Number(row.ymin), Number(row.xmax), Number(row.ymax)]
       : null
 
-  return Response.json({
-    total,
-    bbox,
-    features: features.rows,
-  })
+  return Response.json(
+    {
+      total,
+      bbox,
+      features: features.rows,
+    },
+    { headers: GIS_CACHE_HEADERS },
+  )
 }

@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { dbConnect } from '@/server/db/connect'
+import { getPriorities, getStatuses } from '@/server/services/lookups'
 import { TicketModel } from '@/server/db/models/ticket.model'
 import { TicketStatusModel } from '@/server/db/models/ticket-status.model'
 import { TicketPriorityModel } from '@/server/db/models/ticket-priority.model'
@@ -46,8 +47,8 @@ export async function getInsightsTicketData(): Promise<InsightsTicketData> {
   await dbConnect()
 
   const [statusDocs, priorityDocs, tickets] = await Promise.all([
-    TicketStatusModel.find().sort({ order: 1 }).lean(),
-    TicketPriorityModel.find().sort({ order: 1 }).lean(),
+    getStatuses(),
+    getPriorities(),
     TicketModel.find(
       { deletedAt: null, ...HAS_LOCATION },
       {
@@ -183,8 +184,17 @@ export async function getSectorInsights(
     ...(sectorNo === undefined ? {} : { 'location.sectorNo': sectorNo }),
   }
 
-  const resolvedStatusDocs = await TicketStatusModel.find({ isResolved: true }).select('_id').lean()
-  const resolvedIds = resolvedStatusDocs.map((s) => s._id)
+  // Every status and priority, not just the resolved statuses: the ticket-list query below needs
+  // each one's slug (for the row shape) and each priority's `order` (for the sort), and these two
+  // lookup tables are a handful of documents each. Fetching them here is what lets that query sort
+  // and page in Mongo instead of pulling every matching ticket into Node -- see below.
+  const [statusDocs, priorityDocs] = await Promise.all([
+    TicketStatusModel.find().select('_id slug isResolved').lean(),
+    TicketPriorityModel.find().select('_id slug order').lean(),
+  ])
+  const resolvedIds = statusDocs.filter((st) => st.isResolved).map((st) => st._id)
+  const statusById = new Map(statusDocs.map((st) => [String(st._id), st]))
+  const priorityById = new Map(priorityDocs.map((pr) => [String(pr._id), pr]))
 
   const startOfToday = new Date()
   startOfToday.setHours(0, 0, 0, 0)
@@ -231,21 +241,92 @@ export async function getSectorInsights(
         .sort({ createdAt: 1 })
         .select('number subject createdAt')
         .lean(),
-      // Small enough per sector (busiest sector is ~700 tickets total, fewer resolved) to pull
-      // both timestamps and compute the median in Node — Mongo's $percentile needs a newer
-      // server version than this deployment's aggregation pipeline otherwise relies on.
-      TicketModel.find({ ...baseMatch, statusId: { $in: resolvedIds }, resolvedAt: { $ne: null } })
-        .select('createdAt resolvedAt')
-        .lean(),
-      TicketModel.find(baseMatch)
-        .select(
-          'number subject lastActivityAt location.sectorPlanId location.classGroup location.subclass location.lng location.lat',
-        )
-        .populate([
-          { path: 'statusId', select: 'slug isResolved' },
-          { path: 'priorityId', select: 'slug order' },
-        ])
-        .lean(),
+      // Median resolve time, computed entirely in the pipeline and returned as a single document.
+      // This used to be `TicketModel.find(...).select('createdAt resolvedAt')` -- every resolved
+      // ticket streamed to Node, two timestamps each, then subtracted and sorted there. For
+      // `target === 'all'` (the state the Insights panel opens in) that is every resolved ticket in
+      // the workspace, not the "busiest sector is ~700" case the original comment assumed.
+      //
+      // $percentile would express this directly but needs MongoDB 7.0, newer than the rest of this
+      // pipeline assumes -- hence the explicit array arithmetic, which is the same mid-element (or
+      // mean of the two middle elements) definition the Node code used, so the number is unchanged.
+      // $sort before $group is the standard idiom for an ordered $push, and `all` is a few thousand
+      // doubles at most -- nowhere near the 16 MB document limit.
+      TicketModel.aggregate<{ median: number | null }>([
+        { $match: { ...baseMatch, statusId: { $in: resolvedIds }, resolvedAt: { $ne: null } } },
+        {
+          $project: {
+            _id: 0,
+            h: { $divide: [{ $subtract: ['$resolvedAt', '$createdAt'] }, 3_600_000] },
+          },
+        },
+        { $sort: { h: 1 } },
+        { $group: { _id: null, all: { $push: '$h' }, n: { $sum: 1 } } },
+        {
+          $project: {
+            _id: 0,
+            median: {
+              $cond: [
+                { $eq: [{ $mod: ['$n', 2] }, 0] },
+                {
+                  $avg: [
+                    { $arrayElemAt: ['$all', { $subtract: [{ $divide: ['$n', 2] }, 1] }] },
+                    { $arrayElemAt: ['$all', { $divide: ['$n', 2] }] },
+                  ],
+                },
+                { $arrayElemAt: ['$all', { $floor: { $divide: ['$n', 2] } }] },
+              ],
+            },
+          },
+        },
+      ]),
+      // Open first, then by priority order (highest first), then most recently active -- the triage
+      // order the panel's list is defined by (an admin reads unresolved work before history, urgent
+      // before routine). This used to be `TicketModel.find(baseMatch)` with two $populates, sorted
+      // in Node and sliced to SECTOR_TICKET_LIST_CAP afterwards: for `target === 'all'` -- which is
+      // the state the Insights panel *opens* in (useSectorInsights maps a null sector to 'all') --
+      // that materialised every ticket in the workspace, each with a joined status and priority
+      // document, to return 200 rows.
+      //
+      // The sort is reproduced exactly in the pipeline: `isOpen` mirrors `!statusId.isResolved` with
+      // the same "a ticket whose status is missing counts as open" fallback the Node comparator had
+      // (a statusId matching no status document falls through $switch to 1), and `priorityOrder`
+      // mirrors `priorityId?.order ?? 0`. LIST_CAP + 1 rather than LIST_CAP so `truncated` below is
+      // still derivable without a second count.
+      TicketModel.aggregate([
+        { $match: baseMatch },
+        {
+          $addFields: {
+            isOpen: { $cond: [{ $in: ['$statusId', resolvedIds] }, 0, 1] },
+            priorityOrder: {
+              $switch: {
+                branches: priorityDocs.map((pr) => ({
+                  case: { $eq: ['$priorityId', pr._id] },
+                  then: pr.order,
+                })),
+                default: 0,
+              },
+            },
+          },
+        },
+        { $sort: { isOpen: -1, priorityOrder: -1, lastActivityAt: -1 } },
+        { $limit: SECTOR_TICKET_LIST_CAP + 1 },
+        {
+          $project: {
+            _id: 0,
+            number: 1,
+            subject: 1,
+            lastActivityAt: 1,
+            statusId: 1,
+            priorityId: 1,
+            'location.sectorPlanId': 1,
+            'location.classGroup': 1,
+            'location.subclass': 1,
+            'location.lng': 1,
+            'location.lat': 1,
+          },
+        },
+      ]),
     ])
 
   const days: string[] = []
@@ -288,36 +369,32 @@ export async function getSectorInsights(
       }
     : null
 
-  let medianResolveHours: number | null = null
-  if (resolvedDurations.length > 0) {
-    const hours = resolvedDurations
-      .map((t) => (new Date(t.resolvedAt!).getTime() - new Date(t.createdAt).getTime()) / 3_600_000)
-      .sort((a, b) => a - b)
-    const mid = Math.floor(hours.length / 2)
-    medianResolveHours = hours.length % 2 === 0 ? (hours[mid - 1] + hours[mid]) / 2 : hours[mid]
-  }
+  // One row, or none at all when the scope has no resolved tickets (the $group is skipped on an
+  // empty input rather than emitting a null-valued document).
+  const medianResolveHours = resolvedDurations[0]?.median ?? null
 
-  // Open first, then by priority order (highest first), then most recently active — mirrors how
-  // an admin would triage a sector: unresolved work before history, urgent before routine.
-  type TicketDoc = (typeof ticketDocs)[number] & {
-    statusId: { slug: string; isResolved: boolean } | null
-    priorityId: { slug: string; order: number } | null
+  // Already in triage order and already capped by the pipeline above. The status/priority slugs are
+  // looked up from the lookup-table maps rather than a $populate, which is what makes that possible.
+  type TicketRowDoc = {
+    number: number
+    subject: string
+    lastActivityAt: Date
+    statusId: unknown
+    priorityId: unknown
+    location?: {
+      sectorPlanId: number
+      classGroup?: string | null
+      subclass?: string | null
+      lng: number
+      lat: number
+    }
   }
-  const sorted = (ticketDocs as unknown as TicketDoc[]).sort((a, b) => {
-    const aOpen = a.statusId ? !a.statusId.isResolved : true
-    const bOpen = b.statusId ? !b.statusId.isResolved : true
-    if (aOpen !== bOpen) return aOpen ? -1 : 1
-    const aOrder = a.priorityId?.order ?? 0
-    const bOrder = b.priorityId?.order ?? 0
-    if (aOrder !== bOrder) return bOrder - aOrder
-    return new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime()
-  })
-
-  const tickets: SectorTicketRow[] = sorted.slice(0, SECTOR_TICKET_LIST_CAP).map((t) => ({
+  const ticketRows = ticketDocs as TicketRowDoc[]
+  const tickets: SectorTicketRow[] = ticketRows.slice(0, SECTOR_TICKET_LIST_CAP).map((t) => ({
     number: t.number,
     subject: t.subject,
-    statusSlug: t.statusId?.slug ?? 'unknown',
-    prioritySlug: t.priorityId?.slug ?? 'unknown',
+    statusSlug: statusById.get(String(t.statusId))?.slug ?? 'unknown',
+    prioritySlug: priorityById.get(String(t.priorityId))?.slug ?? 'unknown',
     classGroup: t.location?.classGroup ?? 'Other',
     subclass: t.location?.subclass ?? null,
     sectorPlanId: t.location!.sectorPlanId,
@@ -334,6 +411,6 @@ export async function getSectorInsights(
     oldestOpen,
     medianResolveHours,
     tickets,
-    truncated: sorted.length > SECTOR_TICKET_LIST_CAP,
+    truncated: ticketRows.length > SECTOR_TICKET_LIST_CAP,
   }
 }

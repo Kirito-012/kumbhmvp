@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { getPool } from '@/server/db/postgres'
+import { GIS_CACHE_HEADERS } from '@/server/http/cache'
 
 export const runtime = 'nodejs'
 
@@ -132,26 +133,29 @@ export async function GET(req: NextRequest) {
     activityGroups.set(row.class_group, list)
   }
 
-  return Response.json({
-    sectorNo: boundary.rows[0].sector_no,
-    name: boundary.rows[0].name,
-    landSummary: {
-      totalGeographicHectares: Number(boundary.rows[0].area_hac),
-      totalMelaLandHectares: Number(meNoLand.rows[0].hectares ?? 0),
-      byClass: landSummary,
+  return Response.json(
+    {
+      sectorNo: boundary.rows[0].sector_no,
+      name: boundary.rows[0].name,
+      landSummary: {
+        totalGeographicHectares: Number(boundary.rows[0].area_hac),
+        totalMelaLandHectares: Number(meNoLand.rows[0].hectares ?? 0),
+        byClass: landSummary,
+      },
+      keyActivities: Array.from(activityGroups.entries()).map(([classGroup, items]) => ({
+        classGroup,
+        items,
+      })),
+      utilityInfrastructure: {
+        roadLengthKm: Number(road.rows[0].km ?? 0),
+        dustBins: Number(dustbins.rows[0].count),
+        transformers: Number(transformers.rows[0].count),
+        toilets: toiletSeats,
+        toiletBlockCount: toiletBlocks.length,
+        toiletBlocks,
+        ghats: Number(ghats.rows[0].count),
+      },
     },
-    keyActivities: Array.from(activityGroups.entries()).map(([classGroup, items]) => ({
-      classGroup,
-      items,
-    })),
-    utilityInfrastructure: {
-      roadLengthKm: Number(road.rows[0].km ?? 0),
-      dustBins: Number(dustbins.rows[0].count),
-      transformers: Number(transformers.rows[0].count),
-      toilets: toiletSeats,
-      toiletBlockCount: toiletBlocks.length,
-      toiletBlocks,
-      ghats: Number(ghats.rows[0].count),
-    },
-  })
+    { headers: GIS_CACHE_HEADERS },
+  )
 }

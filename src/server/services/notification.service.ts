@@ -70,6 +70,15 @@ export async function getNotifications(
   const eventTicketFilter = forcedAssigneeId
     ? { deletedAt: null, assigneeId: forcedAssigneeId }
     : { deletedAt: null }
+  // This id list is unbounded in principle -- a Surveyor holding N parcels materializes N ObjectIds
+  // and ships an N-element `$in` -- but `{deletedAt, assigneeId, statusId}` makes it a covered index
+  // scan (the ids come out of the index entries, no document fetch), so it stays cheap in practice.
+  //
+  // The obvious alternative, denormalizing `assigneeId` onto TicketEvent to query it directly, was
+  // considered and rejected: notifications are scoped by a ticket's *current* assignee, so a value
+  // snapshotted at event-creation time goes wrong the moment a ticket is reassigned -- the new
+  // assignee would never see the earlier events and the old one would keep seeing them. Making it
+  // correct means rewriting every event on reassignment, which is a worse trade than a covered scan.
   const scopedTicketIds = forcedAssigneeId
     ? (await TicketModel.find(eventTicketFilter).select('_id').lean()).map((t) => t._id)
     : null

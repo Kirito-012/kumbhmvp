@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, type ReactNode, useEffect, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useRef, useState } from 'react'
 import {
   CLASS_GROUP_COLORS,
   POINT_LAYER_COLORS,
@@ -45,6 +45,17 @@ function roadTypeKey(type: string): string {
  *  several can be tracked at once in the keyed results maps below. */
 function locateKey(group: string, subclass: string | null, sector?: number | null): string {
   return `${group}||${subclass ?? ''}||${sector ?? ''}`
+}
+
+/** The subset of the /api/stats response MapView's own left search panel needs. This panel is the
+ *  single fetcher of that endpoint -- it used to be fetched twice per map load and twice per sector
+ *  click, once here and once by an identical effect in MapView, because both derived the same URL
+ *  from the same selected sector. /api/stats is a 7-query PostGIS aggregate including a 45-table
+ *  UNION ALL and ST_Area over sector_plan plus 15 polygon tables, so the duplicate doubled it for
+ *  nothing. MapView now receives what it needs through onStats instead. */
+export type StatsSubclassData = {
+  bySubclass: { class_group: string; subclass: string | null; features: number }[]
+  poiBySubclass: { layer: string; subclass: string; features: number }[]
 }
 
 type Stats = {
@@ -1385,6 +1396,7 @@ export default function StatsPanel({
   forceCollapsed,
   onExpand,
   onCollapse,
+  onStats,
 }: {
   icon: ReactNode
   /** Restricts every table to one sector's rows when set. */
@@ -1465,8 +1477,20 @@ export default function StatsPanel({
   /** Forwarded to the underlying Panel -- fires when the user collapses this panel, so MapView
    *  can clear its "which panel is expanded" tracker and let the search panel reappear. */
   onCollapse?: () => void
+  /** Hands the sub-class breakdowns from this panel's /api/stats response up to MapView, whose left
+   *  search panel renders the same numbers in its class/POI trees. See StatsSubclassData above for
+   *  why that data arrives this way instead of MapView fetching /api/stats a second time. */
+  onStats?: (data: StatsSubclassData) => void
 }) {
   const [stats, setStats] = useState<Stats | null>(null)
+  // Latest onStats in a ref so the fetch effect below can call it without listing it as a dep
+  // (MapView passes a fresh arrow function every render, which would re-run the fetch each time).
+  const onStatsRef = useRef(onStats)
+  useEffect(() => {
+    onStatsRef.current = onStats
+  }, [onStats])
+  /** In-flight /api/stats request, aborted whenever a newer sector supersedes it. */
+  const abortRef = useRef<AbortController | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   // Which classes have their sub-class rows expanded in "Area by class" --
@@ -1509,7 +1533,19 @@ export default function StatsPanel({
     // flight (no spinner flash on every sector click) -- `loading` only
     // ever gates the very first load.
     const url = sectorNo !== null ? `/api/stats?sector=${sectorNo}` : '/api/stats'
-    fetch(url)
+    // Aborted on re-run so a slow response for a previous sector can never land after a newer one.
+    // /api/stats is the slowest endpoint in the app, and two sector clicks inside a second reorder
+    // easily -- which since this panel became the single fetcher would leave the *previous* sector's
+    // counts under the new sector's header in both this panel and MapView's left search tree, and
+    // leave them there until the next click. Same pattern as useEvacuationSearch's own fetch.
+    const controller = new AbortController()
+    abortRef.current?.abort()
+    abortRef.current = controller
+    // Deliberately not in the dependency array: MapView passes a fresh arrow function every render,
+    // so depending on it would re-run this fetch on every parent render. The effect's real input is
+    // sectorNo; onStats is only ever called with the response for that sector.
+    const emit = onStatsRef
+    fetch(url, { signal: controller.signal })
       .then((r) => {
         if (!r.ok) throw new Error(`Request failed: ${r.status}`)
         return r.json()
@@ -1517,9 +1553,21 @@ export default function StatsPanel({
       .then((data) => {
         setStats(data)
         setError(null)
+        emit.current?.({
+          bySubclass: data.bySubclass ?? [],
+          poiBySubclass: data.poiBySubclass ?? [],
+        })
+        setLoading(false)
       })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false))
+      .catch((e) => {
+        // An abort is this effect superseding itself, not a failure -- surfacing it would flash an
+        // error in the panel on every rapid sector change, and clearing `loading` would undo the
+        // "keep the previous sector's stats on screen" behaviour above.
+        if (e instanceof DOMException && e.name === 'AbortError') return
+        setError(String(e))
+        setLoading(false)
+      })
+    return () => controller.abort()
   }, [sectorNo])
 
   const filtered = sectorNo !== null

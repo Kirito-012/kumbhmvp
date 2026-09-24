@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { getPool } from '@/server/db/postgres'
+import { GIS_CACHE_HEADERS } from '@/server/http/cache'
 
 export const runtime = 'nodejs'
 
@@ -102,22 +103,88 @@ const POI_SUBCLASS_TABLES: Record<string, string> = {
   sector_point: 'subclass',
 }
 
+/** Cached responses, keyed by sector (`'all'` or the number). Every query below reads `kumbh.*`,
+ *  which only changes when `scripts/load_kumbh_2027.py` runs, yet this is the slowest endpoint in
+ *  the app -- ~0.47s warm against a ~0.10s single-query floor, because three of its seven queries
+ *  run `sum(ST_Area(geom::geography))` over the whole of `kumbh.sector_plan`, a per-row spheroid
+ *  cast plus geodesic area. It is hit on every cold map load (StatsPanel mounts with Map mode and
+ *  fetches immediately, even while collapsed) and again on every sector click.
+ *
+ *  Same reasoning and the same never-cache-a-rejection discipline as `getZoneOutlines` in
+ *  /api/evacuation/summary. Bounded because the key space is one entry per sector: at 32 sectors
+ *  plus the unfiltered view the cap is never reached in practice, but an unbounded Map keyed off a
+ *  request parameter is how a slow leak starts. Oldest-first eviction, which for this access
+ *  pattern is close enough to LRU and needs no bookkeeping. */
+const STATS_TTL_MS = 5 * 60 * 1000
+const STATS_CACHE_MAX = 40
+const statsCache = new Map<string, { at: number; value: Promise<StatsResponse> }>()
+
+type StatsResponse = {
+  byClass: unknown[]
+  bySubclass: unknown[]
+  roadByType: unknown[]
+  perSector: unknown[]
+  poiByLayer: unknown[]
+  poiBySubclass: unknown[]
+  tertiaryRoadCount: number
+}
+
 export async function GET(req: NextRequest) {
   const sectorParam = req.nextUrl.searchParams.get('sector')
   const sectorNo =
     sectorParam !== null && Number.isInteger(Number(sectorParam)) ? Number(sectorParam) : null
 
+  const cacheKey = sectorNo === null ? 'all' : String(sectorNo)
+  const cached = statsCache.get(cacheKey)
+  if (cached && Date.now() - cached.at < STATS_TTL_MS) {
+    return Response.json(await cached.value, { headers: GIS_CACHE_HEADERS })
+  }
+  const pending = computeStats(sectorNo).catch((err) => {
+    statsCache.delete(cacheKey)
+    throw err
+  })
+  if (statsCache.size >= STATS_CACHE_MAX) {
+    const oldest = statsCache.keys().next()
+    if (!oldest.done) statsCache.delete(oldest.value)
+  }
+  statsCache.set(cacheKey, { at: Date.now(), value: pending })
+  return Response.json(await pending, { headers: GIS_CACHE_HEADERS })
+}
+
+async function computeStats(sectorNo: number | null): Promise<StatsResponse> {
   const pool = getPool()
+
+  // A literal predicate built from whether a sector was given, rather than the
+  // `$1::int IS NULL OR sector_no = $1` form these queries used to share. That form is not
+  // sargable -- the planner cannot use the sector_no index through it -- so `?sector=12` scanned
+  // every row of a 30k-row table to return ~1/32 of it, and measured only ~32% faster than the
+  // unfiltered query despite touching a fraction of the data. `$1` is still a bound parameter
+  // wherever it appears; only the *shape* of the clause varies, never a value from the request.
+  const sectorParams = sectorNo === null ? [] : [sectorNo]
+  /** `WHERE sector_no = $1` / `` for a table with its own sector_no column. */
+  const sectorWhere = (col = 'sector_no') => (sectorNo === null ? '' : `WHERE ${col} = $1`)
+  /** Spatial variant, for the POI tables with no reliable sector_no column. */
+  const sectorIntersects = (table: string) =>
+    sectorNo === null
+      ? ''
+      : `WHERE EXISTS (
+        SELECT 1 FROM kumbh.sector_boundary b
+        WHERE b.sector_no = $1 AND ST_Intersects(b.geom, kumbh.${table}.geom)
+      )`
+  const sectorIntersectsAnd = (table: string) =>
+    sectorNo === null
+      ? ''
+      : `AND EXISTS (
+          SELECT 1 FROM kumbh.sector_boundary b
+          WHERE b.sector_no = $1 AND ST_Intersects(b.geom, kumbh.${table}.geom)
+        )`
 
   const poiByLayerSql = POI_TABLES.map((t) => {
     const hectaresExpr = POI_POLYGON_TABLES.has(t)
       ? `round((sum(ST_Area(geom::geography)) / 10000)::numeric, 1)`
       : `null`
     return `SELECT '${t}' AS layer, count(*) AS features, ${hectaresExpr} AS hectares FROM kumbh.${t}
-      WHERE $1::int IS NULL OR EXISTS (
-        SELECT 1 FROM kumbh.sector_boundary b
-        WHERE b.sector_no = $1 AND ST_Intersects(b.geom, kumbh.${t}.geom)
-      )`
+      ${sectorIntersects(t)}`
   }).join('\n      UNION ALL\n      ')
 
   // Same "cross-join every known value so a 0-count one still shows" contract
@@ -134,39 +201,22 @@ export async function GET(req: NextRequest) {
       SELECT ${col} AS subclass, count(*) AS features
       FROM kumbh.${t}
       WHERE ${col} IS NOT NULL
-        AND ($1::int IS NULL OR EXISTS (
-          SELECT 1 FROM kumbh.sector_boundary b
-          WHERE b.sector_no = $1 AND ST_Intersects(b.geom, kumbh.${t}.geom)
-        ))
+        ${sectorIntersectsAnd(t)}
       GROUP BY ${col}
     ) s ON s.subclass = g.subclass`,
     )
     .join('\n    UNION ALL\n    ')
 
-  const [byClass, bySubclass, roadByType, perSector, poiByLayer, poiBySubclass, tertiaryRoad] =
+  const [subclassRaw, roadByType, perSector, poiByLayer, poiBySubclass, tertiaryRoad] =
     await Promise.all([
-      // Cross-joins every class_group that exists anywhere against the current
-      // sector filter (rather than a plain GROUP BY on the filtered rows) so a
-      // class with zero features in this sector still comes back as a 0 row
-      // instead of silently disappearing -- same "always show every known
-      // value" contract as poiByLayer below, extended here to sector scoping.
-      pool.query(
-        `
-      SELECT g.class_group,
-             coalesce(s.features, 0) AS features,
-             coalesce(s.hectares, 0) AS hectares
-      FROM (SELECT DISTINCT class_group FROM kumbh.sector_plan) g
-      LEFT JOIN (
-        SELECT class_group, count(*) AS features,
-               round((sum(ST_Area(geom::geography)) / 10000)::numeric, 1) AS hectares
-        FROM kumbh.sector_plan
-        WHERE $1::int IS NULL OR sector_no = $1
-        GROUP BY class_group
-      ) s ON s.class_group = g.class_group
-      ORDER BY g.class_group;
-      `,
-        [sectorNo],
-      ),
+      // One (class_group, subclass) pass, unrounded -- byClass is rolled up from it below. This
+      // used to be two queries whose only difference was the GROUP BY, meaning `sector_plan`'s
+      // geodesic area was computed twice per request over exactly the same rows. Still cross-joins
+      // every known (class_group, subclass) pair against the current sector filter, rather than a
+      // plain GROUP BY on the filtered rows, so a pair with zero features in this sector comes back
+      // as a 0 row instead of silently disappearing -- the same "always show every known value"
+      // contract as poiByLayer below. Rounding moves to Node so the class total is the rounded sum
+      // of exact sub-class areas, not a sum of already-rounded ones.
       pool.query(
         `
       SELECT g.class_group, g.subclass,
@@ -175,14 +225,25 @@ export async function GET(req: NextRequest) {
       FROM (SELECT DISTINCT class_group, subclass FROM kumbh.sector_plan) g
       LEFT JOIN (
         SELECT class_group, subclass, count(*) AS features,
-               round((sum(ST_Area(geom::geography)) / 10000)::numeric, 1) AS hectares
+               sum(ST_Area(geom::geography)) / 10000 AS hectares
         FROM kumbh.sector_plan
-        WHERE $1::int IS NULL OR sector_no = $1
+        ${sectorWhere()}
         GROUP BY class_group, subclass
-      ) s ON s.class_group = g.class_group AND s.subclass = g.subclass
-      ORDER BY g.class_group, coalesce(s.features, 0) DESC;
+      )
+      -- IS NOT DISTINCT FROM, not =: sector_plan rows with a NULL subclass are a real group (the
+      -- DISTINCT above emits a (class_group, NULL) pair for them), and NULL = NULL is NULL, so a
+      -- plain equality join left every such group joined to nothing and reported as 0 features.
+      -- That was invisible while byClass was its own query counting them separately; now that
+      -- byClass is rolled up from these rows, an unmatched NULL group would silently drop them from
+      -- the class total too (Reserved Area measured 107 instead of 109). Both consumers already
+      -- expect and handle a null subclass -- see MapView.tsx's search-panel comment on it.
+      s ON s.class_group = g.class_group AND s.subclass IS NOT DISTINCT FROM g.subclass
+      -- g.subclass breaks ties so the row order is stable across requests. Without it the order
+      -- among equal feature counts is whatever the plan happens to emit, which means the Stats
+      -- panel's sub-class rows can reshuffle between two identical reloads.
+      ORDER BY g.class_group, coalesce(s.features, 0) DESC, g.subclass;
       `,
-        [sectorNo],
+        sectorParams,
       ),
       pool.query(
         `
@@ -201,17 +262,17 @@ export async function GET(req: NextRequest) {
         SELECT type, count(*) AS segments,
                round((sum(ST_Length(geom::geography)))::numeric, 0) AS metres
         FROM kumbh.road
-        WHERE $1::int IS NULL OR sector_no = $1
+        ${sectorWhere()}
         GROUP BY type
         UNION ALL
         SELECT 'Emergency Exit', count(*),
                round((sum(ST_Length(geom::geography)))::numeric, 0)
         FROM kumbh.emergency_exit
-        WHERE $1::int IS NULL OR sector_no = $1
+        ${sectorWhere()}
       ) s ON s.type = g.type
       ORDER BY coalesce(s.metres, 0) DESC;
       `,
-        [sectorNo],
+        sectorParams,
       ),
       pool.query(
         `
@@ -221,25 +282,25 @@ export async function GET(req: NextRequest) {
              round((coalesce(sum(ST_Area(p.geom::geography)), 0) / 10000)::numeric, 1) AS plan_hectares
       FROM kumbh.sector_boundary b
       LEFT JOIN kumbh.sector_plan p ON p.sector_no = b.sector_no
-      WHERE $1::int IS NULL OR b.sector_no = $1
+      ${sectorWhere('b.sector_no')}
       GROUP BY b.sector_no, b.name, b.area_hac
       ORDER BY b.sector_no;
       `,
-        [sectorNo],
+        sectorParams,
       ),
       pool.query(
         `
       ${poiByLayerSql}
       ORDER BY features DESC;
       `,
-        [sectorNo],
+        sectorParams,
       ),
       pool.query(
         `
       ${poiBySubclassSql}
       ORDER BY layer, features DESC;
       `,
-        [sectorNo],
+        sectorParams,
       ),
       // kumbh.tertiary_road (21k+ OSM street centrelines) stays out of
       // poiByLayerSql/POI_TABLES on purpose (see that comment above) -- it
@@ -251,22 +312,48 @@ export async function GET(req: NextRequest) {
         `
       SELECT count(*) AS features
       FROM kumbh.tertiary_road
-      WHERE $1::int IS NULL OR EXISTS (
-        SELECT 1 FROM kumbh.sector_boundary b
-        WHERE b.sector_no = $1 AND ST_Intersects(b.geom, kumbh.tertiary_road.geom)
-      );
+      ${sectorIntersects('tertiary_road')};
       `,
-        [sectorNo],
+        sectorParams,
       ),
     ])
 
-  return Response.json({
-    byClass: byClass.rows,
-    bySubclass: bySubclass.rows,
+  // Both shapes come out of the one query above. `hectares` is emitted as a 1-decimal string to
+  // match what `round(..., 1)::numeric` used to serialise as -- the Stats panel renders it straight
+  // into the table, so the wire format has to stay identical.
+  // `round(..., 1)::numeric` serialised an exact zero as "0", not "0.0", and the panels render this
+  // string straight into their tables -- so zero keeps its old spelling.
+  const hectares = (n: number) => (n === 0 ? '0' : n.toFixed(1))
+  const bySubclass = subclassRaw.rows.map((r) => ({
+    class_group: r.class_group,
+    subclass: r.subclass,
+    features: r.features,
+    hectares: hectares(Number(r.hectares)),
+  }))
+
+  const classTotals = new Map<string, { features: number; hectares: number }>()
+  for (const r of subclassRaw.rows) {
+    const acc = classTotals.get(r.class_group) ?? { features: 0, hectares: 0 }
+    acc.features += Number(r.features)
+    acc.hectares += Number(r.hectares)
+    classTotals.set(r.class_group, acc)
+  }
+  // Sorted by class_group, matching the ORDER BY the dedicated byClass query used to carry.
+  const byClass = [...classTotals.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([class_group, t]) => ({
+      class_group,
+      features: String(t.features),
+      hectares: hectares(t.hectares),
+    }))
+
+  return {
+    byClass,
+    bySubclass,
     roadByType: roadByType.rows,
     perSector: perSector.rows,
     poiByLayer: poiByLayer.rows,
     poiBySubclass: poiBySubclass.rows,
     tertiaryRoadCount: Number(tertiaryRoad.rows[0]?.features ?? 0),
-  })
+  }
 }
