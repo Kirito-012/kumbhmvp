@@ -10,9 +10,9 @@ import type { InsightsStatusRow, InsightsTicketTuple } from './types'
 
 const statuses: InsightsStatusRow[] = [
   { slug: 'new', name: 'New', bucket: 'new', color: '#1d6fe0' },
-  { slug: 'in-progress', name: 'In progress', bucket: 'progress', color: '#d97706' },
+  { slug: 'open', name: 'Open', bucket: 'open', color: '#ca8a04' },
   { slug: 'resolved', name: 'Resolved', bucket: 'resolved', color: '#16a34a' },
-  { slug: 'closed', name: 'Closed', bucket: 'closed', color: '#dc2626' },
+  { slug: 'pending', name: 'Pending', bucket: 'pending', color: '#7c3aed' },
 ]
 const priorities = [
   { slug: 'low', name: 'Low', color: '#94a3b8', order: 0 },
@@ -69,11 +69,11 @@ function ticket(
 }
 
 describe('isOpenTicket', () => {
-  it('treats new/progress as open and resolved/closed as not open', () => {
+  it('treats new/open/pending as open and resolved as not open', () => {
     expect(isOpenTicket(ticket({ statusIdx: 0 }), statuses)).toBe(true)
     expect(isOpenTicket(ticket({ statusIdx: 1 }), statuses)).toBe(true)
     expect(isOpenTicket(ticket({ statusIdx: 2 }), statuses)).toBe(false)
-    expect(isOpenTicket(ticket({ statusIdx: 3 }), statuses)).toBe(false)
+    expect(isOpenTicket(ticket({ statusIdx: 3 }), statuses)).toBe(true)
   })
 
   it('treats an out-of-range status index as not open', () => {
@@ -93,7 +93,7 @@ describe('matchesFilters', () => {
       matchesFilters(t, statuses, priorities, classGroups, { statusSlugs: ['new'] }, NOW),
     ).toBe(true)
     expect(
-      matchesFilters(t, statuses, priorities, classGroups, { statusSlugs: ['closed'] }, NOW),
+      matchesFilters(t, statuses, priorities, classGroups, { statusSlugs: ['pending'] }, NOW),
     ).toBe(false)
   })
 
@@ -160,22 +160,22 @@ describe('rollupBySector', () => {
   it('groups by sector and buckets by status', () => {
     const tickets = [
       ticket({ sectorNo: 7, statusIdx: 0 }), // new
-      ticket({ sectorNo: 7, statusIdx: 1 }), // progress
+      ticket({ sectorNo: 7, statusIdx: 1 }), // open
       ticket({ sectorNo: 7, statusIdx: 2 }), // resolved
-      ticket({ sectorNo: 5, statusIdx: 3 }), // closed
+      ticket({ sectorNo: 5, statusIdx: 3 }), // pending
     ]
     const rollups = rollupBySector(tickets, statuses, priorities, classGroups)
     const sector7 = rollups.get(7)!
     expect(sector7.total).toBe(3)
     expect(sector7.open).toBe(2)
-    expect(sector7.newCount).toBe(1)
-    expect(sector7.progressCount).toBe(1)
+    expect(sector7.byBucket).toEqual({ new: 1, open: 1, pending: 0, resolved: 1 })
     expect(sector7.resolved).toBe(1)
 
     const sector5 = rollups.get(5)!
     expect(sector5.total).toBe(1)
-    expect(sector5.closed).toBe(1)
-    expect(sector5.open).toBe(0)
+    expect(sector5.byBucket.pending).toBe(1)
+    expect(sector5.open).toBe(1)
+    expect(sector5.resolved).toBe(0)
   })
 
   it('groups peripheral tickets (sectorNo null) under the null key', () => {
@@ -205,10 +205,8 @@ describe('heatValueForSector', () => {
     sectorNo: 7,
     total: 10,
     open: 4,
-    resolved: 5,
-    closed: 1,
-    newCount: 2,
-    progressCount: 2,
+    resolved: 6,
+    byBucket: { new: 2, open: 1, pending: 1, resolved: 6 },
   }
 
   it('returns 0 for an undefined rollup or zero-total rollup', () => {

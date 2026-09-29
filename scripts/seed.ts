@@ -102,7 +102,7 @@ const STATUSES = [
   {
     name: 'Pending',
     slug: 'pending',
-    color: '#f5a623',
+    color: '#a78bfa',
     order: 2,
     isResolved: false,
     isDefault: false,
@@ -112,14 +112,6 @@ const STATUSES = [
     slug: 'resolved',
     color: '#22c55e',
     order: 3,
-    isResolved: true,
-    isDefault: false,
-  },
-  {
-    name: 'Closed',
-    slug: 'closed',
-    color: '#ff5a5f',
-    order: 4,
     isResolved: true,
     isDefault: false,
   },

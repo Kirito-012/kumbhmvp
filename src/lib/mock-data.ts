@@ -1,5 +1,5 @@
 export type Priority = 'low' | 'medium' | 'high' | 'critical'
-export type Status = 'new' | 'open' | 'pending' | 'resolved' | 'closed'
+export type Status = 'new' | 'open' | 'pending' | 'resolved'
 
 export interface Person {
   name: string
@@ -152,7 +152,7 @@ export const tickets: Ticket[] = [
     preview: 'Webhook returns 200 but nothing posts in the connected channel...',
     group: 'Integrations',
     priority: 'medium',
-    status: 'closed',
+    status: 'resolved',
     assignee: people.marcus,
     requester: { name: 'Noah Kim', initials: 'NK', color: '#9ca3af' },
     tags: ['integrations', 'slack'],
@@ -166,7 +166,7 @@ export const tickets: Ticket[] = [
     preview: 'Subject reads "You\'re ticket has been resolved" — should be "Your"...',
     group: 'Product',
     priority: 'low',
-    status: 'closed',
+    status: 'resolved',
     assignee: people.jordan,
     requester: { name: 'Ava Petrov', initials: 'AP', color: '#9ca3af' },
     tags: ['copy'],

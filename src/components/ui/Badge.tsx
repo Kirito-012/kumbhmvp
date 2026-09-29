@@ -37,9 +37,8 @@ export function PriorityBadge({ priority, className }: { priority: Priority; cla
 const statusStyles: Record<Status, string> = {
   new: 'bg-info-soft text-info ring-1 ring-inset ring-info/20',
   open: 'bg-warning-soft text-warning ring-1 ring-inset ring-warning/20',
-  pending: 'bg-warning-soft text-warning ring-1 ring-inset ring-warning/20',
+  pending: 'bg-violet-soft text-violet ring-1 ring-inset ring-violet/20',
   resolved: 'bg-accent-soft text-accent-strong ring-1 ring-inset ring-accent/20',
-  closed: 'bg-danger-soft text-danger ring-1 ring-inset ring-danger/20',
 }
 
 /** Solid-fill counterpart of `statusStyles`, e.g. for an active filter tab where the status's
@@ -52,9 +51,8 @@ const statusStyles: Record<Status, string> = {
 export const statusSolidStyles: Record<Status, string> = {
   new: 'bg-[#1d64d8] text-white',
   open: 'bg-[#a85d00] text-white',
-  pending: 'bg-[#a85d00] text-white',
+  pending: 'bg-[#6d28d9] text-white',
   resolved: 'bg-[#047a54] text-white',
-  closed: 'bg-[#c62828] text-white',
 }
 
 const statusLabel: Record<Status, string> = {
@@ -62,7 +60,6 @@ const statusLabel: Record<Status, string> = {
   open: 'Open',
   pending: 'Pending',
   resolved: 'Resolved',
-  closed: 'Closed',
 }
 
 export function StatusBadge({ status, className }: { status: Status; className?: string }) {

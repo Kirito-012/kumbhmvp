@@ -32,7 +32,7 @@ export default async function DashboardPage() {
             value={data.openTicketsCount}
             icon={<Inbox className="h-4 w-4" />}
             accent="accent"
-            href="/tickets?status=open"
+            href="/tickets?status=unresolved"
           />
           <StatCard
             label="Unassigned"
