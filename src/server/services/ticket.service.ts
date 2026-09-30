@@ -27,9 +27,8 @@ const POPULATE = [
 ]
 
 export type ListTicketsParams = {
-  /** A status slug (new/open/pending/resolved/closed), or the sentinel 'open' — see below —
-   *  handled the same way as any other slug won't work since "open" isn't itself a status row;
-   *  it's expressed as "not a resolved status" instead. */
+  /** A status slug (new/open/pending/resolved), or the sentinel 'unresolved' — see below —
+   *  which isn't itself a status row, so it's expressed as "not a resolved status" instead. */
   status?: string
   priority?: string
   type?: string
@@ -57,10 +56,12 @@ export async function listTickets(params: ListTicketsParams) {
 
   const filter: QueryFilter<Ticket> = { deletedAt: null }
 
-  // 'open' isn't a real TicketStatus row (it's "new" + "open" + "pending" — anything not
-  // resolved/closed) so it's resolved against isResolved rather than looked up by slug, matching
-  // the dashboard's own "Open tickets" stat (see getDashboardData()'s openMatch).
-  const isOpenSentinel = params.status === 'open'
+  // 'unresolved' isn't a real TicketStatus row (it's "new" + "open" + "pending" — anything not
+  // resolved) so it's resolved against isResolved rather than looked up by slug, matching
+  // the dashboard's own "Open tickets" stat (see getDashboardData()'s openMatch). It used to be
+  // spelled 'open', which shadowed the real Open status: the /tickets "Open" tab listed every
+  // unresolved ticket while its badge counted only Open ones.
+  const isOpenSentinel = params.status === 'unresolved'
 
   const [status, resolvedIds, priority, type, tag] = await Promise.all([
     params.status && !isOpenSentinel
@@ -357,7 +358,7 @@ export async function getDashboardData(assigneeId?: string) {
     // Workspace-wide, not scoped by assigneeId — "how many need a home" is inherently an
     // Admin/Manager question. null for a Surveyor's dashboard (their view is assignee-locked to
     // themselves, so an "unassigned" count in their own scope is always zero/meaningless).
-    // statusId excludes resolved/closed tickets — an already-resolved ticket doesn't "need" an
+    // statusId excludes resolved tickets — an already-resolved ticket doesn't "need" an
     // assignee, so it shouldn't inflate this count.
     assigneeId
       ? null

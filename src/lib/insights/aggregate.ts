@@ -18,18 +18,24 @@ export type InsightsFilters = {
 export type SectorRollup = {
   sectorNo: number | null
   total: number
+  /** Every not-yet-resolved ticket (new + open + pending) -- the Heatmap "% open" numerator. Not
+   *  the same thing as `byBucket.open`, which counts only the Open status itself. */
   open: number
   resolved: number
-  closed: number
-  newCount: number
-  progressCount: number
+  byBucket: Record<StatusBucket, number>
 }
 
 function emptyRollup(sectorNo: number | null): SectorRollup {
-  return { sectorNo, total: 0, open: 0, resolved: 0, closed: 0, newCount: 0, progressCount: 0 }
+  return {
+    sectorNo,
+    total: 0,
+    open: 0,
+    resolved: 0,
+    byBucket: { new: 0, open: 0, pending: 0, resolved: 0 },
+  }
 }
 
-/** True if `tuple` is still open (bucket 'new' or 'progress') per its status row. Out-of-range
+/** True if `tuple` is still open (any bucket but 'resolved') per its status row. Out-of-range
  *  status indices (shouldn't happen, but tuples are server-trusted integers) count as not open. */
 export function isOpenTicket(tuple: InsightsTicketTuple, statuses: InsightsStatusRow[]): boolean {
   const status = statuses[tuple[TicketField.StatusIdx]]
@@ -103,22 +109,9 @@ export function rollupBySector(
     rollup.total++
     const status = statuses[tuple[TicketField.StatusIdx]]
     if (status) {
-      switch (status.bucket) {
-        case 'new':
-          rollup.newCount++
-          rollup.open++
-          break
-        case 'progress':
-          rollup.progressCount++
-          rollup.open++
-          break
-        case 'resolved':
-          rollup.resolved++
-          break
-        case 'closed':
-          rollup.closed++
-          break
-      }
+      rollup.byBucket[status.bucket]++
+      if (isOpenBucket(status.bucket)) rollup.open++
+      else rollup.resolved++
     }
   }
 

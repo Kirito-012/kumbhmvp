@@ -25,7 +25,7 @@ const SOLID_FILL_COLOR_OVERRIDES: Record<string, string> = {
   '#34d399': '#047a54', // "Resolved" status -- matches statusSolidStyles.resolved in Badge.tsx
   '#22c55e': '#047a54', // "Resolved" status (current seed colour)
   '#38a3ff': '#1d64d8', // "New" status
-  '#ff5a5f': '#c62828', // "Closed" status
+  '#a78bfa': '#6d28d9', // "Pending" status -- matches statusSolidStyles.pending in Badge.tsx
   '#10b981': '#047a54', // --accent, used as the dashboard sector filter's solid fill
 }
 

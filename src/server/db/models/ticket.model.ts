@@ -20,7 +20,6 @@ const ticketSchema = new Schema(
     slaDueAt: { type: Date, default: null },
     firstResponseAt: { type: Date, default: null },
     resolvedAt: { type: Date, default: null },
-    closedAt: { type: Date, default: null },
 
     source: { type: String, enum: ['web', 'email', 'api', 'public'], default: 'web' },
 

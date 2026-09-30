@@ -6,6 +6,10 @@
 > Companion docs: [`AGENTS.md`](AGENTS.md) (standing rules), [`Pending.md`](Pending.md) (deferred GIS layers),
 > [`PLAN-deferred-roads.md`](PLAN-deferred-roads.md) (road-layer implementation writeup).
 > `README.md` is untouched create-next-app boilerplate — ignore it.
+>
+> Product-facing docs (not in the repo) live in the owner's Google Drive: **"Kumbh Drishti - Feature
+> List"** (all features except Evacuation, plus the planned surveyor mobile app) and **"Kumbh Drishti -
+> Evacuation Mode"**. Keep them in step when a user-visible feature ships or changes.
 
 ---
 
@@ -78,9 +82,15 @@ cross-database reference — do not treat it as one.
 
 - Mongo: `{conn, promise}` cached on `globalThis` so dev HMR doesn't spawn a connection per reload;
   `cache.promise` resets to `null` on failure so a bad connection can't permanently poison retries.
-- Postgres: a single `pg.Pool` cached on `globalThis._pgPool`, `max: 15`, 10s idle/connection timeouts.
-  **Must** point at Supabase's transaction-mode pooler (**port 6543**), not the direct Postgres port —
-  API routes are short-lived serverless functions and a direct connection would exhaust the DB's limit.
+- Postgres: a single `pg.Pool` cached on `globalThis._pgPool`, `max: 15`, 30s idle timeout, 15s connect
+  timeout, TCP keep-alive, 15-minute `maxLifetimeSeconds`. **Must** point at Supabase's transaction-mode
+  pooler (**port 6543**), not the direct Postgres port — API routes are short-lived serverless functions
+  and a direct connection would exhaust the DB's limit.
+- The pool has an `'error'` listener (without it, the pooler dropping an idle connection is an
+  unhandled `EventEmitter` error) and **`pool.query` is wrapped to retry once on connection-class
+  errors only** (an allowlist of `08xxx`/`57P0x`/socket codes and pg-pool's own messages). The retry is
+  safe only because every PostGIS call is a read-only `pool.query()` SELECT. **Any future write or
+  transaction must take its own client via `pool.connect()`**, which bypasses the retry.
 
 ---
 
@@ -126,7 +136,8 @@ src/
   server/
     auth/           # auth.ts, auth.config.ts, ability.ts, session.ts
     actions/        # 'use server' actions
-    services/       # Business logic
+    services/       # Business logic (+ lookups.ts, cached lookup-table reads)
+    http/           # cache.ts — shared Cache-Control constants for API routes
     db/             # connect.ts, postgres.ts, models/
   proxy.ts          # ← Next 16's renamed middleware
 scripts/            # seed, imports, demo data, the Python GIS loader
@@ -156,6 +167,9 @@ There are **two** NextAuth instances, deliberately:
 - Its `config.matcher` **must keep excluding `/api/auth`**. If the provider-free instance intercepts
   those routes it tries to dispatch sign-in/callback actions it has no providers for → `UnknownAction`
   errors and login breaks entirely.
+- The matcher also excludes the vendored map assets in `public/` (`maplibre-gl-worker.mjs`,
+  `maplibre-gl-shared.mjs`, `*-style.json`) — ~593 KB fetched on every map load that has no session to
+  guard. Keep `api/auth` first in the exclusion list.
 - It does a **canonical-domain 308 redirect**: any request whose `Host` isn't
   `kumbhdrishti.thecraftsync.com` is redirected there. This is for Azure's permanent
   `*.azurewebsites.net` hostname. It is gated on `NODE_ENV === 'production'` — **without that gate it
@@ -226,6 +240,27 @@ Legacy user docs missing a `status` field are treated as active.
 | `ticket-type/-status/-priority.model.ts` | Lookup tables; priority carries `slaHours` / `overdueAfterHours`                                           |
 | `tag.model.ts`                           | Labeled tags with `usageCount`                                                                             |
 
+**Ticket statuses are exactly four: New, Open, Pending, Resolved** (only Resolved has
+`isResolved: true`). A fifth `closed` status was retired on 2026-09-29 by
+[`scripts/migrate-remove-closed-status.ts`](scripts/migrate-remove-closed-status.ts): Closed tickets
+became Resolved, `closedAt` was dropped from the schema and unset, and the Closed status record was
+deleted. Each status has its own colour everywhere — blue / amber / violet / green — defined once in
+`BUCKET_COLORS` (`src/lib/insights/statusBuckets.ts`), matched by the seeded `color` values and by
+`statusStyles`/`statusSolidStyles` in `Badge.tsx`. `/tickets?status=unresolved` (a sentinel, not a
+status) lists everything not resolved; it used to be spelled `open`, which shadowed the real Open
+status.
+
+**Lookup tables** (statuses/priorities/types) are read through
+[`src/server/services/lookups.ts`](src/server/services/lookups.ts) — `getStatuses`/`getPriorities`/
+`getTypes`, wrapped in React `cache()` so one render doesn't re-query them from the layout, the page and
+the service separately. Use these instead of calling the models directly.
+
+**Ticket indexes** are tuned to the actual list/sort queries (see comments in `ticket.model.ts` and
+`ticket-event.model.ts`). Two old indexes (`{deletedAt, groupId, statusId, createdAt}` and
+`{deletedAt, slaDueAt}`) were removed from the schema **and dropped manually from the live DB** —
+Mongoose only ever creates indexes, so deleting an `index()` call never drops one. Restore a
+`groupId` index when Groups actually ship.
+
 ### Ticket numbering
 
 Tickets are addressed by **`number`**, an auto-incrementing integer from the Mongo counter — _not_ the
@@ -290,7 +325,15 @@ All GIS routes use `runtime = 'nodejs'` and `getPool()`; ticket routes use `dbCo
 | `/api/tickets/by-parcel/[sectorPlanId]` | Does this map parcel already have a ticket?                                                                                                                                 |
 | `/api/evacuation/search`                | Evacuation mode's search (PLAN-evacuation.md §8.1) — sector/zone-aware, labels via `src/lib/evacuation/labels.ts`. Gated on `read:all`/`ticket`, same as `/api/insights/*`. |
 | `/api/evacuation/summary`               | Per-layer counts, zone outlines, and (with `?sector=`/`?zone=`) a focused feature list + nearby care facilities (§8.2). Same gating.                                        |
+| `/api/evacuation/arrows`                | Bearing points for traffic-route/direction-signage arrows (midpoint → nearest sector centroid, see §9). Same gating.                                                        |
 | `/api/v1/tickets` (POST)                | **External integration** — see below                                                                                                                                        |
+
+**Cache headers** come from one place, [`src/server/http/cache.ts`](src/server/http/cache.ts), not
+ad-hoc strings: `GIS_CACHE_HEADERS` (public, 5 min browser / 1 day shared) for ungated `kumbh.*` reads;
+`GIS_PRIVATE_CACHE_HEADERS` for GIS responses that are **ability-gated** (evacuation) — these must stay
+`private` so a CDN can never serve an admin's response to a surveyor; `TICKET_POPUP_CACHE_HEADERS`
+(`/api/tickets/by-parcel`) and `SEARCH_CACHE_HEADERS` (both search routes), each private, 30s. Pick the
+matching constant for any new route.
 
 ### `/api/v1/tickets` — the DroneSeva integration
 
@@ -486,7 +529,9 @@ override table for DB colours sitting right at the contrast threshold.
 ### Insights (Heatmap/Ticket mode) — admin & manager only, see `PLAN-heatmap.md`
 
 `ModeSwitcher` (top-left control strip, gated on `canUseInsights`) swaps `MapView` between three modes:
-Map (the default subsystem above), Heatmap, and Tickets (sectors coloured by status-bucket feature-state).
+Map (the default subsystem above), Heatmap, and Tickets (parcels coloured by status-bucket feature-state —
+one bucket per status: New, Open, Pending, Resolved; `SectorRollup.byBucket` holds the per-bucket counts,
+while `open`/`resolved` stay as the unresolved/resolved totals the heat metric and sector labels use).
 It's an icon-only `role="radiogroup"` of three equal-width `role="radio"` squares (no text labels, just
 `aria-label`/`title`) with a roving tabindex — arrow keys/Home/End move focus **and** selection between
 segments, Enter/Space activates the focused one; only the checked segment is a tab stop. Keyboard
@@ -509,6 +554,22 @@ a single ticket, or a compact per-ticket block for a cluster). The colour ramp i
 green→red (`HEAT_PALETTE` in `src/lib/insights/heatScale.ts`, same ramp for both themes) surfaced as a
 single CSS gradient bar (`heatGradientCss`) in both `InsightsModePanel`'s legend and `FloatingLegend`.
 `computeQuantileBreaks`/`colorForValue` (same file) are Ticket mode's, not Heatmap's, colouring logic now.
+
+**Ticket mode parcel rendering.** `insight-ticket-fill`/`-outline` (`addTicketLayers`) colour and outline
+only parcels that have a ticket (everything else falls through to `'transparent'`). The class-group
+**wash** (`sector-plan-fill`) stays hidden in this mode, but the per-parcel class **hairline**
+(`sector-plan-class-outline`) is always shown, so ticketless parcels still read as shapes. Two places
+enforce this and both must agree: the sector/class filter effect (`showClassWash || mode === 'tickets'`,
+and a `null` filter in Ticket mode so Map mode's sector/class filters don't leak in), and the
+mode-visibility effect, which re-asserts it right after `applyLayerVisibility` — that helper ties the
+hairline to the `sector_plan` toggle (off by default), so without the re-assert any toggle-only re-run
+hides it again.
+
+**Ticket mode sector labels (`insight-sector-label`, "S11 · 27% resolved") are lifted to the top of the
+layer stack** with `map.moveLayer` at the end of `initMap`'s `load` handler. `addInsightLayers` runs
+before `sector_plan` exists, so the label was created _under_ every parcel/ticket layer and got painted
+over. It stays on top across theme toggles because `syncBasemap` inserts the new basemap _below_ the
+first app layer. If you add a layer after that `moveLayer` call, it will land above the label.
 
 A `?mode=heatmap`/`?mode=tickets`/`?mode=evacuation` deep link cold-loads correctly — the
 mode-visibility effect is gated on `mapReady` (a state flip at the end of `initMap`'s `load` handler), not
@@ -561,8 +622,8 @@ and two new vector sources for `hfl_area`/`hfl_line`. Entry is green, exit is ro
 split from Map mode's single "green = entry or exit" convention, since this mode's whole point is telling
 them apart), emergency exits keep Map mode's red, flood risk is translucent blue. EN/EXT point badges
 reuse the same canvas-drawn pill-icon generator as Map mode's "BS"/"G"/"FH" signage codes, extracted to
-`src/lib/mapBadgeIcon.ts` so both can share it. **Not yet implemented** (see the phase table in
-PLAN-evacuation.md for why): traffic-route/direction-signage arrows, zone outlines/labels, the
+`src/lib/mapBadgeIcon.ts` so both can share it. **Not implemented in Phase 2, all since added by the
+later phases and follow-ups below:** traffic-route/direction-signage arrows, zone outlines/labels, the
 selected-feature highlight's data (Phase 5), hover feature-state (Phase 5), and dimming
 `sector-plan-fill` itself (only basemap labels dim so far).
 
@@ -894,15 +955,17 @@ Coverage is thin — the map and ticket flows have no automated tests.
 
 ## 13. Scripts
 
-| Script                          | What it does                                                                                                                              |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `copy-maplibre-worker.mjs`      | **postinstall hook.** Copies MapLibre's worker files into `public/` so Turbopack can resolve them. Runs on every install — don't skip it. |
-| `seed.ts` (`npm run seed`)      | Roles, statuses, priorities, types, 3 named accounts, 2 service accounts. **Deletes all users first.**                                    |
-| `import-map-tickets.ts`         | One ticket per `kumbh.sector_plan` parcel. Idempotent (skips already-imported `sectorPlanId`). Requires `npm run seed` first.             |
-| `demo-distribute-priorities.ts` | Demo data — reshuffles priorities by weighted random (35/40/18/7%).                                                                       |
-| `demo-resolve-by-category.ts`   | Demo data — resolves 30–60% of each category's open tickets. Safe to re-run.                                                              |
-| `demo-spread-ticket-dates.ts`   | Demo data — spreads dates over 7 days with an upward trend. Uses `overwriteImmutable: true` to write `createdAt`.                         |
-| `load_kumbh_2027.py`            | **The GIS loader.** See below.                                                                                                            |
+| Script                                 | What it does                                                                                                                              |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `copy-maplibre-worker.mjs`             | **postinstall hook.** Copies MapLibre's worker files into `public/` so Turbopack can resolve them. Runs on every install — don't skip it. |
+| `seed.ts` (`npm run seed`)             | Roles, statuses, priorities, types, 3 named accounts, 2 service accounts. **Deletes all users first.**                                    |
+| `import-map-tickets.ts`                | One ticket per `kumbh.sector_plan` parcel. Idempotent (skips already-imported `sectorPlanId`). Requires `npm run seed` first.             |
+| `demo-distribute-priorities.ts`        | Demo data — reshuffles priorities by weighted random (35/40/18/7%).                                                                       |
+| `demo-resolve-by-category.ts`          | Demo data — resolves 30–60% of each category's open tickets. Safe to re-run.                                                              |
+| `demo-spread-ticket-dates.ts`          | Demo data — spreads dates over 7 days with an upward trend. Uses `overwriteImmutable: true` to write `createdAt`.                         |
+| `demo-redistribute-ticket-statuses.ts` | Demo data — moves ~30% of New tickets into Open/Pending.                                                                                  |
+| `migrate-remove-closed-status.ts`      | One-off (already run 2026-09-29) — retired the Closed status. Has `--dry-run`; safe to re-run.                                            |
+| `load_kumbh_2027.py`                   | **The GIS loader.** See below.                                                                                                            |
 
 ### Extending `load_kumbh_2027.py`
 
@@ -974,9 +1037,49 @@ existing `_<table>_map` pattern. `SOURCE_TAG_2027`/`SOURCE_TAG_SHP` are the two 
 
 ---
 
-## 16. Current state
+## 16. Performance
 
-Branch `feat/heatmap` (not yet merged to `main`). Recent work (this may be stale — check `git log`):
+A dedicated optimisation pass (commit `fec649a`) — each change carries a long comment with its measured
+before/after, so read the comment before "simplifying" any of these:
+
+- **Caching:** shared `Cache-Control` constants (§8). `/api/stats` — the slowest endpoint (~0.47s warm,
+  geodesic `ST_Area` over `sector_plan`) — also keeps a small bounded in-memory cache per sector key,
+  never caching a rejected promise; `/api/evacuation/summary`'s `getZoneOutlines` does the same.
+- **Sargable sector filters:** `/api/stats` builds `WHERE sector_no = $1` or no clause, instead of
+  `$1::int IS NULL OR sector_no = $1`, which the planner can't use the index through. Only the clause's
+  _shape_ varies — values are still bound parameters.
+- **One `/api/stats` fetcher:** `StatsPanel` is the only component that fetches it; it hands MapView the
+  sub-class breakdowns through `onStats` (kept in a ref, not a dependency) and aborts stale requests
+  so a slow earlier sector can't overwrite a newer one.
+- **Postgres pool tuning and retry-once** (§3). **Mongo indexes and cached lookup reads** (§7).
+  Insights' median resolve time is computed in the aggregation pipeline, not by streaming tickets to Node.
+- **Lazy client chunks:** recharts (`src/components/dashboard/*Lazy.tsx`) and tiptap
+  (`src/components/editor/RichTextEditorLazy.tsx`) load via `next/dynamic` with `ssr: false` and
+  same-size skeletons. **The dashboard wrappers must import from the `./charts` barrel**, not the chart
+  files directly, or Turbopack duplicates recharts into two chunks.
+- **Static assets:** `next.config.ts` gives the vendored MapLibre worker pair and basemap style JSONs a
+  1-day `max-age` + 1-week `stale-while-revalidate` — deliberately **not** `immutable`, because the
+  worker imports its sibling by relative path and couldn't be cache-busted independently. `proxy.ts`
+  skips them (§6).
+- **`TicketLocationMap`** (ticket detail thumbnail) is no longer a MapLibre instance: it's a server-
+  rendered 3×3 mosaic of OSM raster tiles at z16 with zero client JS. Its tile radius is tied to the
+  frame's max width/aspect — widen the frame and you must bump the radius, or a blank strip appears.
+- **Polling:** `NotificationBell` only polls while the tab is visible and re-syncs on becoming visible
+  (same pattern as `DashboardAutoRefresh`).
+- `useInsightTheme` (`src/components/map/insights/`) gives panel content the theme as a JS value, so
+  status swatches use the same `BUCKET_COLORS` hex as the map; it starts at `'dark'` to match SSR.
+
+---
+
+## 17. Current state
+
+Branch `feat/evac` (not yet merged to `main`). Recent work (this may be stale — check `git log`):
+
+- Performance pass (`fec649a`, §16) and satellite basemap (`ccbb561`, §9).
+- Ticket mode: every parcel keeps its class hairline, and sector progress labels now draw above the
+  parcels (§9 "Ticket mode parcel rendering"). The label fix is uncommitted as of 2026-09-29.
+
+Earlier work:
 
 - Heatmap/Ticket mode (`PLAN-heatmap.md`), Phases 1–6 committed; Phase 7 (density-heatmap revision,
   see §9) implemented on the branch but not yet committed as of this writing

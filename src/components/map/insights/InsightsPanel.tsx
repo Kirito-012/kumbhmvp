@@ -106,7 +106,7 @@ function bucketTotals(
   tuples: InsightsTicketTuple[],
   statuses: InsightsTicketData['statuses'],
 ): Record<StatusBucket, number> {
-  const totals: Record<StatusBucket, number> = { new: 0, progress: 0, resolved: 0, closed: 0 }
+  const totals: Record<StatusBucket, number> = { new: 0, open: 0, pending: 0, resolved: 0 }
   for (const t of tuples) {
     const status = statuses[t[TicketField.StatusIdx]]
     if (status) totals[status.bucket]++
@@ -1016,7 +1016,9 @@ function TicketListBlock({
   if (!detail) return null
 
   const listHref =
-    typeof sector === 'number' ? `/tickets?sector=${sector}&status=open` : '/tickets?status=open'
+    typeof sector === 'number'
+      ? `/tickets?sector=${sector}&status=unresolved`
+      : '/tickets?status=unresolved'
 
   // The per-sector fetch (useSectorInsights) only scopes by sector, so without this the list kept
   // showing every ticket in the sector even after Categories/Priority & Trend/Status & Progress

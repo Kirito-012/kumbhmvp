@@ -137,7 +137,6 @@ export function TicketsToolbar({
                 className={cn(
                   'rounded-md px-1.5 py-0.5 text-[11px]',
                   isActive ? 'bg-black/15 text-white' : 'bg-overlay-strong text-muted',
-                  isActive && s.slug === 'closed' && 'bg-overlay text-foreground',
                 )}
               >
                 {s.count}

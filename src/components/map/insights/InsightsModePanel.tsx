@@ -203,17 +203,9 @@ function InsightsModeBody({
     insightsData.subclasses,
   )
 
-  const bucketCounts: Record<StatusBucket, number> = {
-    new: 0,
-    progress: 0,
-    resolved: 0,
-    closed: 0,
-  }
+  const bucketCounts: Record<StatusBucket, number> = { new: 0, open: 0, pending: 0, resolved: 0 }
   for (const rollup of rollups.values()) {
-    bucketCounts.new += rollup.newCount
-    bucketCounts.progress += rollup.progressCount
-    bucketCounts.resolved += rollup.resolved
-    bucketCounts.closed += rollup.closed
+    for (const bucket of BUCKET_ORDER) bucketCounts[bucket] += rollup.byBucket[bucket]
   }
 
   // Ticket mode has no metric switch of its own -- it always ranks/colours the list by open-ticket

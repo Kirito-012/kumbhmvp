@@ -73,6 +73,7 @@ import {
   INSIGHT_HEAT_LAYER,
   INSIGHT_HEAT_SOURCE,
   INSIGHT_SECTOR_FILL_LAYER,
+  INSIGHT_SECTOR_LABEL_LAYER,
   INSIGHT_SECTOR_LABEL_SOURCE,
   INSIGHT_HEAT_POINTS_LAYER,
   INSIGHT_TICKET_FILL_LAYER,
@@ -1519,12 +1520,9 @@ function FloatingLegend({
     undefined,
     insightsData.subclasses,
   )
-  const counts: Record<StatusBucket, number> = { new: 0, progress: 0, resolved: 0, closed: 0 }
+  const counts: Record<StatusBucket, number> = { new: 0, open: 0, pending: 0, resolved: 0 }
   for (const rollup of rollups.values()) {
-    counts.new += rollup.newCount
-    counts.progress += rollup.progressCount
-    counts.resolved += rollup.resolved
-    counts.closed += rollup.closed
+    for (const bucket of BUCKET_ORDER) counts[bucket] += rollup.byBucket[bucket]
   }
   return (
     <div className={`${wrapperBaseClass} flex flex-wrap gap-x-2.5 gap-y-1`} style={wrapperStyle}>
@@ -3951,6 +3949,11 @@ export default function MapView({
       // canUseInsights like addInsightLayers/addTicketLayers above -- a surveyor's map never
       // creates these either.
       if (canUseInsights) addEvacLayers(map, readMapTheme())
+      // addInsightLayers runs before sector_plan exists, so Ticket mode's "S7 · 52% resolved" label
+      // starts out beneath every parcel/ticket layer added since and gets painted over. Lift it to
+      // the top of the stack now that everything exists; a later theme swap splices the new basemap
+      // in below the app's layers (see syncBasemap), so it stays on top from here on.
+      if (map.getLayer(INSIGHT_SECTOR_LABEL_LAYER)) map.moveLayer(INSIGHT_SECTOR_LABEL_LAYER)
       applyLayerVisibility(
         map,
         visibilityForMode(visibilityRef.current, modeRef.current, evacVisibilityRef.current),
