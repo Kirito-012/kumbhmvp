@@ -1,7 +1,9 @@
 'use client'
 
-import { useEffect, useRef, useState, type JSX } from 'react'
+import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import { ParcelIcon, GridIcon, RoadIcon } from '@/components/map/icons'
+import SectorWorkDone, { formatDonePct, summarizeWorkDone } from '@/components/map/SectorWorkDone'
+import type { InsightsTicketData } from '@/lib/insights/types'
 
 // Must match the drawer-swipe-in/-out keyframes' duration in globals.css --
 // this is what the unmount timeout below waits out before actually removing
@@ -48,6 +50,13 @@ type Report = {
     ghats: number
   }
 }
+
+export type SectorDrawerTab = 'general' | 'work'
+
+const TABS: { key: SectorDrawerTab; label: string }[] = [
+  { key: 'general', label: 'General Info' },
+  { key: 'work', label: 'Work Done' },
+]
 
 const SECTION_THEMES = {
   blue: { bg: 'var(--map-section-blue-bg)', fg: 'var(--map-section-blue-fg)' },
@@ -220,6 +229,27 @@ function IconWave({ className }: { className?: string }) {
         stroke="currentColor"
         strokeWidth={1.7}
         strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+function IconInfo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth={1.8} />
+      <path d="M12 11v5.5M12 7.6v.1" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
+    </svg>
+  )
+}
+function IconChecklist({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M4 6.5l1.6 1.6L8.8 5M4 12.5l1.6 1.6 3.2-3.1M4 18.5l1.6 1.6 3.2-3.1M12 7h8M12 13h8M12 19h8"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   )
@@ -565,11 +595,40 @@ function ColHead({
 export default function SectorReportDrawer({
   sectorNo,
   sectorLabel,
+  preferredTab = 'general',
+  workDone,
 }: {
   /** Drawer is hidden entirely when null -- same "no sector selected" gate as the Stats panel's filtered view. */
   sectorNo: number | null
   sectorLabel: string
+  /** Tab shown on mount and whenever this changes (Map mode opens on General Info, Ticket mode on
+   *  Work Done). The user's own tab clicks win until it changes again. */
+  preferredTab?: SectorDrawerTab
+  /** Ticket progress for the Work Done tab. Omitted for users without `ticket:read:all` (the bulk
+   *  insights route is gated on it) -- the drawer then renders General Info alone, with no tabs. */
+  workDone?: {
+    data: InsightsTicketData | null
+    loading: boolean
+    error: string | null
+    onRetry: () => void
+    /** Fired once the Work Done tab is actually selected, so Map mode only pulls the bulk ticket
+     *  data when someone asks for it rather than on every sector click. */
+    onActivate: () => void
+  }
 }) {
+  const [tabState, setTab] = useState<SectorDrawerTab>(preferredTab)
+  const tab: SectorDrawerTab = workDone ? tabState : 'general'
+  // Adjust-state-during-render (not an effect) so switching modes never paints one frame of the
+  // previous mode's tab.
+  const [lastPreferredTab, setLastPreferredTab] = useState(preferredTab)
+  if (lastPreferredTab !== preferredTab) {
+    setLastPreferredTab(preferredTab)
+    setTab(preferredTab)
+  }
+  const tabRefs = useRef<Record<SectorDrawerTab, HTMLButtonElement | null>>({
+    general: null,
+    work: null,
+  })
   const [report, setReport] = useState<Report | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -716,6 +775,18 @@ export default function SectorReportDrawer({
     setCollapsed(true)
   }, [sectorNo])
 
+  const workData = workDone?.data ?? null
+  const workSummary = useMemo(
+    () => (workData && sectorNo !== null ? summarizeWorkDone(workData, sectorNo) : null),
+    [workData, sectorNo],
+  )
+
+  const onActivateWork = workDone?.onActivate
+  const workVisible = tab === 'work' && sectorNo !== null
+  useEffect(() => {
+    if (workVisible) onActivateWork?.()
+  }, [workVisible, onActivateWork])
+
   if (!mounted) return null
 
   const landClasses = report
@@ -839,7 +910,16 @@ export default function SectorReportDrawer({
         {/* Headline figures inline in the heading, so the collapsed strip is worth the ~76px of
             map it costs -- on its own it only repeated the sector name the left panel already
             shows. Hidden below 380px of drawer width, where the title alone fills the row. */}
-        {report && (
+        {tab === 'work' && workSummary && (
+          <div className="hidden shrink-0 items-center gap-1.5 @min-[380px]:flex">
+            <HeadChip value={formatDonePct(workSummary)} label="done" />
+            <HeadChip
+              value={`${workSummary.resolved}/${workSummary.total}`}
+              label="tickets resolved"
+            />
+          </div>
+        )}
+        {tab === 'general' && report && (
           <div className="hidden shrink-0 items-center gap-1.5 @min-[380px]:flex">
             <HeadChip value={`${report.landSummary.totalMelaLandHectares} ha`} label="Mela land" />
             {/* Plots, not groups -- `keyActivities.length` is the number of class_group cards,
@@ -865,8 +945,96 @@ export default function SectorReportDrawer({
         </button>
       </div>
 
-      {!collapsed && (
-        <>
+      {!collapsed && workDone && (
+        <div
+          role="tablist"
+          aria-label="Sector report sections"
+          className="flex shrink-0 items-end gap-1 border-b px-4"
+          style={{ borderColor: 'var(--map-panel-border)' }}
+        >
+          {TABS.map((t, i) => {
+            const selected = tab === t.key
+            const Icon = t.key === 'general' ? IconInfo : IconChecklist
+            return (
+              <button
+                key={t.key}
+                ref={(el) => {
+                  tabRefs.current[t.key] = el
+                }}
+                type="button"
+                role="tab"
+                id={`sector-report-tab-${t.key}`}
+                aria-selected={selected}
+                aria-controls={`sector-report-panel-${t.key}`}
+                // Roving tabindex: Tab lands on the selected tab, arrows move between them.
+                tabIndex={selected ? 0 : -1}
+                onClick={() => setTab(t.key)}
+                onKeyDown={(e) => {
+                  let next: (typeof TABS)[number] | undefined
+                  if (e.key === 'ArrowRight') next = TABS[(i + 1) % TABS.length]
+                  else if (e.key === 'ArrowLeft') next = TABS[(i + TABS.length - 1) % TABS.length]
+                  else if (e.key === 'Home') next = TABS[0]
+                  else if (e.key === 'End') next = TABS[TABS.length - 1]
+                  if (!next) return
+                  e.preventDefault()
+                  setTab(next.key)
+                  tabRefs.current[next.key]?.focus()
+                }}
+                className="relative -mb-px flex cursor-pointer items-center gap-1.5 rounded-t-lg px-3 pb-2 pt-2.5 text-[12px] font-semibold transition-colors hover:bg-[var(--map-surface-hover)]"
+                style={{ color: selected ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
+              >
+                <Icon className="h-[14px] w-[14px]" />
+                {t.label}
+                {t.key === 'work' && workSummary && workSummary.total > 0 && (
+                  <span
+                    className="rounded-full px-1.5 py-[2px] text-[10px] font-bold leading-none tabular-nums"
+                    style={{
+                      backgroundColor: selected ? 'var(--map-accent-bg)' : 'var(--map-surface-alt)',
+                      color: selected ? 'var(--map-accent-fg)' : 'var(--map-fg-muted)',
+                    }}
+                  >
+                    {formatDonePct(workSummary)}
+                  </span>
+                )}
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-x-2 bottom-0 h-[2px] rounded-full transition-opacity"
+                  style={{ backgroundColor: 'var(--map-accent)', opacity: selected ? 1 : 0 }}
+                />
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {!collapsed && tab === 'work' && workDone && (
+        <div
+          role="tabpanel"
+          id="sector-report-panel-work"
+          aria-labelledby="sector-report-tab-work"
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <SectorWorkDone
+            key={sectorNo}
+            summary={workSummary}
+            loading={workDone.loading}
+            error={workDone.error}
+            onRetry={workDone.onRetry}
+          />
+        </div>
+      )}
+
+      {!collapsed && tab === 'general' && (
+        <div
+          {...(workDone
+            ? {
+                role: 'tabpanel',
+                id: 'sector-report-panel-general',
+                'aria-labelledby': 'sector-report-tab-general',
+              }
+            : {})}
+          className="flex min-h-0 flex-1 flex-col"
+        >
           {loading && (
             <div
               className="flex items-center gap-2 px-5 py-8 text-[12.5px]"
@@ -1141,7 +1309,7 @@ export default function SectorReportDrawer({
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   )

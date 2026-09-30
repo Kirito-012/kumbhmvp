@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import type { Feature, Point } from 'geojson'
@@ -4897,12 +4897,27 @@ export default function MapView({
   // EvacuationModePanel (the left panel) -- drives FloatingLegend's evacuation branch, which has
   // no per-mode data dependency of its own so it doesn't need an insightsData-style guard.
   const [evacModeCollapsed, setEvacModeCollapsed] = useState(false)
+  // The Sector Report drawer's Work Done tab reads the same bulk ticket tuples as Heatmap/Ticket
+  // mode. In Map mode they're only fetched once someone actually opens that tab (the drawer calls
+  // requestWorkDoneData), then stay cached for the session like any other insights fetch.
+  const [workDoneRequested, setWorkDoneRequested] = useState(false)
+  const requestWorkDoneData = useCallback(() => setWorkDoneRequested(true), [])
   const {
     data: insightsData,
     loading: insightsLoading,
     error: insightsError,
     refetch: refetchInsights,
-  } = useTicketInsights(insightsActive)
+  } = useTicketInsights(insightsActive || (canUseInsights && workDoneRequested))
+  // Map mode keys the drawer off selectedSector; Ticket mode off insightSector (kept separate so
+  // leaving a mode restores the other's selection). 'peripheral' has no sector report to show.
+  const drawerSector =
+    mode === 'tickets'
+      ? typeof insightSector === 'number'
+        ? insightSector
+        : null
+      : selectedSector === 'all'
+        ? null
+        : selectedSector
   /** Mirrors `insightsData` for the map's one-time 'load' handler (the Heatmap click handler's
    *  ticket-dot popup needs status/priority names by index) -- same staleness reason as
    *  sectorsRef/modeRef: insightsData loads asynchronously well after that closure was created. */
@@ -7317,13 +7332,25 @@ export default function MapView({
         />
       )}
 
-      {mode === 'map' && (
+      {(mode === 'map' || mode === 'tickets') && (
         <SectorReportDrawer
-          sectorNo={selectedSector === 'all' ? null : selectedSector}
+          sectorNo={drawerSector}
           sectorLabel={(() => {
-            const s = sectors.find((x) => x.sector_no === selectedSector)
-            return s ? formatSectorLabel(s) : `Sector ${selectedSector}`
+            const s = sectors.find((x) => x.sector_no === drawerSector)
+            return s ? formatSectorLabel(s) : `Sector ${drawerSector}`
           })()}
+          preferredTab={mode === 'tickets' ? 'work' : 'general'}
+          workDone={
+            canUseInsights
+              ? {
+                  data: insightsData,
+                  loading: insightsLoading,
+                  error: insightsError,
+                  onRetry: refetchInsights,
+                  onActivate: requestWorkDoneData,
+                }
+              : undefined
+          }
         />
       )}
 
