@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { ChevronDownIcon, SearchIcon, XIcon } from '@/components/map/icons'
 import { CLASS_GROUP_COLORS } from '@/lib/classColors'
 import {
@@ -375,6 +375,7 @@ function CategoryCard({
   )
   return (
     <div
+      data-category={row.name}
       className="overflow-hidden rounded-[10px] border motion-safe:animate-[fade-in_300ms_ease-out_backwards]"
       style={{
         backgroundColor: 'var(--map-surface-alt)',
@@ -417,14 +418,27 @@ export function TicketProgress({
   summary,
   error,
   onRetry,
+  initialOpen,
 }: {
   summary: WorkDoneSummary | null
   error: string | null
   onRetry: () => void
+  /** Category to open and scroll to on arrival (a drill-through from the Insights bars). */
+  initialOpen?: string
 }) {
   const theme = useInsightTheme()
   const [sortKey, setSortKey] = useState<SortKey>('most')
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set(initialOpen ? [initialOpen] : []),
+  )
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!initialOpen) return
+    const card = [
+      ...(rootRef.current?.querySelectorAll<HTMLElement>('[data-category]') ?? []),
+    ].find((el) => el.dataset.category === initialOpen)
+    card?.scrollIntoView({ block: 'nearest' })
+  }, [initialOpen])
 
   const [query, setQuery] = useState('')
   const q = query.trim()
@@ -523,7 +537,7 @@ export function TicketProgress({
   const remaining = summary.total - summary.resolved
 
   return (
-    <div className="kumbh-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+    <div ref={rootRef} className="kumbh-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-4">
       {error && (
         <div
           role="alert"

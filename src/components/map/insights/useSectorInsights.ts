@@ -47,6 +47,7 @@ export function useSectorInsights(
     lastKeyRef.current = key
     const requestId = ++requestIdRef.current
     let cancelled = false
+    let settled = false
     setLoading(true)
     setError(null)
     fetch(`/api/insights/sectors/${targetFor(sector)}`)
@@ -58,16 +59,24 @@ export function useSectorInsights(
         // A slower, superseded request (e.g. clicking two sectors in quick succession) must not
         // clobber the result of a request started after it.
         if (cancelled || requestId !== requestIdRef.current) return
+        settled = true
         setData(json)
         setLoading(false)
       })
       .catch((e: Error) => {
         if (cancelled || requestId !== requestIdRef.current) return
+        settled = true
         setError(e.message || 'Failed to load sector insights')
         setLoading(false)
       })
     return () => {
       cancelled = true
+      // A cleanup that arrives before the response abandons that request, so the idempotency
+      // guard above must not treat it as done. Without this, React Strict Mode's dev-only
+      // mount -> cleanup -> mount (which this hook meets whenever it is active from the very
+      // first render) makes the second run bail on the guard while the first run's result is
+      // discarded as cancelled: the data never arrives.
+      if (!settled) lastKeyRef.current = null
     }
   }, [active, sector, nonce])
 

@@ -955,17 +955,17 @@ Coverage is thin — the map and ticket flows have no automated tests.
 
 ## 13. Scripts
 
-| Script                                 | What it does                                                                                                                              |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `copy-maplibre-worker.mjs`             | **postinstall hook.** Copies MapLibre's worker files into `public/` so Turbopack can resolve them. Runs on every install — don't skip it. |
-| `seed.ts` (`npm run seed`)             | Roles, statuses, priorities, types, 3 named accounts, 2 service accounts. **Deletes all users first.**                                    |
-| `import-map-tickets.ts`                | One ticket per `kumbh.sector_plan` parcel. Idempotent (skips already-imported `sectorPlanId`). Requires `npm run seed` first.             |
-| `demo-distribute-priorities.ts`        | Demo data — reshuffles priorities by weighted random (35/40/18/7%).                                                                       |
-| `demo-resolve-by-category.ts`          | Demo data — resolves 30–60% of each category's open tickets. Safe to re-run.                                                              |
-| `demo-spread-ticket-dates.ts`          | Demo data — spreads dates over 7 days with an upward trend. Uses `overwriteImmutable: true` to write `createdAt`.                         |
-| `demo-redistribute-ticket-statuses.ts` | Demo data — moves ~30% of New tickets into Open/Pending.                                                                                  |
-| `migrate-remove-closed-status.ts`      | One-off (already run 2026-09-29) — retired the Closed status. Has `--dry-run`; safe to re-run.                                            |
-| `load_kumbh_2027.py`                   | **The GIS loader.** See below.                                                                                                            |
+| Script                                 | What it does                                                                                                                                                                                                        |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `copy-maplibre-worker.mjs`             | **postinstall hook.** Copies MapLibre's worker files into `public/` so Turbopack can resolve them. Runs on every install — don't skip it.                                                                           |
+| `seed.ts` (`npm run seed`)             | Roles, statuses, priorities, types, 3 named accounts, 2 service accounts. **Deletes all users first.**                                                                                                              |
+| `import-map-tickets.ts`                | One ticket per `kumbh.sector_plan` parcel. Idempotent (skips already-imported `sectorPlanId`). Requires `npm run seed` first.                                                                                       |
+| `demo-distribute-priorities.ts`        | Demo data — reshuffles priorities by weighted random (35/40/18/7%).                                                                                                                                                 |
+| `demo-resolve-by-category.ts`          | Demo data — resolves 30–60% of each category's open tickets. Safe to re-run.                                                                                                                                        |
+| `demo-spread-ticket-dates.ts`          | Demo data — spreads dates over the last 7 days (uneven, created ≠ resolved). **Re-run whenever the 7-day charts go flat** (the window is relative to today). `--dry-run` previews. Uses `overwriteImmutable: true`. |
+| `demo-redistribute-ticket-statuses.ts` | Demo data — moves ~30% of New tickets into Open/Pending.                                                                                                                                                            |
+| `migrate-remove-closed-status.ts`      | One-off (already run 2026-09-29) — retired the Closed status. Has `--dry-run`; safe to re-run.                                                                                                                      |
+| `load_kumbh_2027.py`                   | **The GIS loader.** See below.                                                                                                                                                                                      |
 
 ### Extending `load_kumbh_2027.py`
 

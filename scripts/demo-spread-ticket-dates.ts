@@ -3,7 +3,7 @@
 // seed scripts happened to run — so the dashboard's "Ticket volume" chart (created vs. resolved,
 // last 7 days) shows a realistic multi-day curve instead of one flat line + a single vertical
 // spike on the most recent day. Safe to re-run — reshuffles dates across all non-deleted tickets
-// each time.
+// each time. Pass --dry-run to preview the per-day counts without writing.
 import { config } from 'dotenv'
 config({ path: '.env.local' })
 
@@ -14,18 +14,41 @@ import { TicketStatusModel } from '../src/server/db/models/ticket-status.model'
 const DAYS = 7
 const BATCH_SIZE = 500
 
-// Relative inflow weight per day, oldest -> today: a gentle upward trend (more tickets created
-// more recently) rather than a flat/random spread, so the chart reads as organic activity.
-const DAY_WEIGHTS = [0.09, 0.11, 0.12, 0.13, 0.15, 0.18, 0.22]
+// Relative weight per day, oldest -> today. Deliberately uneven, and different for the two series
+// (a busy mid-week and a Friday-style peak for creation; resolution that surges a day later), so
+// the lines wobble and cross like real activity rather than ramping in parallel. The last entry
+// is low because today is only part-way through when the script runs.
+const CREATED_WEIGHTS = [0.1, 0.13, 0.17, 0.12, 0.19, 0.17, 0.12]
+const RESOLVED_WEIGHTS = [0.12, 0.16, 0.11, 0.2, 0.16, 0.15, 0.1]
 
-function pickWeightedDayOffset(): number {
-  const total = DAY_WEIGHTS.reduce((s, w) => s + w, 0)
+// Time from creation to resolution: exponential, so most tickets close within about a day and a
+// few drag on. Resolved tickets are placed by their resolution day and created backwards from
+// there, which means some were created before the 7-day window -- real backlog being worked
+// down, and it keeps the first day's resolved count from starting at zero.
+const MEAN_RESOLVE_LAG_MS = 20 * 60 * 60 * 1000
+const MIN_RESOLVE_LAG_MS = 30 * 60 * 1000
+const MAX_RESOLVE_LAG_MS = 5 * 24 * 60 * 60 * 1000
+
+// `--dry-run` prints the per-day tables without writing anything.
+const DRY_RUN = process.argv.includes('--dry-run')
+
+function pickWeightedDayOffset(weights: number[]): number {
+  const total = weights.reduce((s, w) => s + w, 0)
   let r = Math.random() * total
-  for (let i = 0; i < DAY_WEIGHTS.length; i++) {
-    r -= DAY_WEIGHTS[i]
+  for (let i = 0; i < weights.length; i++) {
+    r -= weights[i]
     if (r <= 0) return DAYS - 1 - i // index 0 = oldest day = offset (DAYS - 1)
   }
   return 0
+}
+
+/** Whole local calendar days between `d` and today (0 = today), matching the chart's buckets. */
+function calendarDaysAgo(d: Date): number {
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const startOfThatDay = new Date(d)
+  startOfThatDay.setHours(0, 0, 0, 0)
+  return Math.round((startOfToday.getTime() - startOfThatDay.getTime()) / (24 * 60 * 60 * 1000))
 }
 
 // Random time within the given calendar day (local), so points don't all land on midnight.
@@ -61,31 +84,29 @@ async function main() {
   const resolvedCounts = new Array(DAYS).fill(0)
 
   for (const t of tickets) {
-    const createdOffset = pickWeightedDayOffset()
-    const createdAt = randomTimeOnDay(createdOffset)
-    createdCounts[DAYS - 1 - createdOffset]++
-
     const isResolved = resolvedIdSet.has(String(t.statusId))
-    const set: Record<string, unknown> = { createdAt }
+    let createdAt: Date
+    const set: Record<string, unknown> = {}
 
     if (isResolved) {
-      // Resolve sometime between creation and now, biased toward "not too long after creation"
-      // (sqrt skews the random pick toward the low end) but never before createdAt and never in
-      // the future.
-      const msSinceCreated = Date.now() - createdAt.getTime()
-      const resolveOffsetMs = Math.floor(Math.sqrt(Math.random()) * msSinceCreated)
-      const resolvedAt = new Date(createdAt.getTime() + resolveOffsetMs)
+      // Pick the resolution moment first, then work backwards to when it was created.
+      const resolvedAt = randomTimeOnDay(pickWeightedDayOffset(RESOLVED_WEIGHTS))
+      const lagMs = Math.min(
+        MAX_RESOLVE_LAG_MS,
+        MIN_RESOLVE_LAG_MS - Math.log(1 - Math.random()) * MEAN_RESOLVE_LAG_MS,
+      )
+      createdAt = new Date(resolvedAt.getTime() - lagMs)
       set.resolvedAt = resolvedAt
       set.lastActivityAt = resolvedAt
-      const resolvedDaysAgo = Math.floor(
-        (Date.now() - resolvedAt.getTime()) / (24 * 60 * 60 * 1000),
-      )
-      if (resolvedDaysAgo >= 0 && resolvedDaysAgo < DAYS)
-        resolvedCounts[DAYS - 1 - resolvedDaysAgo]++
+      resolvedCounts[DAYS - 1 - calendarDaysAgo(resolvedAt)]++
     } else {
+      createdAt = randomTimeOnDay(pickWeightedDayOffset(CREATED_WEIGHTS))
       set.resolvedAt = null
       set.lastActivityAt = createdAt
     }
+    set.createdAt = createdAt
+    const createdDaysAgo = calendarDaysAgo(createdAt)
+    if (createdDaysAgo < DAYS) createdCounts[DAYS - 1 - createdDaysAgo]++
 
     // overwriteImmutable: true — by default Mongoose's timestamps option silently strips any
     // user-provided createdAt out of $set on every update (see castBulkWrite.js /
@@ -98,14 +119,16 @@ async function main() {
     })
   }
 
-  for (let i = 0; i < writes.length; i += BATCH_SIZE) {
-    await TicketModel.bulkWrite(writes.slice(i, i + BATCH_SIZE))
+  if (!DRY_RUN) {
+    for (let i = 0; i < writes.length; i += BATCH_SIZE) {
+      await TicketModel.bulkWrite(writes.slice(i, i + BATCH_SIZE))
+    }
   }
 
   const dayLabels = Array.from({ length: DAYS }, (_, i) => {
     const d = new Date()
     d.setDate(d.getDate() - (DAYS - 1 - i))
-    return d.toISOString().slice(0, 10)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   })
 
   console.log('\nCreated per day:')
@@ -113,7 +136,11 @@ async function main() {
   console.log('\nResolved per day (of tickets already marked resolved):')
   dayLabels.forEach((label, i) => console.log(`  ${label}: ${resolvedCounts[i]}`))
 
-  console.log(`\nDone. ${writes.length} tickets updated.`)
+  console.log(
+    DRY_RUN
+      ? `\nDry run: ${writes.length} tickets would be updated; nothing was written.`
+      : `\nDone. ${writes.length} tickets updated.`,
+  )
   process.exit(0)
 }
 
