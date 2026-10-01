@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import { ParcelIcon, GridIcon, RoadIcon } from '@/components/map/icons'
-import SectorWorkDone, { formatDonePct, summarizeWorkDone } from '@/components/map/SectorWorkDone'
+import SectorWorkTab from '@/components/map/SectorWorkTab'
+import { summarizeWorkDone } from '@/components/map/SectorWorkDone'
 import type { InsightsTicketData } from '@/lib/insights/types'
 
 // Must match the drawer-swipe-in/-out keyframes' duration in globals.css --
@@ -912,7 +913,6 @@ export default function SectorReportDrawer({
             shows. Hidden below 380px of drawer width, where the title alone fills the row. */}
         {tab === 'work' && workSummary && (
           <div className="hidden shrink-0 items-center gap-1.5 @min-[380px]:flex">
-            <HeadChip value={formatDonePct(workSummary)} label="done" />
             <HeadChip
               value={`${workSummary.resolved}/${workSummary.total}`}
               label="tickets resolved"
@@ -985,17 +985,6 @@ export default function SectorReportDrawer({
               >
                 <Icon className="h-[14px] w-[14px]" />
                 {t.label}
-                {t.key === 'work' && workSummary && workSummary.total > 0 && (
-                  <span
-                    className="rounded-full px-1.5 py-[2px] text-[10px] font-bold leading-none tabular-nums"
-                    style={{
-                      backgroundColor: selected ? 'var(--map-accent-bg)' : 'var(--map-surface-alt)',
-                      color: selected ? 'var(--map-accent-fg)' : 'var(--map-fg-muted)',
-                    }}
-                  >
-                    {formatDonePct(workSummary)}
-                  </span>
-                )}
                 <span
                   aria-hidden="true"
                   className="absolute inset-x-2 bottom-0 h-[2px] rounded-full transition-opacity"
@@ -1010,14 +999,15 @@ export default function SectorReportDrawer({
       {!collapsed && tab === 'work' && workDone && (
         <div
           role="tabpanel"
+          tabIndex={0}
           id="sector-report-panel-work"
           aria-labelledby="sector-report-tab-work"
           className="flex min-h-0 flex-1 flex-col"
         >
-          <SectorWorkDone
+          <SectorWorkTab
             key={sectorNo}
+            sectorNo={sectorNo ?? 0}
             summary={workSummary}
-            loading={workDone.loading}
             error={workDone.error}
             onRetry={workDone.onRetry}
           />
