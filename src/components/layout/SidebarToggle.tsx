@@ -5,12 +5,17 @@ import { useSidebar } from '@/components/layout/SidebarContext'
 import { cn } from '@/lib/utils'
 
 export function SidebarToggle({ variant = 'overlay' }: { variant?: 'pinned' | 'overlay' }) {
-  const { setOpen } = useSidebar()
+  const { setOpen, peekStart, peekEnd } = useSidebar()
 
   return (
     <button
       type="button"
+      // Hover previews the menu; a click pins it open (see SidebarContext).
       onClick={() => setOpen(true)}
+      onMouseEnter={peekStart}
+      onMouseLeave={peekEnd}
+      onFocus={peekStart}
+      onBlur={peekEnd}
       aria-label="Open menu"
       style={
         variant === 'overlay'
@@ -35,7 +40,6 @@ export function SidebarToggle({ variant = 'overlay' }: { variant?: 'pinned' | 'o
         variant === 'overlay'
           ? 'border backdrop-blur-md hover:brightness-95'
           : 'border border-border bg-background-elevated text-muted-strong hover:bg-surface-hover hover:text-foreground',
-        variant === 'pinned' && 'lg:hidden',
       )}
     >
       <Menu className="h-4.5 w-4.5" strokeWidth={2} />

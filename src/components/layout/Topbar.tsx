@@ -17,7 +17,7 @@ export function Topbar({
   primaryAction?: { label: string; icon?: React.ReactNode; href?: string }
 }) {
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background/80 px-4 pl-16 backdrop-blur-md sm:gap-4 sm:px-8 sm:pl-16 lg:px-8">
+    <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background/80 px-4 pl-16 backdrop-blur-md sm:gap-4 sm:px-8 sm:pl-16 lg:px-4">
       <div className="min-w-0 flex-1">
         <h1 className="truncate text-[15px] font-semibold text-foreground">{title}</h1>
         {description && <p className="truncate text-xs text-muted">{description}</p>}

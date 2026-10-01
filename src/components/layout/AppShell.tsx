@@ -1,7 +1,6 @@
 import { Sidebar } from '@/components/layout/Sidebar'
 import { SidebarProvider } from '@/components/layout/SidebarContext'
 import { SidebarToggle } from '@/components/layout/SidebarToggle'
-import { cn } from '@/lib/utils'
 
 type ShellUser = {
   name?: string | null
@@ -19,8 +18,9 @@ export function AppShell({
   user: ShellUser
   ticketCount: number
   pendingAccountsCount?: number
-  /** 'pinned': classic app pages, sidebar stays visible on desktop. 'overlay': full-bleed
-   *  pages (the map), sidebar always starts closed and slides in over content. */
+  /** Both variants start with the sidebar closed and float it over the content; 'overlay' is the
+   *  full-bleed map page and 'pinned' the classic app pages (they differ only in hamburger
+   *  styling). */
   variant?: 'pinned' | 'overlay'
   children: React.ReactNode
 }) {
@@ -34,7 +34,17 @@ export function AppShell({
           pendingAccountsCount={pendingAccountsCount}
           variant={variant}
         />
-        <div className={cn(variant === 'pinned' && 'lg:pl-64')}>{children}</div>
+        {/* Pinned app pages get an outer gutter so content doesn't run edge to edge, matching the
+            floating sidebar's inset; the full-bleed map page keeps none. */}
+        <div
+          className={
+            variant === 'pinned'
+              ? 'mx-auto w-full max-w-[1680px] px-3 sm:px-8 lg:px-16 2xl:px-24'
+              : undefined
+          }
+        >
+          {children}
+        </div>
       </div>
     </SidebarProvider>
   )

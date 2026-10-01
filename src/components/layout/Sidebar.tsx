@@ -45,22 +45,22 @@ export function Sidebar({
   user,
   ticketCount,
   pendingAccountsCount = 0,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- part of the shared shell API
   variant = 'overlay',
 }: {
   user: SidebarUser
   ticketCount: number
   pendingAccountsCount?: number
-  /** 'pinned' stays permanently visible on desktop (only slides on mobile), like the classic
-   *  app pages. 'overlay' always starts closed and slides in on top of content, on every
-   *  screen size — used by the full-bleed map page. */
+  /** Kept for the shell's two page families; the sidebar itself behaves identically in both:
+   *  closed by default, hover-peeks from the hamburger, click pins it open. */
   variant?: 'pinned' | 'overlay'
 }) {
   const pathname = usePathname()
-  const { open, setOpen } = useSidebar()
+  const { open, setOpen, peeking, peekStart, peekEnd } = useSidebar()
+  const visible = open || peeking
   const displayName = user.name || user.email || 'Account'
   const person = { name: displayName, initials: initialsFor(displayName), color: '#10b981' }
   const nav = buildNav(ticketCount, pendingAccountsCount)
-  const pinned = variant === 'pinned'
 
   return (
     <>
@@ -70,16 +70,27 @@ export function Sidebar({
         aria-hidden
         className={cn(
           'fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity duration-200',
-          pinned && 'lg:hidden',
+          // The dim backdrop belongs to the pinned (clicked) state only: a hover peek is a
+          // glance, not a modal, so the page behind stays fully visible and usable.
           open ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0',
         )}
       />
 
       <aside
+        onMouseEnter={peekStart}
+        onMouseLeave={peekEnd}
+        aria-hidden={!visible}
+        inert={!visible}
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-border bg-background-elevated transition-transform duration-200',
-          pinned && 'lg:z-40 lg:translate-x-0',
-          open ? 'translate-x-0' : '-translate-x-full',
+          // Floating card: inset from every edge with rounded corners and a deep shadow rather
+          // than an edge-to-edge rail. The closed offset clears the card's own margin so its
+          // shadow never peeks in from the left.
+          'fixed bottom-3 left-3 z-50 flex w-64 flex-col overflow-hidden rounded-2xl border border-border bg-background-elevated shadow-2xl shadow-black/30 transition-[transform,opacity,top] duration-200',
+          // A hover peek starts just below the hamburger (top-4 + h-10) so the button stays
+          // uncovered and clickable -- sliding over it meant the click landed on the sidebar and
+          // could never pin it. Once pinned, the card rises to the full inset.
+          open ? 'top-3' : 'top-[4.5rem]',
+          visible ? 'translate-x-0 opacity-100' : '-translate-x-[calc(100%+1.5rem)] opacity-0',
         )}
       >
         <div className="flex h-16 items-center gap-2.5 px-5">
@@ -88,10 +99,7 @@ export function Sidebar({
             type="button"
             onClick={() => setOpen(false)}
             aria-label="Close menu"
-            className={cn(
-              'inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-muted-strong hover:bg-overlay-strong',
-              pinned && 'lg:hidden',
-            )}
+            className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-muted-strong hover:bg-overlay-strong"
           >
             <X className="h-4 w-4" />
           </button>
