@@ -517,7 +517,7 @@ export default function SectorWorkHeads({ sectorNo }: { sectorNo: number }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 items-start gap-2 @min-[720px]:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-2 @min-[720px]:grid-cols-2 @min-[1100px]:grid-cols-3">
         {visible.map((v, i) => (
           <HeadCard
             key={v.head.no}

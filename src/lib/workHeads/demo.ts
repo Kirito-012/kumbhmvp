@@ -82,7 +82,10 @@ export function formatQuantity(value: number, unit: WorkUnit): string {
   return `${n} ${unit}`
 }
 
-export function buildSectorWorkHeads(sectorNo: number, now = Date.now()): SectorWorkHeads {
+export function buildSectorWorkHeads(sectorNo: number, nowMs = Date.now()): SectorWorkHeads {
+  // Day-aligned so every view built from the same instant agrees on what is overdue (a target
+  // generated as exactly "today" must not flip between delayed and in-progress across callers).
+  const now = Math.floor(nowMs / DAY_MS) * DAY_MS
   const emptyCounts = (): Record<WorkStatus, number> => ({
     completed: 0,
     'in-progress': 0,

@@ -4910,6 +4910,9 @@ export default function MapView({
   } = useTicketInsights(insightsActive || (canUseInsights && workDoneRequested))
   // Map mode keys the drawer off selectedSector; Ticket mode off insightSector (kept separate so
   // leaving a mode restores the other's selection). 'peripheral' has no sector report to show.
+  // Sector Report drawer's Expanded view -- hides the docked side panels while it is on and the
+  // drawer is actually showing a sector in a mode that renders it.
+  const [drawerExpanded, setDrawerExpanded] = useState(false)
   const drawerSector =
     mode === 'tickets'
       ? typeof insightSector === 'number'
@@ -4918,6 +4921,8 @@ export default function MapView({
       : selectedSector === 'all'
         ? null
         : selectedSector
+  const sidePanelsHidden =
+    drawerExpanded && drawerSector !== null && (mode === 'map' || mode === 'tickets')
   /** Mirrors `insightsData` for the map's one-time 'load' handler (the Heatmap click handler's
    *  ticket-dot popup needs status/priority names by index) -- same staleness reason as
    *  sectorsRef/modeRef: insightsData loads asynchronously well after that closure was created. */
@@ -6225,202 +6230,86 @@ export default function MapView({
         {canUseInsights && <ModeSwitcher mode={mode} onChange={setMode} />}
       </div>
 
-      {mode === 'map' ? (
-        <Panel
-          icon={<CompassIcon className="h-full w-full" />}
-          title="Kumbh Mela"
-          subtitle="Sector plan · Haridwar–Rishikesh"
-          side="left"
-          overlayOpen={panelDropdownOpen}
-          forceCollapsed={expandedDockedPanel === 'stats'}
-          onExpand={() => {
-            if (isPhoneViewport()) setExpandedDockedPanel('search')
-          }}
-          onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'search' ? null : cur))}
-        >
-          <div className="flex flex-col gap-4">
-            {/* Unified search -- merges the old SECTOR box, CLASS box (with its
+      {/* Expanded view hides the docked side panels with CSS, not by unmounting them, so their
+          search text, filters and collapse state survive leaving it. `contents` keeps the wrapper
+          out of layout so the panels still position against the map container. */}
+      <div className={sidePanelsHidden ? 'hidden' : 'contents'}>
+        {mode === 'map' ? (
+          <Panel
+            icon={<CompassIcon className="h-full w-full" />}
+            title="Kumbh Mela"
+            subtitle="Sector plan · Haridwar–Rishikesh"
+            side="left"
+            overlayOpen={panelDropdownOpen}
+            forceCollapsed={expandedDockedPanel === 'stats'}
+            onExpand={() => {
+              if (isPhoneViewport()) setExpandedDockedPanel('search')
+            }}
+            onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'search' ? null : cur))}
+          >
+            <div className="flex flex-col gap-4">
+              {/* Unified search -- merges the old SECTOR box, CLASS box (with its
               subclass tree), and the "More layers" POI/road disclosure into
               one searchable, grouped, multi-select combobox. Pinned above the
               base layer switches so it's the first thing reachable when the
               panel opens. */}
-            <div ref={searchDropdownRef} className="relative">
-              {selectedSector !== 'all' && (
-                <div
-                  style={{
-                    backgroundColor: 'var(--map-accent-bg)',
-                    borderColor: 'var(--map-accent-bg-hover)',
-                    color: 'var(--map-accent-fg)',
-                  }}
-                  className="mb-1.5 flex items-center gap-2 rounded-[10px] border px-2.5 py-1.5 text-[12.5px] font-medium"
-                >
-                  <MapPinIcon className="h-3.5 w-3.5 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate">
-                    You&apos;re in{' '}
-                    <b className="font-bold">
-                      {(() => {
-                        const s = sectors.find((x) => x.sector_no === selectedSector)
-                        return s ? formatSectorLabel(s) : `Sector ${selectedSector}`
-                      })()}
-                    </b>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedSector('all')}
-                    className="shrink-0 cursor-pointer rounded-md px-1.5 py-0.5 text-[11px] font-semibold opacity-85 hover:bg-white/10 hover:opacity-100"
+              <div ref={searchDropdownRef} className="relative">
+                {selectedSector !== 'all' && (
+                  <div
+                    style={{
+                      backgroundColor: 'var(--map-accent-bg)',
+                      borderColor: 'var(--map-accent-bg-hover)',
+                      color: 'var(--map-accent-fg)',
+                    }}
+                    className="mb-1.5 flex items-center gap-2 rounded-[10px] border px-2.5 py-1.5 text-[12.5px] font-medium"
                   >
-                    Clear
-                  </button>
-                </div>
-              )}
-              {(classFilter.length > 0 ||
-                Object.values(subclassFilter).some((subs) => subs.length > 0) ||
-                ROAD_TYPE_DEFS.some((d) => visibility[d.key]) ||
-                POI_LAYER_DEFS.some((d) => visibility[d.key])) && (
-                <div className="mb-1.5 flex flex-col gap-1">
-                  {/* Clear all lives outside the scrollable chip list below (not
+                    <MapPinIcon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">
+                      You&apos;re in{' '}
+                      <b className="font-bold">
+                        {(() => {
+                          const s = sectors.find((x) => x.sector_no === selectedSector)
+                          return s ? formatSectorLabel(s) : `Sector ${selectedSector}`
+                        })()}
+                      </b>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSector('all')}
+                      className="shrink-0 cursor-pointer rounded-md px-1.5 py-0.5 text-[11px] font-semibold opacity-85 hover:bg-white/10 hover:opacity-100"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+                {(classFilter.length > 0 ||
+                  Object.values(subclassFilter).some((subs) => subs.length > 0) ||
+                  ROAD_TYPE_DEFS.some((d) => visibility[d.key]) ||
+                  POI_LAYER_DEFS.some((d) => visibility[d.key])) && (
+                  <div className="mb-1.5 flex flex-col gap-1">
+                    {/* Clear all lives outside the scrollable chip list below (not
                     as its own last chip) so it stays reachable without
                     scrolling down through every active filter first --
                     "clear everything" should never require finding the thing
                     you're trying to get rid of. */}
-                  <button
-                    type="button"
-                    onClick={clearAllFilters}
-                    style={{ color: 'var(--map-fg-faint)' }}
-                    className="inline-flex w-fit cursor-pointer items-center gap-1 py-0.5 text-[11.5px] font-medium underline-offset-2 hover:underline"
-                  >
-                    Clear all
-                  </button>
-                  <div className="flex max-h-52 flex-wrap gap-1 overflow-y-auto kumbh-scroll">
-                    {classFilter.map((c) => (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() => toggleClassFilter(c)}
-                        title={
-                          (subclassFilter[c]?.length ?? 0) > 0
-                            ? `Clear ${c} (also clears ${subclassFilter[c].length} sub-class selection${subclassFilter[c].length === 1 ? '' : 's'})`
-                            : `Clear ${c}`
-                        }
-                        style={{
-                          backgroundColor: 'var(--map-accent-bg)',
-                          color: 'var(--map-accent-fg)',
-                        }}
-                        className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
-                      >
-                        <span
-                          className="h-2 w-2 shrink-0 rounded-full"
-                          style={{ backgroundColor: CLASS_GROUP_COLORS[c] }}
-                        />
-                        <span className="truncate max-w-[9rem]">{c}</span>
-                        <XIcon className="h-2.5 w-2.5 shrink-0" />
-                      </button>
-                    ))}
-                    {Object.entries(subclassFilter)
-                      .filter(([, subs]) => subs.length > 0)
-                      .map(([c, subs]) => {
-                        // Excludes null-subclass rows, matching what the
-                        // dropdown tree below actually offers -- counting them
-                        // made the denominator unreachable, so a class with a
-                        // null row read "(4/5)" even with everything checked.
-                        const total = subclassStats.filter(
-                          (r) => r.class_group === c && r.subclass !== null,
-                        ).length
-                        // Names the one sub-class when only one is picked, the
-                        // same convention the POI chips below already used --
-                        // the two halves of this row previously disagreed, with
-                        // classes always reading "(n/total)" even at n = 1,
-                        // which told the user a count when it could have told
-                        // them the actual thing they had selected.
-                        const label =
-                          subs.length === 1 ? `${c} · ${subs[0]}` : `${c} (${subs.length}/${total})`
-                        return (
-                          <button
-                            key={c}
-                            type="button"
-                            onClick={() =>
-                              setSubclassFilter((prev) => {
-                                const next = { ...prev }
-                                delete next[c]
-                                return next
-                              })
-                            }
-                            title={
-                              subs.length === 1
-                                ? `Clear ${c} · ${subs[0]}`
-                                : `Clear all ${subs.length} ${c} sub-classes (${subs.join(', ')})`
-                            }
-                            style={{
-                              backgroundColor: 'var(--map-accent-bg)',
-                              color: 'var(--map-accent-fg)',
-                            }}
-                            className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
-                          >
-                            <span
-                              className="h-2 w-2 shrink-0 rounded-full"
-                              style={{ backgroundColor: CLASS_GROUP_COLORS[c] }}
-                            />
-                            <span className="truncate max-w-[9rem]">{label}</span>
-                            <XIcon className="h-2.5 w-2.5 shrink-0" />
-                          </button>
-                        )
-                      })}
-                    {ROAD_TYPE_DEFS.filter((d) => visibility[d.key]).map((d) => (
-                      <button
-                        key={d.key}
-                        type="button"
-                        onClick={() => setVisibility((v) => ({ ...v, [d.key]: false }))}
-                        style={{
-                          backgroundColor: 'var(--map-accent-bg)',
-                          color: 'var(--map-accent-fg)',
-                        }}
-                        className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
-                      >
-                        <span
-                          className="h-0 w-2.5 shrink-0"
-                          style={{
-                            borderTopWidth: 2,
-                            borderTopColor: d.color,
-                            borderTopStyle: d.dash ? 'dashed' : 'solid',
-                          }}
-                        />
-                        <span className="truncate max-w-[9rem]">{d.label}</span>
-                        <XIcon className="h-2.5 w-2.5 shrink-0" />
-                      </button>
-                    ))}
-                    {POI_LAYER_DEFS.filter((d) => visibility[d.key]).map((d) => {
-                      // A layer narrowed to a subset of its sub-classes says so,
-                      // rather than reading as the whole layer: the one selected
-                      // sub-class by name, or "Layer (n/total)" past that -- same
-                      // convention as the partial-class chips above.
-                      const subs = poiSubclassFilter[d.key]
-                      const total = poiSubclassNames(d.key).length
-                      const label =
-                        !subs || subs.length === 0 || subs.length === total
-                          ? d.label
-                          : subs.length === 1
-                            ? `${d.label} · ${subs[0]}`
-                            : `${d.label} (${subs.length}/${total})`
-                      return (
+                    <button
+                      type="button"
+                      onClick={clearAllFilters}
+                      style={{ color: 'var(--map-fg-faint)' }}
+                      className="inline-flex w-fit cursor-pointer items-center gap-1 py-0.5 text-[11.5px] font-medium underline-offset-2 hover:underline"
+                    >
+                      Clear all
+                    </button>
+                    <div className="flex max-h-52 flex-wrap gap-1 overflow-y-auto kumbh-scroll">
+                      {classFilter.map((c) => (
                         <button
-                          key={d.key}
+                          key={c}
                           type="button"
-                          onClick={() => {
-                            setVisibility((v) => ({ ...v, [d.key]: false }))
-                            // Clearing the layer clears its sub-class narrowing too,
-                            // so re-enabling it later comes back fully on instead of
-                            // silently pinned to the subset last picked.
-                            setPoiSubclassFilter((prev) => {
-                              if (!(d.key in prev)) return prev
-                              const next = { ...prev }
-                              delete next[d.key]
-                              return next
-                            })
-                          }}
+                          onClick={() => toggleClassFilter(c)}
                           title={
-                            subs && subs.length > 0 && subs.length < total
-                              ? `Hide ${d.label} (clears ${subs.length} sub-class${subs.length === 1 ? '' : 'es'}: ${subs.join(', ')})`
-                              : `Hide ${d.label}`
+                            (subclassFilter[c]?.length ?? 0) > 0
+                              ? `Clear ${c} (also clears ${subclassFilter[c].length} sub-class selection${subclassFilter[c].length === 1 ? '' : 's'})`
+                              : `Clear ${c}`
                           }
                           style={{
                             backgroundColor: 'var(--map-accent-bg)',
@@ -6430,50 +6319,172 @@ export default function MapView({
                         >
                           <span
                             className="h-2 w-2 shrink-0 rounded-full"
-                            style={{ backgroundColor: d.color }}
+                            style={{ backgroundColor: CLASS_GROUP_COLORS[c] }}
                           />
-                          <span className="truncate max-w-[9rem]">{label}</span>
+                          <span className="truncate max-w-[9rem]">{c}</span>
                           <XIcon className="h-2.5 w-2.5 shrink-0" />
                         </button>
-                      )
-                    })}
+                      ))}
+                      {Object.entries(subclassFilter)
+                        .filter(([, subs]) => subs.length > 0)
+                        .map(([c, subs]) => {
+                          // Excludes null-subclass rows, matching what the
+                          // dropdown tree below actually offers -- counting them
+                          // made the denominator unreachable, so a class with a
+                          // null row read "(4/5)" even with everything checked.
+                          const total = subclassStats.filter(
+                            (r) => r.class_group === c && r.subclass !== null,
+                          ).length
+                          // Names the one sub-class when only one is picked, the
+                          // same convention the POI chips below already used --
+                          // the two halves of this row previously disagreed, with
+                          // classes always reading "(n/total)" even at n = 1,
+                          // which told the user a count when it could have told
+                          // them the actual thing they had selected.
+                          const label =
+                            subs.length === 1
+                              ? `${c} · ${subs[0]}`
+                              : `${c} (${subs.length}/${total})`
+                          return (
+                            <button
+                              key={c}
+                              type="button"
+                              onClick={() =>
+                                setSubclassFilter((prev) => {
+                                  const next = { ...prev }
+                                  delete next[c]
+                                  return next
+                                })
+                              }
+                              title={
+                                subs.length === 1
+                                  ? `Clear ${c} · ${subs[0]}`
+                                  : `Clear all ${subs.length} ${c} sub-classes (${subs.join(', ')})`
+                              }
+                              style={{
+                                backgroundColor: 'var(--map-accent-bg)',
+                                color: 'var(--map-accent-fg)',
+                              }}
+                              className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
+                            >
+                              <span
+                                className="h-2 w-2 shrink-0 rounded-full"
+                                style={{ backgroundColor: CLASS_GROUP_COLORS[c] }}
+                              />
+                              <span className="truncate max-w-[9rem]">{label}</span>
+                              <XIcon className="h-2.5 w-2.5 shrink-0" />
+                            </button>
+                          )
+                        })}
+                      {ROAD_TYPE_DEFS.filter((d) => visibility[d.key]).map((d) => (
+                        <button
+                          key={d.key}
+                          type="button"
+                          onClick={() => setVisibility((v) => ({ ...v, [d.key]: false }))}
+                          style={{
+                            backgroundColor: 'var(--map-accent-bg)',
+                            color: 'var(--map-accent-fg)',
+                          }}
+                          className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
+                        >
+                          <span
+                            className="h-0 w-2.5 shrink-0"
+                            style={{
+                              borderTopWidth: 2,
+                              borderTopColor: d.color,
+                              borderTopStyle: d.dash ? 'dashed' : 'solid',
+                            }}
+                          />
+                          <span className="truncate max-w-[9rem]">{d.label}</span>
+                          <XIcon className="h-2.5 w-2.5 shrink-0" />
+                        </button>
+                      ))}
+                      {POI_LAYER_DEFS.filter((d) => visibility[d.key]).map((d) => {
+                        // A layer narrowed to a subset of its sub-classes says so,
+                        // rather than reading as the whole layer: the one selected
+                        // sub-class by name, or "Layer (n/total)" past that -- same
+                        // convention as the partial-class chips above.
+                        const subs = poiSubclassFilter[d.key]
+                        const total = poiSubclassNames(d.key).length
+                        const label =
+                          !subs || subs.length === 0 || subs.length === total
+                            ? d.label
+                            : subs.length === 1
+                              ? `${d.label} · ${subs[0]}`
+                              : `${d.label} (${subs.length}/${total})`
+                        return (
+                          <button
+                            key={d.key}
+                            type="button"
+                            onClick={() => {
+                              setVisibility((v) => ({ ...v, [d.key]: false }))
+                              // Clearing the layer clears its sub-class narrowing too,
+                              // so re-enabling it later comes back fully on instead of
+                              // silently pinned to the subset last picked.
+                              setPoiSubclassFilter((prev) => {
+                                if (!(d.key in prev)) return prev
+                                const next = { ...prev }
+                                delete next[d.key]
+                                return next
+                              })
+                            }}
+                            title={
+                              subs && subs.length > 0 && subs.length < total
+                                ? `Hide ${d.label} (clears ${subs.length} sub-class${subs.length === 1 ? '' : 'es'}: ${subs.join(', ')})`
+                                : `Hide ${d.label}`
+                            }
+                            style={{
+                              backgroundColor: 'var(--map-accent-bg)',
+                              color: 'var(--map-accent-fg)',
+                            }}
+                            className="inline-flex cursor-pointer items-center gap-1 rounded-full py-0.5 pl-2 pr-1.5 text-[11.5px] font-medium transition-colors hover:brightness-95"
+                          >
+                            <span
+                              className="h-2 w-2 shrink-0 rounded-full"
+                              style={{ backgroundColor: d.color }}
+                            />
+                            <span className="truncate max-w-[9rem]">{label}</span>
+                            <XIcon className="h-2.5 w-2.5 shrink-0" />
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
-              )}
-              <div className="relative">
-                {/* No `combobox` prop here: this is a plain textbox filtering a group below it,
+                )}
+                <div className="relative">
+                  {/* No `combobox` prop here: this is a plain textbox filtering a group below it,
                     not a combobox owning a listbox (see the dropdown's own comment) -- claiming
                     role="combobox" without implementing its roving-focus contract would be a
                     false promise a screen reader takes at face value. */}
-                <SearchInput
-                  value={query}
-                  onChange={(value) => {
-                    setQuery(value)
-                    setPanelDropdownOpen(true)
-                  }}
-                  onFocus={() => setPanelDropdownOpen(true)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') setPanelDropdownOpen(false)
-                  }}
-                  placeholder="What do you want to see?"
-                  ariaLabel="Search sectors, classes, POI layers and roads"
-                />
-              </div>
-              {/* Collapsed, this panel is just a placeholder and two toggles, which
+                  <SearchInput
+                    value={query}
+                    onChange={(value) => {
+                      setQuery(value)
+                      setPanelDropdownOpen(true)
+                    }}
+                    onFocus={() => setPanelDropdownOpen(true)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') setPanelDropdownOpen(false)
+                    }}
+                    placeholder="What do you want to see?"
+                    ariaLabel="Search sectors, classes, POI layers and roads"
+                  />
+                </div>
+                {/* Collapsed, this panel is just a placeholder and two toggles, which
                 advertises none of what's actually searchable. This line names the
                 scope so a first-time user knows there's a catalogue behind it. */}
-              {!panelDropdownOpen && !query && (
-                <button
-                  type="button"
-                  onClick={() => setPanelDropdownOpen(true)}
-                  style={{ color: 'var(--map-fg-faint)' }}
-                  className="mt-1.5 w-full cursor-pointer px-1 text-left text-[11px] hover:text-[var(--map-fg-muted)]"
-                >
-                  {sectors.length} sectors · {classGroups.length} classes · {POI_LAYER_DEFS.length}{' '}
-                  POI layers
-                </button>
-              )}
-              {/* The dropdown is deliberately NOT role="listbox". A listbox
+                {!panelDropdownOpen && !query && (
+                  <button
+                    type="button"
+                    onClick={() => setPanelDropdownOpen(true)}
+                    style={{ color: 'var(--map-fg-faint)' }}
+                    className="mt-1.5 w-full cursor-pointer px-1 text-left text-[11px] hover:text-[var(--map-fg-muted)]"
+                  >
+                    {sectors.length} sectors · {classGroups.length} classes ·{' '}
+                    {POI_LAYER_DEFS.length} POI layers
+                  </button>
+                )}
+                {/* The dropdown is deliberately NOT role="listbox". A listbox
                 promises a screen reader single-focus roving navigation driven
                 by aria-activedescendant, which this tree does not implement --
                 it is a grouped set of independently focusable checkboxes and
@@ -6482,356 +6493,116 @@ export default function MapView({
                 tech than describing what this actually is: the reader
                 announced "list box, N options" and then Down-arrow did
                 nothing. Rows below are checkboxes, not options. */}
-              {panelDropdownOpen && (
-                <ul
-                  role="group"
-                  aria-label="Searchable map layers"
-                  style={{
-                    borderColor: 'var(--map-border)',
-                    backgroundColor: 'var(--map-surface)',
-                  }}
-                  className="kumbh-scroll absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border py-1 shadow-lg"
-                >
-                  {searchGroups.length === 0 && (
-                    <li
-                      className="px-2.5 py-1.5 text-[12.5px]"
-                      style={{ color: 'var(--map-fg-faint)' }}
-                    >
-                      No matches for &ldquo;{query}&rdquo;
-                    </li>
-                  )}
-                  {searchGroups.map(({ group, rows }) => {
-                    const GroupIcon = groupIcon[group]
-                    const theme = groupTheme[group]
-                    const collapsed = isGroupCollapsed(group)
-                    return (
-                      <li key={group} role="presentation">
-                        <SearchGroupHeader
-                          label={group}
-                          icon={GroupIcon}
-                          theme={theme}
-                          count={rows}
-                          collapsed={collapsed}
-                          onToggleCollapsed={() => toggleCollapsedGroup(group)}
-                          onSelectAll={
-                            group === 'Sector classes'
-                              ? selectAllClasses
-                              : group === 'Roads'
-                                ? selectAllRoads
-                                : group === 'POI layers'
-                                  ? selectAllPois
-                                  : undefined
-                          }
-                        />
-                        {!collapsed && group === 'Jump to sector' && (
-                          <ul>
-                            {matchedSectors.map((s) => (
-                              <li key={s.sector_no}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedSector(s.sector_no)
-                                    setQuery('')
-                                    setPanelDropdownOpen(false)
-                                  }}
-                                  style={{
-                                    color: 'var(--map-fg)',
-                                    backgroundColor:
-                                      selectedSector === s.sector_no
-                                        ? 'var(--map-surface-active)'
-                                        : undefined,
-                                  }}
-                                  className="w-full cursor-pointer py-1.5 pl-9 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
-                                >
-                                  {formatSectorLabel(s)}
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                        {!collapsed && group === 'Sector classes' && (
-                          <ul>
-                            {matchedClasses.map((c) => {
-                              const isFullySelected = classFilter.includes(c)
-                              // Null-subclass rows (see subclassStats' own comment) aren't a real
-                              // selectable sub-class -- their features are still counted in the
-                              // class's own total via byClass, just not offered as a checkbox here.
-                              const subclasses = subclassStats
-                                .filter(
-                                  (r): r is typeof r & { subclass: string } =>
-                                    r.class_group === c && r.subclass !== null,
-                                )
-                                .sort((a, b) => b.features - a.features)
-                              const partialSubs = subclassFilter[c]
-                              const isIndeterminate =
-                                !isFullySelected &&
-                                !!partialSubs &&
-                                partialSubs.length > 0 &&
-                                partialSubs.length < subclasses.length
-                              const isChecked =
-                                isFullySelected || (!!partialSubs && partialSubs.length > 0)
-                              const hasChildren = subclasses.length > 1
-                              // subclass can be null -- sector_plan rows with no subclass value
-                              // still come back as one (class_group, null) row from /api/stats
-                              // (unlike the POI subclass query, this one has no "IS NOT NULL"
-                              // filter), so every .toLowerCase() below has to tolerate that.
-                              const subclassNameMatches =
-                                q !== '' &&
-                                subclasses.some((s) => s.subclass?.toLowerCase().includes(q))
-                              const isExpanded = expandedFilterClasses.has(c) || subclassNameMatches
-                              // While actively searching, only show the subclasses that
-                              // themselves match the query -- a class can match via one
-                              // subclass (e.g. "hospital" -> Health Camping, because "4
-                              // Bedded Hospital" matches) without dumping its whole
-                              // unrelated subclass list ("Firstaid Center", etc.) into
-                              // view. Once the query is cleared/manually expanded, the
-                              // full list comes back.
-                              const visibleSubclasses = subclassNameMatches
-                                ? subclasses.filter((s) => s.subclass?.toLowerCase().includes(q))
-                                : subclasses
-                              return (
-                                <li key={c}>
-                                  <div
+                {panelDropdownOpen && (
+                  <ul
+                    role="group"
+                    aria-label="Searchable map layers"
+                    style={{
+                      borderColor: 'var(--map-border)',
+                      backgroundColor: 'var(--map-surface)',
+                    }}
+                    className="kumbh-scroll absolute z-10 mt-1 max-h-96 w-full overflow-y-auto rounded-lg border py-1 shadow-lg"
+                  >
+                    {searchGroups.length === 0 && (
+                      <li
+                        className="px-2.5 py-1.5 text-[12.5px]"
+                        style={{ color: 'var(--map-fg-faint)' }}
+                      >
+                        No matches for &ldquo;{query}&rdquo;
+                      </li>
+                    )}
+                    {searchGroups.map(({ group, rows }) => {
+                      const GroupIcon = groupIcon[group]
+                      const theme = groupTheme[group]
+                      const collapsed = isGroupCollapsed(group)
+                      return (
+                        <li key={group} role="presentation">
+                          <SearchGroupHeader
+                            label={group}
+                            icon={GroupIcon}
+                            theme={theme}
+                            count={rows}
+                            collapsed={collapsed}
+                            onToggleCollapsed={() => toggleCollapsedGroup(group)}
+                            onSelectAll={
+                              group === 'Sector classes'
+                                ? selectAllClasses
+                                : group === 'Roads'
+                                  ? selectAllRoads
+                                  : group === 'POI layers'
+                                    ? selectAllPois
+                                    : undefined
+                            }
+                          />
+                          {!collapsed && group === 'Jump to sector' && (
+                            <ul>
+                              {matchedSectors.map((s) => (
+                                <li key={s.sector_no}>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedSector(s.sector_no)
+                                      setQuery('')
+                                      setPanelDropdownOpen(false)
+                                    }}
                                     style={{
                                       color: 'var(--map-fg)',
-                                      backgroundColor: isChecked
-                                        ? 'var(--map-surface-active)'
-                                        : undefined,
+                                      backgroundColor:
+                                        selectedSector === s.sector_no
+                                          ? 'var(--map-surface-active)'
+                                          : undefined,
                                     }}
-                                    className="flex w-full items-center gap-1 py-1.5 pl-6 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
+                                    className="w-full cursor-pointer py-1.5 pl-9 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
                                   >
-                                    {hasChildren ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => toggleExpandedFilterClass(c)}
-                                        aria-expanded={isExpanded}
-                                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${c} sub-classes`}
-                                        style={{ color: 'var(--map-fg-faint)' }}
-                                        className="flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center"
-                                      >
-                                        <ChevronDownIcon
-                                          className={`h-3 w-3 transition-transform ${isExpanded ? '' : '-rotate-90'}`}
-                                        />
-                                      </button>
-                                    ) : (
-                                      <span className="h-3.5 w-3.5 shrink-0" />
-                                    )}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        toggleClassFilter(c)
-                                        setQuery('')
-                                      }}
-                                      className="flex flex-1 cursor-pointer items-center gap-2 overflow-hidden"
-                                    >
-                                      <span
-                                        className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
-                                        style={{
-                                          borderColor: isChecked
-                                            ? CLASS_GROUP_COLORS[c]
-                                            : 'var(--map-border)',
-                                          backgroundColor: isChecked
-                                            ? CLASS_GROUP_COLORS[c]
-                                            : 'transparent',
-                                        }}
-                                      >
-                                        {isIndeterminate ? (
-                                          <span className="h-[2px] w-2 rounded-full bg-white" />
-                                        ) : (
-                                          isChecked && (
-                                            <svg
-                                              viewBox="0 0 24 24"
-                                              fill="none"
-                                              className="h-2.5 w-2.5"
-                                              aria-hidden="true"
-                                            >
-                                              <path
-                                                d="M5 13l4 4L19 7"
-                                                stroke="white"
-                                                strokeWidth={3}
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                              />
-                                            </svg>
-                                          )
-                                        )}
-                                      </span>
-                                      <span
-                                        className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                        style={{ backgroundColor: CLASS_GROUP_COLORS[c] }}
-                                      />
-                                      <span className="truncate">{c}</span>
-                                    </button>
-                                  </div>
-                                  {hasChildren && isExpanded && (
-                                    <ul>
-                                      {visibleSubclasses.map((row) => {
-                                        const subChecked = isFullySelected
-                                          ? true
-                                          : (partialSubs?.includes(row.subclass) ?? false)
-                                        return (
-                                          <li key={row.subclass}>
-                                            <button
-                                              type="button"
-                                              onClick={() => toggleSubclassFilter(c, row.subclass)}
-                                              style={{ color: 'var(--map-fg-muted)' }}
-                                              className="flex w-full cursor-pointer items-center gap-2 py-1 pl-14 pr-2.5 text-left text-[12px] hover:bg-[var(--map-surface-hover)]"
-                                            >
-                                              <span
-                                                className="flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border"
-                                                style={{
-                                                  borderColor: subChecked
-                                                    ? CLASS_GROUP_COLORS[c]
-                                                    : 'var(--map-border)',
-                                                  backgroundColor: subChecked
-                                                    ? CLASS_GROUP_COLORS[c]
-                                                    : 'transparent',
-                                                }}
-                                              >
-                                                {subChecked && (
-                                                  <svg
-                                                    viewBox="0 0 24 24"
-                                                    fill="none"
-                                                    className="h-2 w-2"
-                                                    aria-hidden="true"
-                                                  >
-                                                    <path
-                                                      d="M5 13l4 4L19 7"
-                                                      stroke="white"
-                                                      strokeWidth={4}
-                                                      strokeLinecap="round"
-                                                      strokeLinejoin="round"
-                                                    />
-                                                  </svg>
-                                                )}
-                                              </span>
-                                              <span className="truncate">{row.subclass}</span>
-                                              <span
-                                                className="ml-auto shrink-0 tabular-nums"
-                                                style={{ color: 'var(--map-fg-faint)' }}
-                                              >
-                                                {row.features}
-                                              </span>
-                                            </button>
-                                          </li>
-                                        )
-                                      })}
-                                    </ul>
-                                  )}
+                                    {formatSectorLabel(s)}
+                                  </button>
                                 </li>
-                              )
-                            })}
-                          </ul>
-                        )}
-                        {!collapsed && group === 'Roads' && (
-                          <ul>
-                            {matchedRoads.map((d) => (
-                              <li key={d.key}>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setVisibility((v) => ({ ...v, [d.key]: !v[d.key] }))
-                                  }
-                                  style={{
-                                    color: 'var(--map-fg)',
-                                    backgroundColor: visibility[d.key]
-                                      ? 'var(--map-surface-active)'
-                                      : undefined,
-                                  }}
-                                  className="flex w-full cursor-pointer items-center gap-2 py-1.5 pl-9 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
-                                >
-                                  <span
-                                    className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
-                                    style={{
-                                      borderColor: visibility[d.key]
-                                        ? d.color
-                                        : 'var(--map-border)',
-                                      backgroundColor: visibility[d.key] ? d.color : 'transparent',
-                                    }}
-                                  >
-                                    {visibility[d.key] && (
-                                      <svg
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        className="h-2.5 w-2.5"
-                                        aria-hidden="true"
-                                      >
-                                        <path
-                                          d="M5 13l4 4L19 7"
-                                          stroke="white"
-                                          strokeWidth={3}
-                                          strokeLinecap="round"
-                                          strokeLinejoin="round"
-                                        />
-                                      </svg>
-                                    )}
-                                  </span>
-                                  <span
-                                    className="h-0 w-3 shrink-0"
-                                    style={{
-                                      borderTopWidth: 2,
-                                      borderTopColor: d.color,
-                                      borderTopStyle: d.dash ? 'dashed' : 'solid',
-                                    }}
-                                  />
-                                  <span className="truncate">{d.label}</span>
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                        {!collapsed && group === 'POI layers' && (
-                          <ul>
-                            {matchedPois.map((d, i) => {
-                              // Small sub-header before the first raw-OSM layer in the
-                              // list (currently just tertiary_road) -- flags it as
-                              // third-party reference data distinct from the curated
-                              // gdb layers around it, without pulling it into its own
-                              // top-level group (see the "should this be under Roads"
-                              // conversation this came out of -- it stays under POI
-                              // layers, just visually separated within that list).
-                              const isFirstOsm =
-                                d.isThirdPartyOsm && !matchedPois[i - 1]?.isThirdPartyOsm
-                              const signageCode = POI_SIGNAGE_CODES[d.key]
-                              const subclasses = poiSubclassStats
-                                .filter((r) => r.layer === d.key)
-                                .sort((a, b) => b.features - a.features)
-                              const partialSubs = poiSubclassFilter[d.key]
-                              const isFullyOn = visibility[d.key] && !partialSubs
-                              const isChecked =
-                                isFullyOn || (!!partialSubs && partialSubs.length > 0)
-                              const isIndeterminate =
-                                !isFullyOn &&
-                                !!partialSubs &&
-                                partialSubs.length > 0 &&
-                                partialSubs.length < subclasses.length
-                              // tertiary_road has no subclass column (it's not in
-                              // POI_SUBCLASS_COLUMNS), but reuses this same
-                              // chevron+nested-row treatment for its one "Only
-                              // inside sector area" toggle instead of a subclass list.
-                              const isTertiaryRoad = d.key === 'tertiary_road'
-                              const hasChildren = subclasses.length > 1 || isTertiaryRoad
-                              const subclassNameMatches =
-                                q !== '' &&
-                                subclasses.some((s) => s.subclass.toLowerCase().includes(q))
-                              const isExpanded =
-                                expandedFilterPois.has(d.key) || subclassNameMatches
-                              const visibleSubclasses = subclassNameMatches
-                                ? subclasses.filter((s) => s.subclass.toLowerCase().includes(q))
-                                : subclasses
-                              return (
-                                <Fragment key={d.key}>
-                                  {isFirstOsm && (
-                                    <li
-                                      role="presentation"
-                                      aria-hidden="true"
-                                      className="select-none pb-0.5 pl-6 pr-2.5 pt-2.5 text-[10.5px] font-semibold uppercase tracking-wide"
-                                      style={{ color: 'var(--map-fg-faint)' }}
-                                    >
-                                      OSM
-                                    </li>
-                                  )}
-                                  <li>
+                              ))}
+                            </ul>
+                          )}
+                          {!collapsed && group === 'Sector classes' && (
+                            <ul>
+                              {matchedClasses.map((c) => {
+                                const isFullySelected = classFilter.includes(c)
+                                // Null-subclass rows (see subclassStats' own comment) aren't a real
+                                // selectable sub-class -- their features are still counted in the
+                                // class's own total via byClass, just not offered as a checkbox here.
+                                const subclasses = subclassStats
+                                  .filter(
+                                    (r): r is typeof r & { subclass: string } =>
+                                      r.class_group === c && r.subclass !== null,
+                                  )
+                                  .sort((a, b) => b.features - a.features)
+                                const partialSubs = subclassFilter[c]
+                                const isIndeterminate =
+                                  !isFullySelected &&
+                                  !!partialSubs &&
+                                  partialSubs.length > 0 &&
+                                  partialSubs.length < subclasses.length
+                                const isChecked =
+                                  isFullySelected || (!!partialSubs && partialSubs.length > 0)
+                                const hasChildren = subclasses.length > 1
+                                // subclass can be null -- sector_plan rows with no subclass value
+                                // still come back as one (class_group, null) row from /api/stats
+                                // (unlike the POI subclass query, this one has no "IS NOT NULL"
+                                // filter), so every .toLowerCase() below has to tolerate that.
+                                const subclassNameMatches =
+                                  q !== '' &&
+                                  subclasses.some((s) => s.subclass?.toLowerCase().includes(q))
+                                const isExpanded =
+                                  expandedFilterClasses.has(c) || subclassNameMatches
+                                // While actively searching, only show the subclasses that
+                                // themselves match the query -- a class can match via one
+                                // subclass (e.g. "hospital" -> Health Camping, because "4
+                                // Bedded Hospital" matches) without dumping its whole
+                                // unrelated subclass list ("Firstaid Center", etc.) into
+                                // view. Once the query is cleared/manually expanded, the
+                                // full list comes back.
+                                const visibleSubclasses = subclassNameMatches
+                                  ? subclasses.filter((s) => s.subclass?.toLowerCase().includes(q))
+                                  : subclasses
+                                return (
+                                  <li key={c}>
                                     <div
                                       style={{
                                         color: 'var(--map-fg)',
@@ -6844,9 +6615,9 @@ export default function MapView({
                                       {hasChildren ? (
                                         <button
                                           type="button"
-                                          onClick={() => toggleExpandedFilterPoi(d.key)}
+                                          onClick={() => toggleExpandedFilterClass(c)}
                                           aria-expanded={isExpanded}
-                                          aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${d.label} sub-classes`}
+                                          aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${c} sub-classes`}
                                           style={{ color: 'var(--map-fg-faint)' }}
                                           className="flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center"
                                         >
@@ -6859,14 +6630,21 @@ export default function MapView({
                                       )}
                                       <button
                                         type="button"
-                                        onClick={() => togglePoiLayerFilter(d.key)}
+                                        onClick={() => {
+                                          toggleClassFilter(c)
+                                          setQuery('')
+                                        }}
                                         className="flex flex-1 cursor-pointer items-center gap-2 overflow-hidden"
                                       >
                                         <span
                                           className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
                                           style={{
-                                            borderColor: isChecked ? d.color : 'var(--map-border)',
-                                            backgroundColor: isChecked ? d.color : 'transparent',
+                                            borderColor: isChecked
+                                              ? CLASS_GROUP_COLORS[c]
+                                              : 'var(--map-border)',
+                                            backgroundColor: isChecked
+                                              ? CLASS_GROUP_COLORS[c]
+                                              : 'transparent',
                                           }}
                                         >
                                           {isIndeterminate ? (
@@ -6890,70 +6668,17 @@ export default function MapView({
                                             )
                                           )}
                                         </span>
-                                        {signageCode ? (
-                                          <span
-                                            className="flex h-3.5 shrink-0 items-center justify-center rounded-[3px] px-1 text-[8.5px] font-bold leading-none text-white"
-                                            style={{ backgroundColor: d.color }}
-                                          >
-                                            {signageCode}
-                                          </span>
-                                        ) : (
-                                          <span
-                                            className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                            style={{ backgroundColor: d.color }}
-                                          />
-                                        )}
-                                        <span className="truncate">{d.label}</span>
+                                        <span
+                                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                          style={{ backgroundColor: CLASS_GROUP_COLORS[c] }}
+                                        />
+                                        <span className="truncate">{c}</span>
                                       </button>
                                     </div>
-                                    {isTertiaryRoad && isExpanded && (
-                                      <ul>
-                                        <li>
-                                          <button
-                                            type="button"
-                                            onClick={() => setTertiaryRoadSectorOnly((v) => !v)}
-                                            style={{ color: 'var(--map-fg-muted)' }}
-                                            className="flex w-full cursor-pointer items-center gap-2 py-1 pl-14 pr-2.5 text-left text-[12px] hover:bg-[var(--map-surface-hover)]"
-                                          >
-                                            <span
-                                              className="flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border"
-                                              style={{
-                                                borderColor: tertiaryRoadSectorOnly
-                                                  ? d.color
-                                                  : 'var(--map-border)',
-                                                backgroundColor: tertiaryRoadSectorOnly
-                                                  ? d.color
-                                                  : 'transparent',
-                                              }}
-                                            >
-                                              {tertiaryRoadSectorOnly && (
-                                                <svg
-                                                  viewBox="0 0 24 24"
-                                                  fill="none"
-                                                  className="h-2 w-2"
-                                                  aria-hidden="true"
-                                                >
-                                                  <path
-                                                    d="M5 13l4 4L19 7"
-                                                    stroke="white"
-                                                    strokeWidth={4}
-                                                    strokeLinecap="round"
-                                                    strokeLinejoin="round"
-                                                  />
-                                                </svg>
-                                              )}
-                                            </span>
-                                            <span className="truncate">
-                                              Only inside sector area
-                                            </span>
-                                          </button>
-                                        </li>
-                                      </ul>
-                                    )}
-                                    {!isTertiaryRoad && hasChildren && isExpanded && (
+                                    {hasChildren && isExpanded && (
                                       <ul>
                                         {visibleSubclasses.map((row) => {
-                                          const subChecked = isFullyOn
+                                          const subChecked = isFullySelected
                                             ? true
                                             : (partialSubs?.includes(row.subclass) ?? false)
                                           return (
@@ -6961,26 +6686,19 @@ export default function MapView({
                                               <button
                                                 type="button"
                                                 onClick={() =>
-                                                  togglePoiSubclassFilter(d.key, row.subclass)
+                                                  toggleSubclassFilter(c, row.subclass)
                                                 }
-                                                style={{
-                                                  color: subChecked
-                                                    ? 'var(--map-fg)'
-                                                    : 'var(--map-fg-muted)',
-                                                  backgroundColor: subChecked
-                                                    ? 'var(--map-surface-active)'
-                                                    : undefined,
-                                                }}
-                                                className={`flex w-full cursor-pointer items-center gap-2 py-1 pl-14 pr-2.5 text-left text-[12px] hover:bg-[var(--map-surface-hover)] ${subChecked ? 'font-medium' : ''}`}
+                                                style={{ color: 'var(--map-fg-muted)' }}
+                                                className="flex w-full cursor-pointer items-center gap-2 py-1 pl-14 pr-2.5 text-left text-[12px] hover:bg-[var(--map-surface-hover)]"
                                               >
                                                 <span
                                                   className="flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border"
                                                   style={{
                                                     borderColor: subChecked
-                                                      ? d.color
+                                                      ? CLASS_GROUP_COLORS[c]
                                                       : 'var(--map-border)',
                                                     backgroundColor: subChecked
-                                                      ? d.color
+                                                      ? CLASS_GROUP_COLORS[c]
                                                       : 'transparent',
                                                   }}
                                                 >
@@ -7015,322 +6733,625 @@ export default function MapView({
                                       </ul>
                                     )}
                                   </li>
-                                </Fragment>
-                              )
-                            })}
-                          </ul>
-                        )}
-                        {!collapsed && group === 'Base layers' && (
-                          <ul>
-                            {matchedBaseLayers.map(({ key, label, icon: Icon }) => (
-                              <li key={key}>
-                                <button
-                                  type="button"
-                                  onClick={() => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
-                                  style={{
-                                    color: 'var(--map-fg)',
-                                    backgroundColor: visibility[key]
-                                      ? 'var(--map-surface-active)'
-                                      : undefined,
-                                  }}
-                                  className="flex w-full cursor-pointer items-center gap-2 py-1.5 pl-9 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
-                                >
-                                  <span
-                                    className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                                )
+                              })}
+                            </ul>
+                          )}
+                          {!collapsed && group === 'Roads' && (
+                            <ul>
+                              {matchedRoads.map((d) => (
+                                <li key={d.key}>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setVisibility((v) => ({ ...v, [d.key]: !v[d.key] }))
+                                    }
                                     style={{
-                                      borderColor: visibility[key]
-                                        ? 'var(--map-accent)'
-                                        : 'var(--map-border)',
-                                      backgroundColor: visibility[key]
-                                        ? 'var(--map-accent)'
-                                        : 'transparent',
+                                      color: 'var(--map-fg)',
+                                      backgroundColor: visibility[d.key]
+                                        ? 'var(--map-surface-active)'
+                                        : undefined,
                                     }}
+                                    className="flex w-full cursor-pointer items-center gap-2 py-1.5 pl-9 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
                                   >
-                                    {visibility[key] && (
-                                      <svg
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        className="h-2.5 w-2.5"
+                                    <span
+                                      className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                                      style={{
+                                        borderColor: visibility[d.key]
+                                          ? d.color
+                                          : 'var(--map-border)',
+                                        backgroundColor: visibility[d.key]
+                                          ? d.color
+                                          : 'transparent',
+                                      }}
+                                    >
+                                      {visibility[d.key] && (
+                                        <svg
+                                          viewBox="0 0 24 24"
+                                          fill="none"
+                                          className="h-2.5 w-2.5"
+                                          aria-hidden="true"
+                                        >
+                                          <path
+                                            d="M5 13l4 4L19 7"
+                                            stroke="white"
+                                            strokeWidth={3}
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                          />
+                                        </svg>
+                                      )}
+                                    </span>
+                                    <span
+                                      className="h-0 w-3 shrink-0"
+                                      style={{
+                                        borderTopWidth: 2,
+                                        borderTopColor: d.color,
+                                        borderTopStyle: d.dash ? 'dashed' : 'solid',
+                                      }}
+                                    />
+                                    <span className="truncate">{d.label}</span>
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          {!collapsed && group === 'POI layers' && (
+                            <ul>
+                              {matchedPois.map((d, i) => {
+                                // Small sub-header before the first raw-OSM layer in the
+                                // list (currently just tertiary_road) -- flags it as
+                                // third-party reference data distinct from the curated
+                                // gdb layers around it, without pulling it into its own
+                                // top-level group (see the "should this be under Roads"
+                                // conversation this came out of -- it stays under POI
+                                // layers, just visually separated within that list).
+                                const isFirstOsm =
+                                  d.isThirdPartyOsm && !matchedPois[i - 1]?.isThirdPartyOsm
+                                const signageCode = POI_SIGNAGE_CODES[d.key]
+                                const subclasses = poiSubclassStats
+                                  .filter((r) => r.layer === d.key)
+                                  .sort((a, b) => b.features - a.features)
+                                const partialSubs = poiSubclassFilter[d.key]
+                                const isFullyOn = visibility[d.key] && !partialSubs
+                                const isChecked =
+                                  isFullyOn || (!!partialSubs && partialSubs.length > 0)
+                                const isIndeterminate =
+                                  !isFullyOn &&
+                                  !!partialSubs &&
+                                  partialSubs.length > 0 &&
+                                  partialSubs.length < subclasses.length
+                                // tertiary_road has no subclass column (it's not in
+                                // POI_SUBCLASS_COLUMNS), but reuses this same
+                                // chevron+nested-row treatment for its one "Only
+                                // inside sector area" toggle instead of a subclass list.
+                                const isTertiaryRoad = d.key === 'tertiary_road'
+                                const hasChildren = subclasses.length > 1 || isTertiaryRoad
+                                const subclassNameMatches =
+                                  q !== '' &&
+                                  subclasses.some((s) => s.subclass.toLowerCase().includes(q))
+                                const isExpanded =
+                                  expandedFilterPois.has(d.key) || subclassNameMatches
+                                const visibleSubclasses = subclassNameMatches
+                                  ? subclasses.filter((s) => s.subclass.toLowerCase().includes(q))
+                                  : subclasses
+                                return (
+                                  <Fragment key={d.key}>
+                                    {isFirstOsm && (
+                                      <li
+                                        role="presentation"
                                         aria-hidden="true"
+                                        className="select-none pb-0.5 pl-6 pr-2.5 pt-2.5 text-[10.5px] font-semibold uppercase tracking-wide"
+                                        style={{ color: 'var(--map-fg-faint)' }}
                                       >
-                                        <path
-                                          d="M5 13l4 4L19 7"
-                                          stroke="white"
-                                          strokeWidth={3}
-                                          strokeLinecap="round"
-                                          strokeLinejoin="round"
-                                        />
-                                      </svg>
+                                        OSM
+                                      </li>
                                     )}
-                                  </span>
-                                  <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--map-fg-faint)]" />
-                                  <span className="truncate">{label}</span>
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </div>
+                                    <li>
+                                      <div
+                                        style={{
+                                          color: 'var(--map-fg)',
+                                          backgroundColor: isChecked
+                                            ? 'var(--map-surface-active)'
+                                            : undefined,
+                                        }}
+                                        className="flex w-full items-center gap-1 py-1.5 pl-6 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
+                                      >
+                                        {hasChildren ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => toggleExpandedFilterPoi(d.key)}
+                                            aria-expanded={isExpanded}
+                                            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${d.label} sub-classes`}
+                                            style={{ color: 'var(--map-fg-faint)' }}
+                                            className="flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center"
+                                          >
+                                            <ChevronDownIcon
+                                              className={`h-3 w-3 transition-transform ${isExpanded ? '' : '-rotate-90'}`}
+                                            />
+                                          </button>
+                                        ) : (
+                                          <span className="h-3.5 w-3.5 shrink-0" />
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => togglePoiLayerFilter(d.key)}
+                                          className="flex flex-1 cursor-pointer items-center gap-2 overflow-hidden"
+                                        >
+                                          <span
+                                            className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                                            style={{
+                                              borderColor: isChecked
+                                                ? d.color
+                                                : 'var(--map-border)',
+                                              backgroundColor: isChecked ? d.color : 'transparent',
+                                            }}
+                                          >
+                                            {isIndeterminate ? (
+                                              <span className="h-[2px] w-2 rounded-full bg-white" />
+                                            ) : (
+                                              isChecked && (
+                                                <svg
+                                                  viewBox="0 0 24 24"
+                                                  fill="none"
+                                                  className="h-2.5 w-2.5"
+                                                  aria-hidden="true"
+                                                >
+                                                  <path
+                                                    d="M5 13l4 4L19 7"
+                                                    stroke="white"
+                                                    strokeWidth={3}
+                                                    strokeLinecap="round"
+                                                    strokeLinejoin="round"
+                                                  />
+                                                </svg>
+                                              )
+                                            )}
+                                          </span>
+                                          {signageCode ? (
+                                            <span
+                                              className="flex h-3.5 shrink-0 items-center justify-center rounded-[3px] px-1 text-[8.5px] font-bold leading-none text-white"
+                                              style={{ backgroundColor: d.color }}
+                                            >
+                                              {signageCode}
+                                            </span>
+                                          ) : (
+                                            <span
+                                              className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                              style={{ backgroundColor: d.color }}
+                                            />
+                                          )}
+                                          <span className="truncate">{d.label}</span>
+                                        </button>
+                                      </div>
+                                      {isTertiaryRoad && isExpanded && (
+                                        <ul>
+                                          <li>
+                                            <button
+                                              type="button"
+                                              onClick={() => setTertiaryRoadSectorOnly((v) => !v)}
+                                              style={{ color: 'var(--map-fg-muted)' }}
+                                              className="flex w-full cursor-pointer items-center gap-2 py-1 pl-14 pr-2.5 text-left text-[12px] hover:bg-[var(--map-surface-hover)]"
+                                            >
+                                              <span
+                                                className="flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border"
+                                                style={{
+                                                  borderColor: tertiaryRoadSectorOnly
+                                                    ? d.color
+                                                    : 'var(--map-border)',
+                                                  backgroundColor: tertiaryRoadSectorOnly
+                                                    ? d.color
+                                                    : 'transparent',
+                                                }}
+                                              >
+                                                {tertiaryRoadSectorOnly && (
+                                                  <svg
+                                                    viewBox="0 0 24 24"
+                                                    fill="none"
+                                                    className="h-2 w-2"
+                                                    aria-hidden="true"
+                                                  >
+                                                    <path
+                                                      d="M5 13l4 4L19 7"
+                                                      stroke="white"
+                                                      strokeWidth={4}
+                                                      strokeLinecap="round"
+                                                      strokeLinejoin="round"
+                                                    />
+                                                  </svg>
+                                                )}
+                                              </span>
+                                              <span className="truncate">
+                                                Only inside sector area
+                                              </span>
+                                            </button>
+                                          </li>
+                                        </ul>
+                                      )}
+                                      {!isTertiaryRoad && hasChildren && isExpanded && (
+                                        <ul>
+                                          {visibleSubclasses.map((row) => {
+                                            const subChecked = isFullyOn
+                                              ? true
+                                              : (partialSubs?.includes(row.subclass) ?? false)
+                                            return (
+                                              <li key={row.subclass}>
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    togglePoiSubclassFilter(d.key, row.subclass)
+                                                  }
+                                                  style={{
+                                                    color: subChecked
+                                                      ? 'var(--map-fg)'
+                                                      : 'var(--map-fg-muted)',
+                                                    backgroundColor: subChecked
+                                                      ? 'var(--map-surface-active)'
+                                                      : undefined,
+                                                  }}
+                                                  className={`flex w-full cursor-pointer items-center gap-2 py-1 pl-14 pr-2.5 text-left text-[12px] hover:bg-[var(--map-surface-hover)] ${subChecked ? 'font-medium' : ''}`}
+                                                >
+                                                  <span
+                                                    className="flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border"
+                                                    style={{
+                                                      borderColor: subChecked
+                                                        ? d.color
+                                                        : 'var(--map-border)',
+                                                      backgroundColor: subChecked
+                                                        ? d.color
+                                                        : 'transparent',
+                                                    }}
+                                                  >
+                                                    {subChecked && (
+                                                      <svg
+                                                        viewBox="0 0 24 24"
+                                                        fill="none"
+                                                        className="h-2 w-2"
+                                                        aria-hidden="true"
+                                                      >
+                                                        <path
+                                                          d="M5 13l4 4L19 7"
+                                                          stroke="white"
+                                                          strokeWidth={4}
+                                                          strokeLinecap="round"
+                                                          strokeLinejoin="round"
+                                                        />
+                                                      </svg>
+                                                    )}
+                                                  </span>
+                                                  <span className="truncate">{row.subclass}</span>
+                                                  <span
+                                                    className="ml-auto shrink-0 tabular-nums"
+                                                    style={{ color: 'var(--map-fg-faint)' }}
+                                                  >
+                                                    {row.features}
+                                                  </span>
+                                                </button>
+                                              </li>
+                                            )
+                                          })}
+                                        </ul>
+                                      )}
+                                    </li>
+                                  </Fragment>
+                                )
+                              })}
+                            </ul>
+                          )}
+                          {!collapsed && group === 'Base layers' && (
+                            <ul>
+                              {matchedBaseLayers.map(({ key, label, icon: Icon }) => (
+                                <li key={key}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
+                                    style={{
+                                      color: 'var(--map-fg)',
+                                      backgroundColor: visibility[key]
+                                        ? 'var(--map-surface-active)'
+                                        : undefined,
+                                    }}
+                                    className="flex w-full cursor-pointer items-center gap-2 py-1.5 pl-9 pr-2.5 text-left text-[13px] hover:bg-[var(--map-surface-hover)]"
+                                  >
+                                    <span
+                                      className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                                      style={{
+                                        borderColor: visibility[key]
+                                          ? 'var(--map-accent)'
+                                          : 'var(--map-border)',
+                                        backgroundColor: visibility[key]
+                                          ? 'var(--map-accent)'
+                                          : 'transparent',
+                                      }}
+                                    >
+                                      {visibility[key] && (
+                                        <svg
+                                          viewBox="0 0 24 24"
+                                          fill="none"
+                                          className="h-2.5 w-2.5"
+                                          aria-hidden="true"
+                                        >
+                                          <path
+                                            d="M5 13l4 4L19 7"
+                                            stroke="white"
+                                            strokeWidth={3}
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                          />
+                                        </svg>
+                                      )}
+                                    </span>
+                                    <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--map-fg-faint)]" />
+                                    <span className="truncate">{label}</span>
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </div>
 
-            {/* Base layers -- pinned below search, always visible without
+              {/* Base layers -- pinned below search, always visible without
               opening the dropdown since toggling the whole sector plan or
               boundary layer off is a frequent, fundamental action. */}
-            <div className="flex flex-col gap-2">
-              {baseLayerRows.map(({ key, label, icon: Icon, theme }) => (
-                <div
-                  key={key}
-                  style={{
-                    borderColor: 'var(--map-border)',
-                    backgroundColor: 'var(--map-surface)',
-                  }}
-                  className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 shadow-sm"
-                >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span
-                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
-                      style={{
-                        backgroundColor: `var(--map-section-${theme}-bg)`,
-                        color: `var(--map-section-${theme}-fg)`,
-                      }}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
+              <div className="flex flex-col gap-2">
+                {baseLayerRows.map(({ key, label, icon: Icon, theme }) => (
+                  <div
+                    key={key}
+                    style={{
+                      borderColor: 'var(--map-border)',
+                      backgroundColor: 'var(--map-surface)',
+                    }}
+                    className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 shadow-sm"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
+                        style={{
+                          backgroundColor: `var(--map-section-${theme}-bg)`,
+                          color: `var(--map-section-${theme}-fg)`,
+                        }}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                      </span>
+                      <span
+                        className="truncate text-[13px] font-medium"
+                        style={{ color: 'var(--map-fg)' }}
+                      >
+                        {label}
+                      </span>
                     </span>
-                    <span
-                      className="truncate text-[13px] font-medium"
-                      style={{ color: 'var(--map-fg)' }}
-                    >
-                      {label}
-                    </span>
-                  </span>
-                  <label className="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center">
-                    <input
-                      type="checkbox"
-                      className="peer sr-only"
-                      checked={visibility[key]}
-                      onChange={(e) => setVisibility((v) => ({ ...v, [key]: e.target.checked }))}
-                    />
-                    <span className="absolute inset-0 rounded-full bg-[var(--map-switch-track)] transition-colors peer-checked:bg-[var(--map-accent)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--map-accent)]/40" />
-                    <span className="absolute left-0.5 h-4 w-4 rounded-full bg-[var(--map-switch-thumb)] shadow transition-transform peer-checked:translate-x-4" />
-                  </label>
-                </div>
-              ))}
+                    <label className="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center">
+                      <input
+                        type="checkbox"
+                        className="peer sr-only"
+                        checked={visibility[key]}
+                        onChange={(e) => setVisibility((v) => ({ ...v, [key]: e.target.checked }))}
+                      />
+                      <span className="absolute inset-0 rounded-full bg-[var(--map-switch-track)] transition-colors peer-checked:bg-[var(--map-accent)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--map-accent)]/40" />
+                      <span className="absolute left-0.5 h-4 w-4 rounded-full bg-[var(--map-switch-thumb)] shadow transition-transform peer-checked:translate-x-4" />
+                    </label>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        </Panel>
-      ) : mode === 'evacuation' ? (
-        <EvacuationModePanel
-          evacVisibility={evacVisibility}
-          onToggleLayer={toggleEvacLayer}
-          evacFilters={evacFilters}
-          onFiltersChange={setEvacFilters}
-          sectors={sectors}
-          onSelectSector={selectEvacSector}
-          onSelectZone={selectEvacZone}
-          onSelectResult={selectEvacResult}
-          mapVisibility={visibility}
-          onToggleMapLayer={(key) => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
-          corridorCounts={evacSummaryState.summary?.corridors ?? null}
-          forceCollapsed={expandedDockedPanel === 'stats'}
-          onExpand={() => {
-            if (isPhoneViewport()) setExpandedDockedPanel('search')
-          }}
-          onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'search' ? null : cur))}
-          onWidthChange={(w) => setEvacModeCollapsed(w === 0)}
-        />
-      ) : (
-        <InsightsModePanel
-          mode={mode}
-          insightsData={insightsData}
-          loading={insightsLoading}
-          error={insightsError}
-          onRefresh={refetchInsights}
-          sectors={sectors}
-          heatMetric={heatMetric}
-          onHeatMetricChange={setHeatMetric}
-          filters={insightFilters}
-          selectedSector={insightSector}
-          onSelectSector={selectInsightSectorFromPanel}
-          onFlyToTicket={flyToTicketParcel}
-          forceCollapsed={expandedDockedPanel === 'stats'}
-          onExpand={() => {
-            if (isPhoneViewport()) setExpandedDockedPanel('search')
-          }}
-          onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'search' ? null : cur))}
-          onWidthChange={(w) => setInsightsModeCollapsed(w === 0)}
-        />
-      )}
-
-      {mode === 'map' ? (
-        <StatsPanel
-          icon={<ChartBarIcon className="h-full w-full" />}
-          onStats={(data) => {
-            setSubclassStats(data.bySubclass)
-            setPoiSubclassStats(data.poiBySubclass)
-          }}
-          sectorNo={selectedSector === 'all' ? null : selectedSector}
-          sectorLabel={
-            selectedSector !== 'all'
-              ? (() => {
-                  const s = sectors.find((x) => x.sector_no === selectedSector)
-                  return s ? formatSectorLabel(s) : `Sector ${selectedSector}`
-                })()
-              : undefined
-          }
-          onClearSector={() => setSelectedSector('all')}
-          onSelectSector={(n) => setSelectedSector(n)}
-          classFilter={classFilter}
-          onClassFilterChange={toggleClassFilter}
-          subclassFilter={subclassFilter}
-          onSubclassFilterChange={toggleSubclassFilter}
-          locateTargets={locateTargets}
-          onToggleLocate={toggleLocate}
-          onRetryLocate={retryLocate}
-          locateResults={locateResults}
-          onLocateFeatureClick={flyToLocateFeature}
-          poiVisibility={visibility}
-          onTogglePoiLayer={togglePoiLayerFilter}
-          poiSubclassFilter={poiSubclassFilter}
-          onPoiSubclassFilterChange={togglePoiSubclassFilter}
-          poiLocateTargets={poiLocateTargets}
-          onTogglePoiLocate={togglePoiLocate}
-          onRetryPoiLocate={retryPoiLocate}
-          poiLocateResults={poiLocateResults}
-          onPoiLocateFeatureClick={flyToLocateFeature}
-          roadTypeVisibility={visibility}
-          onToggleRoadType={(key) => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
-          onWidthChange={(w) => {
-            // Ignore the 0 Panel reports while collapsed -- see
-            // rightPanelWidthRef's declaration for why the reserved space
-            // must survive collapsing the panel.
-            if (w > 0) rightPanelWidthRef.current = w
-            applyMapPadding()
-          }}
-          forceCollapsed={expandedDockedPanel === 'search'}
-          onExpand={() => {
-            if (isPhoneViewport()) setExpandedDockedPanel('stats')
-          }}
-          onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'stats' ? null : cur))}
-        />
-      ) : mode === 'evacuation' ? (
-        <EvacuationPanel
-          evacFocus={evacFocus}
-          sectors={sectors}
-          onClearFocus={() => setEvacFocus(null)}
-          onSelectResult={selectEvacResult}
-          summary={evacSummaryState.summary}
-          loading={evacSummaryState.loading}
-          error={evacSummaryState.error}
-          onWidthChange={(w) => {
-            // Same "ignore the collapsed 0" rule as StatsPanel's onWidthChange above.
-            if (w > 0) rightPanelWidthRef.current = w
-            applyMapPadding()
-          }}
-          forceCollapsed={expandedDockedPanel === 'search'}
-          onExpand={() => {
-            if (isPhoneViewport()) setExpandedDockedPanel('stats')
-          }}
-          onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'stats' ? null : cur))}
-        />
-      ) : (
-        <InsightsPanel
-          mode={mode}
-          sector={insightSector}
-          insightsData={insightsData}
-          filters={insightFilters}
-          sectors={sectors}
-          onFilterClassGroup={(classGroup) =>
-            setInsightFilters((f) => {
-              // Tri-state parent, mirroring toggleClassFilter (Map mode's own class/sub-class
-              // filter): a partial sub-class selection promotes to the whole class rather than
-              // being silently discarded, and only a fully-selected class clears.
-              const hasPartial = (f.subclasses?.[classGroup]?.length ?? 0) > 0
-              const isSelecting = hasPartial || !f.classGroups?.includes(classGroup)
-              const nextClassGroups = isSelecting
-                ? f.classGroups?.includes(classGroup)
-                  ? f.classGroups
-                  : [...(f.classGroups ?? []), classGroup]
-                : f.classGroups?.filter((c) => c !== classGroup)
-              const nextSubclasses = { ...f.subclasses }
-              delete nextSubclasses[classGroup]
-              return {
+          </Panel>
+        ) : mode === 'evacuation' ? (
+          <EvacuationModePanel
+            evacVisibility={evacVisibility}
+            onToggleLayer={toggleEvacLayer}
+            evacFilters={evacFilters}
+            onFiltersChange={setEvacFilters}
+            sectors={sectors}
+            onSelectSector={selectEvacSector}
+            onSelectZone={selectEvacZone}
+            onSelectResult={selectEvacResult}
+            mapVisibility={visibility}
+            onToggleMapLayer={(key) => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
+            corridorCounts={evacSummaryState.summary?.corridors ?? null}
+            forceCollapsed={expandedDockedPanel === 'stats'}
+            onExpand={() => {
+              if (isPhoneViewport()) setExpandedDockedPanel('search')
+            }}
+            onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'search' ? null : cur))}
+            onWidthChange={(w) => setEvacModeCollapsed(w === 0)}
+          />
+        ) : (
+          <InsightsModePanel
+            mode={mode}
+            insightsData={insightsData}
+            loading={insightsLoading}
+            error={insightsError}
+            onRefresh={refetchInsights}
+            sectors={sectors}
+            heatMetric={heatMetric}
+            onHeatMetricChange={setHeatMetric}
+            filters={insightFilters}
+            selectedSector={insightSector}
+            onSelectSector={selectInsightSectorFromPanel}
+            onFlyToTicket={flyToTicketParcel}
+            forceCollapsed={expandedDockedPanel === 'stats'}
+            onExpand={() => {
+              if (isPhoneViewport()) setExpandedDockedPanel('search')
+            }}
+            onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'search' ? null : cur))}
+            onWidthChange={(w) => setInsightsModeCollapsed(w === 0)}
+          />
+        )}
+      </div>
+      <div className={sidePanelsHidden ? 'hidden' : 'contents'}>
+        {mode === 'map' ? (
+          <StatsPanel
+            icon={<ChartBarIcon className="h-full w-full" />}
+            onStats={(data) => {
+              setSubclassStats(data.bySubclass)
+              setPoiSubclassStats(data.poiBySubclass)
+            }}
+            sectorNo={selectedSector === 'all' ? null : selectedSector}
+            sectorLabel={
+              selectedSector !== 'all'
+                ? (() => {
+                    const s = sectors.find((x) => x.sector_no === selectedSector)
+                    return s ? formatSectorLabel(s) : `Sector ${selectedSector}`
+                  })()
+                : undefined
+            }
+            onClearSector={() => setSelectedSector('all')}
+            onSelectSector={(n) => setSelectedSector(n)}
+            classFilter={classFilter}
+            onClassFilterChange={toggleClassFilter}
+            subclassFilter={subclassFilter}
+            onSubclassFilterChange={toggleSubclassFilter}
+            locateTargets={locateTargets}
+            onToggleLocate={toggleLocate}
+            onRetryLocate={retryLocate}
+            locateResults={locateResults}
+            onLocateFeatureClick={flyToLocateFeature}
+            poiVisibility={visibility}
+            onTogglePoiLayer={togglePoiLayerFilter}
+            poiSubclassFilter={poiSubclassFilter}
+            onPoiSubclassFilterChange={togglePoiSubclassFilter}
+            poiLocateTargets={poiLocateTargets}
+            onTogglePoiLocate={togglePoiLocate}
+            onRetryPoiLocate={retryPoiLocate}
+            poiLocateResults={poiLocateResults}
+            onPoiLocateFeatureClick={flyToLocateFeature}
+            roadTypeVisibility={visibility}
+            onToggleRoadType={(key) => setVisibility((v) => ({ ...v, [key]: !v[key] }))}
+            onWidthChange={(w) => {
+              // Ignore the 0 Panel reports while collapsed -- see
+              // rightPanelWidthRef's declaration for why the reserved space
+              // must survive collapsing the panel.
+              if (w > 0) rightPanelWidthRef.current = w
+              applyMapPadding()
+            }}
+            forceCollapsed={expandedDockedPanel === 'search'}
+            onExpand={() => {
+              if (isPhoneViewport()) setExpandedDockedPanel('stats')
+            }}
+            onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'stats' ? null : cur))}
+          />
+        ) : mode === 'evacuation' ? (
+          <EvacuationPanel
+            evacFocus={evacFocus}
+            sectors={sectors}
+            onClearFocus={() => setEvacFocus(null)}
+            onSelectResult={selectEvacResult}
+            summary={evacSummaryState.summary}
+            loading={evacSummaryState.loading}
+            error={evacSummaryState.error}
+            onWidthChange={(w) => {
+              // Same "ignore the collapsed 0" rule as StatsPanel's onWidthChange above.
+              if (w > 0) rightPanelWidthRef.current = w
+              applyMapPadding()
+            }}
+            forceCollapsed={expandedDockedPanel === 'search'}
+            onExpand={() => {
+              if (isPhoneViewport()) setExpandedDockedPanel('stats')
+            }}
+            onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'stats' ? null : cur))}
+          />
+        ) : (
+          <InsightsPanel
+            mode={mode}
+            sector={insightSector}
+            insightsData={insightsData}
+            filters={insightFilters}
+            sectors={sectors}
+            onFilterClassGroup={(classGroup) =>
+              setInsightFilters((f) => {
+                // Tri-state parent, mirroring toggleClassFilter (Map mode's own class/sub-class
+                // filter): a partial sub-class selection promotes to the whole class rather than
+                // being silently discarded, and only a fully-selected class clears.
+                const hasPartial = (f.subclasses?.[classGroup]?.length ?? 0) > 0
+                const isSelecting = hasPartial || !f.classGroups?.includes(classGroup)
+                const nextClassGroups = isSelecting
+                  ? f.classGroups?.includes(classGroup)
+                    ? f.classGroups
+                    : [...(f.classGroups ?? []), classGroup]
+                  : f.classGroups?.filter((c) => c !== classGroup)
+                const nextSubclasses = { ...f.subclasses }
+                delete nextSubclasses[classGroup]
+                return {
+                  ...f,
+                  classGroups:
+                    nextClassGroups && nextClassGroups.length > 0 ? nextClassGroups : undefined,
+                  subclasses: Object.keys(nextSubclasses).length > 0 ? nextSubclasses : undefined,
+                }
+              })
+            }
+            onFilterSubclass={(classGroup, subclass) =>
+              setInsightFilters((f) => {
+                // Toggling a sub-class while its whole class is checked narrows the selection down
+                // to just that sub-class (unlike Map mode's toggleSubclassFilter, this doesn't
+                // enumerate every sibling to keep them implicitly selected -- Ticket mode's
+                // Categories list doesn't need that "split off" nuance, just "pick one to narrow").
+                const wasFullyChecked = f.classGroups?.includes(classGroup) ?? false
+                const current = f.subclasses?.[classGroup] ?? []
+                const isSelecting = wasFullyChecked ? true : !current.includes(subclass)
+                const nextClassGroups = f.classGroups?.filter((c) => c !== classGroup)
+                const nextSubs = isSelecting
+                  ? [...current, subclass]
+                  : current.filter((s) => s !== subclass)
+                const nextSubclasses = { ...f.subclasses }
+                if (nextSubs.length > 0) nextSubclasses[classGroup] = nextSubs
+                else delete nextSubclasses[classGroup]
+                return {
+                  ...f,
+                  classGroups:
+                    nextClassGroups && nextClassGroups.length > 0 ? nextClassGroups : undefined,
+                  subclasses: Object.keys(nextSubclasses).length > 0 ? nextSubclasses : undefined,
+                }
+              })
+            }
+            onClearClassGroups={() =>
+              setInsightFilters((f) => ({ ...f, classGroups: undefined, subclasses: undefined }))
+            }
+            onFilterPriority={(prioritySlug) =>
+              setInsightFilters((f) => ({
                 ...f,
-                classGroups:
-                  nextClassGroups && nextClassGroups.length > 0 ? nextClassGroups : undefined,
-                subclasses: Object.keys(nextSubclasses).length > 0 ? nextSubclasses : undefined,
-              }
-            })
-          }
-          onFilterSubclass={(classGroup, subclass) =>
-            setInsightFilters((f) => {
-              // Toggling a sub-class while its whole class is checked narrows the selection down
-              // to just that sub-class (unlike Map mode's toggleSubclassFilter, this doesn't
-              // enumerate every sibling to keep them implicitly selected -- Ticket mode's
-              // Categories list doesn't need that "split off" nuance, just "pick one to narrow").
-              const wasFullyChecked = f.classGroups?.includes(classGroup) ?? false
-              const current = f.subclasses?.[classGroup] ?? []
-              const isSelecting = wasFullyChecked ? true : !current.includes(subclass)
-              const nextClassGroups = f.classGroups?.filter((c) => c !== classGroup)
-              const nextSubs = isSelecting
-                ? [...current, subclass]
-                : current.filter((s) => s !== subclass)
-              const nextSubclasses = { ...f.subclasses }
-              if (nextSubs.length > 0) nextSubclasses[classGroup] = nextSubs
-              else delete nextSubclasses[classGroup]
-              return {
-                ...f,
-                classGroups:
-                  nextClassGroups && nextClassGroups.length > 0 ? nextClassGroups : undefined,
-                subclasses: Object.keys(nextSubclasses).length > 0 ? nextSubclasses : undefined,
-              }
-            })
-          }
-          onClearClassGroups={() =>
-            setInsightFilters((f) => ({ ...f, classGroups: undefined, subclasses: undefined }))
-          }
-          onFilterPriority={(prioritySlug) =>
-            setInsightFilters((f) => ({
-              ...f,
-              prioritySlugs: f.prioritySlugs?.includes(prioritySlug)
-                ? f.prioritySlugs.filter((p) => p !== prioritySlug)
-                : [...(f.prioritySlugs ?? []), prioritySlug],
-            }))
-          }
-          onFilterStatusBucket={(bucket: StatusBucket) =>
-            setInsightFilters((f) => {
-              const bucketSlugs = (insightsData?.statuses ?? [])
-                .filter((s) => s.bucket === bucket)
-                .map((s) => s.slug)
-              const isActive =
-                bucketSlugs.length > 0 && bucketSlugs.every((slug) => f.statusSlugs?.includes(slug))
-              if (isActive) {
-                const next = f.statusSlugs?.filter((slug) => !bucketSlugs.includes(slug))
-                return { ...f, statusSlugs: next && next.length > 0 ? next : undefined }
-              }
-              return {
-                ...f,
-                statusSlugs: Array.from(new Set([...(f.statusSlugs ?? []), ...bucketSlugs])),
-              }
-            })
-          }
-          onClearFilters={() => setInsightFilters({})}
-          onLocate={flyToLocateFeature}
-          onWidthChange={(w) => {
-            // Same "ignore the collapsed 0" rule as StatsPanel's onWidthChange above.
-            if (w > 0) rightPanelWidthRef.current = w
-            applyMapPadding()
-          }}
-          forceCollapsed={expandedDockedPanel === 'search'}
-          onExpand={() => {
-            if (isPhoneViewport()) setExpandedDockedPanel('stats')
-          }}
-          onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'stats' ? null : cur))}
-        />
-      )}
+                prioritySlugs: f.prioritySlugs?.includes(prioritySlug)
+                  ? f.prioritySlugs.filter((p) => p !== prioritySlug)
+                  : [...(f.prioritySlugs ?? []), prioritySlug],
+              }))
+            }
+            onFilterStatusBucket={(bucket: StatusBucket) =>
+              setInsightFilters((f) => {
+                const bucketSlugs = (insightsData?.statuses ?? [])
+                  .filter((s) => s.bucket === bucket)
+                  .map((s) => s.slug)
+                const isActive =
+                  bucketSlugs.length > 0 &&
+                  bucketSlugs.every((slug) => f.statusSlugs?.includes(slug))
+                if (isActive) {
+                  const next = f.statusSlugs?.filter((slug) => !bucketSlugs.includes(slug))
+                  return { ...f, statusSlugs: next && next.length > 0 ? next : undefined }
+                }
+                return {
+                  ...f,
+                  statusSlugs: Array.from(new Set([...(f.statusSlugs ?? []), ...bucketSlugs])),
+                }
+              })
+            }
+            onClearFilters={() => setInsightFilters({})}
+            onLocate={flyToLocateFeature}
+            onWidthChange={(w) => {
+              // Same "ignore the collapsed 0" rule as StatsPanel's onWidthChange above.
+              if (w > 0) rightPanelWidthRef.current = w
+              applyMapPadding()
+            }}
+            forceCollapsed={expandedDockedPanel === 'search'}
+            onExpand={() => {
+              if (isPhoneViewport()) setExpandedDockedPanel('stats')
+            }}
+            onCollapse={() => setExpandedDockedPanel((cur) => (cur === 'stats' ? null : cur))}
+          />
+        )}
+      </div>
 
       {(mode === 'map' || mode === 'tickets') && (
         <SectorReportDrawer
@@ -7340,6 +7361,8 @@ export default function MapView({
             return s ? formatSectorLabel(s) : `Sector ${drawerSector}`
           })()}
           preferredTab={mode === 'tickets' ? 'work' : 'general'}
+          expanded={drawerExpanded}
+          onExpandedChange={setDrawerExpanded}
           workDone={
             canUseInsights
               ? {

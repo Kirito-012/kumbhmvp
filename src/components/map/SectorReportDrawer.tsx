@@ -255,6 +255,23 @@ function IconChecklist({ className }: { className?: string }) {
     </svg>
   )
 }
+function IconExpand({ className, expanded }: { className?: string; expanded: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d={
+          expanded
+            ? 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5'
+            : 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5'
+        }
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
 function IconClose({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
@@ -598,10 +615,16 @@ export default function SectorReportDrawer({
   sectorLabel,
   preferredTab = 'general',
   workDone,
+  expanded = false,
+  onExpandedChange,
 }: {
   /** Drawer is hidden entirely when null -- same "no sector selected" gate as the Stats panel's filtered view. */
   sectorNo: number | null
   sectorLabel: string
+  /** Expanded view: the parent hides the docked side panels and this drawer takes the full width
+   *  and (nearly) the full height. Controlled so MapView can hide the panels in step. */
+  expanded?: boolean
+  onExpandedChange?: (expanded: boolean) => void
   /** Tab shown on mount and whenever this changes (Map mode opens on General Info, Ticket mode on
    *  Work Done). The user's own tab clicks win until it changes again. */
   preferredTab?: SectorDrawerTab
@@ -722,6 +745,31 @@ export default function SectorReportDrawer({
     })
   }
 
+  // Height to restore when leaving Expanded view -- what the user had dragged the drawer to.
+  const heightBeforeExpand = useRef<number | null>(null)
+
+  function toggleExpanded() {
+    if (!onExpandedChange) return
+    if (!expanded) {
+      heightBeforeExpand.current = collapsed
+        ? Math.round((window.innerHeight * ACTIVE_HEIGHT_VH) / 100)
+        : height
+      setCollapsed(false)
+      setHeight(maxDrawerHeightPx())
+      onExpandedChange(true)
+    } else {
+      if (heightBeforeExpand.current !== null) setHeight(heightBeforeExpand.current)
+      onExpandedChange(false)
+    }
+  }
+
+  // Side panels only stay hidden while the report is actually open: collapsing the drawer (or
+  // picking another sector, which re-collapses it) must hand the map's chrome back.
+  useEffect(() => {
+    if (collapsed && expanded) onExpandedChange?.(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires only on the collapsed flag flipping on
+  }, [collapsed])
+
   useEffect(() => {
     if (sectorNo !== null) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local mount/closing state to the sectorNo prop transition itself (open), not state driven by an external system
@@ -821,9 +869,10 @@ export default function SectorReportDrawer({
       // both docked panels are accounted for -- nowhere near enough, which is what was squeezing
       // stat values into mid-word wraps. Querying this element's own size instead of the
       // viewport's is what lets the report grid react to the space it actually has.
-      className={`@container absolute bottom-0 left-3 right-3 z-20 flex max-h-[calc(100dvh-96px)] max-w-[calc(100vw-24px)] flex-col rounded-t-2xl border border-b-0 backdrop-blur-md sm:left-[336px] sm:right-[336px] sm:max-w-[calc(100vw-360px)] ${
-        dragging ? '' : 'transition-[height] duration-150 ease-out'
-      } ${closing ? 'animate-[drawer-swipe-out_ease-in_forwards]' : 'animate-[drawer-swipe-in_ease-out]'}`}
+      className={`@container absolute bottom-0 left-3 right-3 z-20 flex max-h-[calc(100dvh-96px)] max-w-[calc(100vw-24px)] flex-col rounded-t-2xl border border-b-0 backdrop-blur-md ${
+        // Expanded view reclaims the strips the side panels normally occupy.
+        expanded ? '' : 'sm:left-[336px] sm:right-[336px] sm:max-w-[calc(100vw-360px)]'
+      } ${dragging ? '' : 'transition-[height] duration-150 ease-out'} ${closing ? 'animate-[drawer-swipe-out_ease-in_forwards]' : 'animate-[drawer-swipe-in_ease-out]'}`}
     >
       {/* Drag strip -- grabbing anywhere in it and moving vertically resizes
           the drawer (same pointer-capture drag pattern as Panel.tsx's width
@@ -931,6 +980,31 @@ export default function SectorReportDrawer({
             <HeadChip value={`${report.utilityInfrastructure.roadLengthKm} km`} label="roads" />
           </div>
         )}
+        {onExpandedChange && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              toggleExpanded()
+            }}
+            aria-pressed={expanded}
+            aria-label="Expanded view"
+            title={
+              expanded
+                ? 'Leave expanded view and bring the side panels back'
+                : 'Expanded view: hide the side panels and show more detail'
+            }
+            style={
+              expanded
+                ? { backgroundColor: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }
+                : { color: 'var(--map-fg-muted)' }
+            }
+            className="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-[11.5px] font-semibold hover:bg-[var(--map-surface-hover)]"
+          >
+            <IconExpand className="h-[14px] w-[14px]" expanded={expanded} />
+            <span className="hidden @min-[560px]:inline">Expanded view</span>
+          </button>
+        )}
         <button
           type="button"
           onClick={(e) => {
@@ -1010,6 +1084,7 @@ export default function SectorReportDrawer({
             summary={workSummary}
             error={workDone.error}
             onRetry={workDone.onRetry}
+            expanded={expanded}
           />
         </div>
       )}
