@@ -1,7 +1,10 @@
 'use client'
 
-import { useEffect, useRef, useState, type JSX } from 'react'
+import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import { ParcelIcon, GridIcon, RoadIcon } from '@/components/map/icons'
+import SectorWorkTab from '@/components/map/SectorWorkTab'
+import { summarizeWorkDone } from '@/components/map/SectorWorkDone'
+import type { InsightsTicketData } from '@/lib/insights/types'
 
 // Must match the drawer-swipe-in/-out keyframes' duration in globals.css --
 // this is what the unmount timeout below waits out before actually removing
@@ -48,6 +51,13 @@ type Report = {
     ghats: number
   }
 }
+
+export type SectorDrawerTab = 'general' | 'work'
+
+const TABS: { key: SectorDrawerTab; label: string }[] = [
+  { key: 'general', label: 'General Info' },
+  { key: 'work', label: 'Work Done' },
+]
 
 const SECTION_THEMES = {
   blue: { bg: 'var(--map-section-blue-bg)', fg: 'var(--map-section-blue-fg)' },
@@ -220,6 +230,44 @@ function IconWave({ className }: { className?: string }) {
         stroke="currentColor"
         strokeWidth={1.7}
         strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+function IconInfo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth={1.8} />
+      <path d="M12 11v5.5M12 7.6v.1" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
+    </svg>
+  )
+}
+function IconChecklist({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M4 6.5l1.6 1.6L8.8 5M4 12.5l1.6 1.6 3.2-3.1M4 18.5l1.6 1.6 3.2-3.1M12 7h8M12 13h8M12 19h8"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+function IconExpand({ className, expanded }: { className?: string; expanded: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d={
+          expanded
+            ? 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5'
+            : 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5'
+        }
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   )
@@ -565,11 +613,46 @@ function ColHead({
 export default function SectorReportDrawer({
   sectorNo,
   sectorLabel,
+  preferredTab = 'general',
+  workDone,
+  expanded = false,
+  onExpandedChange,
 }: {
   /** Drawer is hidden entirely when null -- same "no sector selected" gate as the Stats panel's filtered view. */
   sectorNo: number | null
   sectorLabel: string
+  /** Expanded view: the parent hides the docked side panels and this drawer takes the full width
+   *  and (nearly) the full height. Controlled so MapView can hide the panels in step. */
+  expanded?: boolean
+  onExpandedChange?: (expanded: boolean) => void
+  /** Tab shown on mount and whenever this changes (Map mode opens on General Info, Ticket mode on
+   *  Work Done). The user's own tab clicks win until it changes again. */
+  preferredTab?: SectorDrawerTab
+  /** Ticket progress for the Work Done tab. Omitted for users without `ticket:read:all` (the bulk
+   *  insights route is gated on it) -- the drawer then renders General Info alone, with no tabs. */
+  workDone?: {
+    data: InsightsTicketData | null
+    loading: boolean
+    error: string | null
+    onRetry: () => void
+    /** Fired once the Work Done tab is actually selected, so Map mode only pulls the bulk ticket
+     *  data when someone asks for it rather than on every sector click. */
+    onActivate: () => void
+  }
 }) {
+  const [tabState, setTab] = useState<SectorDrawerTab>(preferredTab)
+  const tab: SectorDrawerTab = workDone ? tabState : 'general'
+  // Adjust-state-during-render (not an effect) so switching modes never paints one frame of the
+  // previous mode's tab.
+  const [lastPreferredTab, setLastPreferredTab] = useState(preferredTab)
+  if (lastPreferredTab !== preferredTab) {
+    setLastPreferredTab(preferredTab)
+    setTab(preferredTab)
+  }
+  const tabRefs = useRef<Record<SectorDrawerTab, HTMLButtonElement | null>>({
+    general: null,
+    work: null,
+  })
   const [report, setReport] = useState<Report | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -662,6 +745,31 @@ export default function SectorReportDrawer({
     })
   }
 
+  // Height to restore when leaving Expanded view -- what the user had dragged the drawer to.
+  const heightBeforeExpand = useRef<number | null>(null)
+
+  function toggleExpanded() {
+    if (!onExpandedChange) return
+    if (!expanded) {
+      heightBeforeExpand.current = collapsed
+        ? Math.round((window.innerHeight * ACTIVE_HEIGHT_VH) / 100)
+        : height
+      setCollapsed(false)
+      setHeight(maxDrawerHeightPx())
+      onExpandedChange(true)
+    } else {
+      if (heightBeforeExpand.current !== null) setHeight(heightBeforeExpand.current)
+      onExpandedChange(false)
+    }
+  }
+
+  // Side panels only stay hidden while the report is actually open: collapsing the drawer (or
+  // picking another sector, which re-collapses it) must hand the map's chrome back.
+  useEffect(() => {
+    if (collapsed && expanded) onExpandedChange?.(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires only on the collapsed flag flipping on
+  }, [collapsed])
+
   useEffect(() => {
     if (sectorNo !== null) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local mount/closing state to the sectorNo prop transition itself (open), not state driven by an external system
@@ -716,6 +824,18 @@ export default function SectorReportDrawer({
     setCollapsed(true)
   }, [sectorNo])
 
+  const workData = workDone?.data ?? null
+  const workSummary = useMemo(
+    () => (workData && sectorNo !== null ? summarizeWorkDone(workData, sectorNo) : null),
+    [workData, sectorNo],
+  )
+
+  const onActivateWork = workDone?.onActivate
+  const workVisible = tab === 'work' && sectorNo !== null
+  useEffect(() => {
+    if (workVisible) onActivateWork?.()
+  }, [workVisible, onActivateWork])
+
   if (!mounted) return null
 
   const landClasses = report
@@ -749,9 +869,10 @@ export default function SectorReportDrawer({
       // both docked panels are accounted for -- nowhere near enough, which is what was squeezing
       // stat values into mid-word wraps. Querying this element's own size instead of the
       // viewport's is what lets the report grid react to the space it actually has.
-      className={`@container absolute bottom-0 left-3 right-3 z-20 flex max-h-[calc(100dvh-96px)] max-w-[calc(100vw-24px)] flex-col rounded-t-2xl border border-b-0 backdrop-blur-md sm:left-[336px] sm:right-[336px] sm:max-w-[calc(100vw-360px)] ${
-        dragging ? '' : 'transition-[height] duration-150 ease-out'
-      } ${closing ? 'animate-[drawer-swipe-out_ease-in_forwards]' : 'animate-[drawer-swipe-in_ease-out]'}`}
+      className={`@container absolute bottom-0 left-3 right-3 z-20 flex max-h-[calc(100dvh-96px)] max-w-[calc(100vw-24px)] flex-col rounded-t-2xl border border-b-0 backdrop-blur-md ${
+        // Expanded view reclaims the strips the side panels normally occupy.
+        expanded ? '' : 'sm:left-[336px] sm:right-[336px] sm:max-w-[calc(100vw-360px)]'
+      } ${dragging ? '' : 'transition-[height] duration-150 ease-out'} ${closing ? 'animate-[drawer-swipe-out_ease-in_forwards]' : 'animate-[drawer-swipe-in_ease-out]'}`}
     >
       {/* Drag strip -- grabbing anywhere in it and moving vertically resizes
           the drawer (same pointer-capture drag pattern as Panel.tsx's width
@@ -839,7 +960,15 @@ export default function SectorReportDrawer({
         {/* Headline figures inline in the heading, so the collapsed strip is worth the ~76px of
             map it costs -- on its own it only repeated the sector name the left panel already
             shows. Hidden below 380px of drawer width, where the title alone fills the row. */}
-        {report && (
+        {tab === 'work' && workSummary && (
+          <div className="hidden shrink-0 items-center gap-1.5 @min-[380px]:flex">
+            <HeadChip
+              value={`${workSummary.resolved}/${workSummary.total}`}
+              label="tickets resolved"
+            />
+          </div>
+        )}
+        {tab === 'general' && report && (
           <div className="hidden shrink-0 items-center gap-1.5 @min-[380px]:flex">
             <HeadChip value={`${report.landSummary.totalMelaLandHectares} ha`} label="Mela land" />
             {/* Plots, not groups -- `keyActivities.length` is the number of class_group cards,
@@ -850,6 +979,31 @@ export default function SectorReportDrawer({
             />
             <HeadChip value={`${report.utilityInfrastructure.roadLengthKm} km`} label="roads" />
           </div>
+        )}
+        {onExpandedChange && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              toggleExpanded()
+            }}
+            aria-pressed={expanded}
+            aria-label="Expanded view"
+            title={
+              expanded
+                ? 'Leave expanded view and bring the side panels back'
+                : 'Expanded view: hide the side panels and show more detail'
+            }
+            style={
+              expanded
+                ? { backgroundColor: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }
+                : { color: 'var(--map-fg-muted)' }
+            }
+            className="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-[11.5px] font-semibold hover:bg-[var(--map-surface-hover)]"
+          >
+            <IconExpand className="h-[14px] w-[14px]" expanded={expanded} />
+            <span className="hidden @min-[560px]:inline">Expanded view</span>
+          </button>
         )}
         <button
           type="button"
@@ -865,8 +1019,87 @@ export default function SectorReportDrawer({
         </button>
       </div>
 
-      {!collapsed && (
-        <>
+      {!collapsed && workDone && (
+        <div
+          role="tablist"
+          aria-label="Sector report sections"
+          className="flex shrink-0 items-end gap-1 border-b px-4"
+          style={{ borderColor: 'var(--map-panel-border)' }}
+        >
+          {TABS.map((t, i) => {
+            const selected = tab === t.key
+            const Icon = t.key === 'general' ? IconInfo : IconChecklist
+            return (
+              <button
+                key={t.key}
+                ref={(el) => {
+                  tabRefs.current[t.key] = el
+                }}
+                type="button"
+                role="tab"
+                id={`sector-report-tab-${t.key}`}
+                aria-selected={selected}
+                aria-controls={`sector-report-panel-${t.key}`}
+                // Roving tabindex: Tab lands on the selected tab, arrows move between them.
+                tabIndex={selected ? 0 : -1}
+                onClick={() => setTab(t.key)}
+                onKeyDown={(e) => {
+                  let next: (typeof TABS)[number] | undefined
+                  if (e.key === 'ArrowRight') next = TABS[(i + 1) % TABS.length]
+                  else if (e.key === 'ArrowLeft') next = TABS[(i + TABS.length - 1) % TABS.length]
+                  else if (e.key === 'Home') next = TABS[0]
+                  else if (e.key === 'End') next = TABS[TABS.length - 1]
+                  if (!next) return
+                  e.preventDefault()
+                  setTab(next.key)
+                  tabRefs.current[next.key]?.focus()
+                }}
+                className="relative -mb-px flex cursor-pointer items-center gap-1.5 rounded-t-lg px-3 pb-2 pt-2.5 text-[12px] font-semibold transition-colors hover:bg-[var(--map-surface-hover)]"
+                style={{ color: selected ? 'var(--map-fg)' : 'var(--map-fg-muted)' }}
+              >
+                <Icon className="h-[14px] w-[14px]" />
+                {t.label}
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-x-2 bottom-0 h-[2px] rounded-full transition-opacity"
+                  style={{ backgroundColor: 'var(--map-accent)', opacity: selected ? 1 : 0 }}
+                />
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {!collapsed && tab === 'work' && workDone && (
+        <div
+          role="tabpanel"
+          tabIndex={0}
+          id="sector-report-panel-work"
+          aria-labelledby="sector-report-tab-work"
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <SectorWorkTab
+            key={sectorNo}
+            sectorNo={sectorNo ?? 0}
+            summary={workSummary}
+            error={workDone.error}
+            onRetry={workDone.onRetry}
+            expanded={expanded}
+          />
+        </div>
+      )}
+
+      {!collapsed && tab === 'general' && (
+        <div
+          {...(workDone
+            ? {
+                role: 'tabpanel',
+                id: 'sector-report-panel-general',
+                'aria-labelledby': 'sector-report-tab-general',
+              }
+            : {})}
+          className="flex min-h-0 flex-1 flex-col"
+        >
           {loading && (
             <div
               className="flex items-center gap-2 px-5 py-8 text-[12.5px]"
@@ -1141,7 +1374,7 @@ export default function SectorReportDrawer({
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   )

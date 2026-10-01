@@ -1575,7 +1575,7 @@ export default function StatsPanel({
   return (
     <Panel
       icon={icon}
-      title="Stats"
+      title="Layers"
       subtitle={filtered ? (sectorLabel ?? `Sector ${sectorNo}`) : 'All sectors'}
       side="right"
       defaultCollapsed

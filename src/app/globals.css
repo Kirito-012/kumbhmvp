@@ -564,6 +564,26 @@ input[type='checkbox'].kumbh-checkbox {
   }
 }
 
+/* Sector Report > Work Done > Insights: cards rise into place one after another (`--i` is the
+   card's position). backwards-only fill so no stray `transform` lingers once it ends -- see the
+   .animate-fade-in note above. */
+@keyframes insight-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .insight-rise {
+    animation: insight-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+    animation-delay: calc(var(--i, 0) * 80ms);
+  }
+}
+
 /* Directional variant of panel-in for the Heatmap/Ticket mode docked panels (Panel's `entrance`
    prop) -- slides in from whichever edge the panel is actually docked to (left/right) instead of
    just fading in place, so the initial mount into Heatmap/Ticket mode reads as more deliberate than
