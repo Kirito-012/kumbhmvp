@@ -584,6 +584,40 @@ input[type='checkbox'].kumbh-checkbox {
   }
 }
 
+/* Work Done > Tickets: rows, chips and headings ease in one after another (`--i` is the position).
+   Short and backwards-only, like .insight-rise, so nothing is left with a lingering transform. */
+@keyframes swap-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes row-rise {
+  from {
+    opacity: 0;
+    transform: translateY(var(--ry, 8px));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  /* Text that changes in place (a new category's name) -- quicker and subtler than a rise. */
+  .swap-in {
+    animation: swap-in 0.26s ease-out backwards;
+  }
+  /* `--rd` / `--rs` let a response to the user's own action run quicker than the opening sequence. */
+  .row-rise {
+    animation: row-rise var(--rd, 0.42s) cubic-bezier(0.22, 1, 0.36, 1) backwards;
+    animation-delay: calc(var(--i, 0) * var(--rs, 24ms));
+  }
+}
+
 /* Directional variant of panel-in for the Heatmap/Ticket mode docked panels (Panel's `entrance`
    prop) -- slides in from whichever edge the panel is actually docked to (left/right) instead of
    just fading in place, so the initial mount into Heatmap/Ticket mode reads as more deliberate than

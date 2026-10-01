@@ -1082,6 +1082,7 @@ export default function SectorReportDrawer({
             key={sectorNo}
             sectorNo={sectorNo ?? 0}
             summary={workSummary}
+            data={workData}
             error={workDone.error}
             onRetry={workDone.onRetry}
             expanded={expanded}
