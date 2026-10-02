@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { getPool } from '@/server/db/postgres'
 import { GIS_CACHE_HEADERS } from '@/server/http/cache'
+import { demoEncroachedHectares } from '@/lib/encroachment/demo'
 
 export const runtime = 'nodejs'
 
@@ -140,6 +141,12 @@ export async function GET(req: NextRequest) {
       landSummary: {
         totalGeographicHectares: Number(boundary.rows[0].area_hac),
         totalMelaLandHectares: Number(meNoLand.rows[0].hectares ?? 0),
+        // DEMO until an encroachment survey is loaded -- see src/lib/encroachment/demo.ts.
+        encroachedHectares: demoEncroachedHectares(
+          boundary.rows[0].sector_no,
+          Number(meNoLand.rows[0].hectares ?? 0),
+        ),
+        encroachmentIsDemo: true,
         byClass: landSummary,
       },
       keyActivities: Array.from(activityGroups.entries()).map(([classGroup, items]) => ({

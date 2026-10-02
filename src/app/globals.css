@@ -150,6 +150,8 @@
   --map-section-teal-fg: #5eead4;
   --map-section-violet-bg: rgba(167, 139, 250, 0.22);
   --map-section-violet-fg: #c4b5fd;
+  --map-section-red-bg: rgba(248, 113, 113, 0.22);
+  --map-section-red-fg: #fca5a5;
 
   /* MapLibre's zoom/compass control icons are baked as dark-on-transparent SVG background-images
      with no color customization hook -- inverting them is the only way to keep them visible
@@ -293,6 +295,8 @@
   --map-section-teal-fg: #0f766e;
   --map-section-violet-bg: #f5f3ff;
   --map-section-violet-fg: #6d28d9;
+  --map-section-red-bg: #fef2f2;
+  --map-section-red-fg: #b91c1c;
 
   --map-ctrl-icon-filter: none;
 
