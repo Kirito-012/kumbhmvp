@@ -36,6 +36,35 @@
   --radius-md: 12px;
   --radius-sm: 8px;
 
+  /* Dashboard overview (status banner, stat cards, sector map) — dark. Built for readers in their
+     45-55s: solid card faces (no glass/blur), secondary text at >= 10:1, and a calm amber ramp
+     rather than neon. "Open" is amber/orange and "resolved" stays the status green, but the two
+     are never drawn as an adjacent pair (orange vs green collapses under protanopia, dE 5.9) —
+     each bar is one hue with the other figure written out as text. */
+  --dash-card: #14171d;
+  --dash-card-border: rgba(255, 255, 255, 0.16);
+  --dash-track: #2a2f38;
+  --dash-open: #2ec4e6;
+  --dash-done: #3fb37a;
+  --dash-map-land: #171a20;
+  --dash-map-water: #1d3550;
+  --dash-map-stroke: rgba(255, 255, 255, 0.34);
+  --dash-map-halo: #171a20;
+  /* Sequential "open tickets" ramp, low -> high. Dark mode runs dim -> bright so the busiest
+     sector is also the most luminous; --dash-ramp-0 is the neutral "no tickets" fill. */
+  /* The four ticket-status colours, in lockstep with BUCKET_COLORS (src/lib/insights/statusBuckets.ts)
+     so the dashboard's status banner matches the map's Ticket mode and the status badges. */
+  --dash-status-new: #38a3ff;
+  --dash-status-open: #ffc933;
+  --dash-status-pending: #a78bfa;
+  --dash-status-resolved: #22c55e;
+  --dash-ramp-0: #262b34;
+  --dash-ramp-1: #1d4f66;
+  --dash-ramp-2: #1f7391;
+  --dash-ramp-3: #1f9bc2;
+  --dash-ramp-4: #3fc4e6;
+  --dash-ramp-5: #9be8fb;
+
   /* CategoryBreakdown "liquid panel" — dark: deep glass, saturated glowing liquid */
   --category-panel-top: #0d0f16;
   --category-panel-deep: #07080d;
@@ -169,6 +198,28 @@
   --radius-lg: 16px;
   --radius-md: 12px;
   --radius-sm: 8px;
+
+  /* Dashboard overview — light. Same roles as the dark block above. Light runs the ramp the usual
+     way (pale -> deep) on a warm paper map ground; --dash-open / --dash-done clear 4.5:1 on white. */
+  --dash-card: #ffffff;
+  --dash-card-border: #cbd5e1;
+  --dash-track: #e6eaf0;
+  --dash-open: #0b7ea1;
+  --dash-done: #1f7a4d;
+  --dash-map-land: #f5f1e8;
+  --dash-map-water: #cfe2f3;
+  --dash-map-stroke: rgba(15, 23, 42, 0.42);
+  --dash-map-halo: #f5f1e8;
+  --dash-status-new: #1d6fe0;
+  --dash-status-open: #f5b50a;
+  --dash-status-pending: #7c3aed;
+  --dash-status-resolved: #16a34a;
+  --dash-ramp-0: #e3e8ee;
+  --dash-ramp-1: #cfeef7;
+  --dash-ramp-2: #8fd8ec;
+  --dash-ramp-3: #3fb6d6;
+  --dash-ramp-4: #11819f;
+  --dash-ramp-5: #07465c;
 
   /* CategoryBreakdown "liquid panel" — light: solid opaque saturated liquid on white glass, no
      translucent glow (a translucent fill over white is what reads as cheap pastel tint). */
@@ -615,6 +666,65 @@ input[type='checkbox'].kumbh-checkbox {
   .row-rise {
     animation: row-rise var(--rd, 0.42s) cubic-bezier(0.22, 1, 0.36, 1) backwards;
     animation-delay: calc(var(--i, 0) * var(--rs, 24ms));
+  }
+}
+
+/* Dashboard: bars grow, the progress ring sweeps, map sectors fade in one after another, and
+   cards lift on hover. Entrance animations are backwards-fill only (see .animate-fade-in) and live
+   inside no-preference, so reduced-motion users get the finished state straight away. Only the
+   `from` keyframe is written for the ring and bars: the end state is the element's own styling. */
+@keyframes dash-grow-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+@keyframes dash-grow-y {
+  from {
+    transform: scaleY(0);
+  }
+}
+@keyframes dash-ring {
+  from {
+    stroke-dasharray: 0 var(--ring-c);
+  }
+}
+@keyframes dash-sector-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dash-grow-x {
+    transform-origin: left center;
+    animation: dash-grow-x 0.9s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+    animation-delay: calc(var(--i, 0) * 60ms + 250ms);
+  }
+  .dash-grow-y {
+    transform-origin: center bottom;
+    animation: dash-grow-y 0.7s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+    animation-delay: calc(var(--i, 0) * 50ms + 300ms);
+  }
+  .dash-ring {
+    animation: dash-ring 1.3s cubic-bezier(0.16, 1, 0.3, 1) 0.3s backwards;
+  }
+  .dash-sector {
+    animation: dash-sector-in 0.5s ease-out backwards;
+    animation-delay: calc(var(--i, 0) * 25ms + 350ms);
+  }
+  .dash-lift {
+    transition:
+      transform 0.2s ease,
+      box-shadow 0.2s ease,
+      background-color 0.2s ease,
+      border-color 0.2s ease;
+  }
+  .dash-lift:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 24px -12px rgba(0, 0, 0, 0.4);
+    border-color: color-mix(in srgb, var(--foreground) 28%, var(--dash-card-border));
+  }
+  .dash-lift:active {
+    transform: translateY(-1px);
   }
 }
 

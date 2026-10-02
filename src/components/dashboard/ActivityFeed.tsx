@@ -26,8 +26,8 @@ const STAGGER_MS = 45
 export function ActivityFeed({ items }: { items: ActivityItem[] }) {
   if (items.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-2 px-5 py-10 text-center">
-        <p className="text-sm text-muted">No activity yet.</p>
+      <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
+        <p className="text-base text-muted-strong">No activity yet.</p>
       </div>
     )
   }
@@ -38,14 +38,14 @@ export function ActivityFeed({ items }: { items: ActivityItem[] }) {
         <Link
           key={item.id}
           href={item.ticketNumber ? `/tickets/${item.ticketNumber}` : '#'}
-          className="group flex items-center gap-3 px-5 py-3 opacity-0 transition-colors animate-fade-in hover:bg-overlay"
+          className="group flex min-h-[3.5rem] items-center gap-3.5 px-6 py-3 opacity-0 transition-colors animate-fade-in hover:bg-overlay"
           style={{ animationDelay: `${i * STAGGER_MS}ms`, animationFillMode: 'both' }}
         >
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-overlay text-muted-strong transition-colors group-hover:bg-overlay-strong">
-            <TicketIcon className="h-3.5 w-3.5" />
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-overlay text-muted-strong transition-colors group-hover:bg-overlay-strong">
+            <TicketIcon className="h-4 w-4" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm text-muted-strong">
+            <p className="truncate text-base text-muted-strong">
               <span className="font-medium text-foreground">{item.actorName}</span>{' '}
               {ACTION_LABEL[item.action] ?? item.action}{' '}
               {item.ticketNumber && (
@@ -55,7 +55,7 @@ export function ActivityFeed({ items }: { items: ActivityItem[] }) {
               )}
             </p>
           </div>
-          <span className="shrink-0 text-xs text-muted">{timeAgo(item.createdAt)}</span>
+          <span className="shrink-0 text-sm text-muted-strong">{timeAgo(item.createdAt)}</span>
         </Link>
       ))}
     </div>

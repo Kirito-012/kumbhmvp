@@ -1071,6 +1071,34 @@ before/after, so read the comment before "simplifying" any of these:
 
 ---
 
+## 16b. The dashboard (`/dashboard`)
+
+Designed for readers in their 45-55s: large type (title 20px, body 15-16px, headline numbers 34-44px),
+plain-language captions, big click targets, text labels alongside every colour.
+
+- **Order:** `StatusOverview` (progress ring + segmented bar + 4 clickable status tiles linking to
+  `/tickets?status=<bucket>`) → 4 `StatCard`s → `SectorMapOverview` → volume + priority → the unchanged
+  `CategoryBreakdown` tubes → activity + workload. The old "Total tickets" card became "Created this
+  week" (the banner already shows the total).
+- **Data:** `getDashboardData` returns `statusBreakdown` (`{bucket, name, count}` in `BUCKET_ORDER`,
+  folded by `bucketForStatus`). Surveyors see only their own tickets (`forcedAssigneeId`).
+- **Sector map:** `src/server/services/sector-map.service.ts` projects `kumbh.sector_boundary` and
+  `kumbh.river` on the server (simplified, equirectangular) and caches the promise per process; it
+  returns `null` if Postgres is down and the page just omits the map. `SectorMapOverview` draws it as
+  **plain SVG, not MapLibre** (32 polygons, no pan/zoom, keeps the GL bundle off this page). Tabs "By
+  sector" / "By issue" cross-filter each other; the list carries the same numbers as the map, so the map
+  is supplementary. Bins are geometric (`makeBins`), not quantile, because counts are heavily skewed.
+- **Colours:** `--dash-*` tokens in `globals.css` for both themes. Status tokens mirror `BUCKET_COLORS`.
+  Charts use one hue per mark set (orange and green fail the colour-blind check when adjacent) — validate
+  any new palette with the dataviz `validate_palette.js`.
+- Sector/zone display names come from `src/lib/sectorLabel.ts`.
+- **Motion:** sections rise in with `.insight-rise` (`--i` = position); bars/ring/map sectors use the
+  `.dash-grow-x`, `.dash-grow-y`, `.dash-ring`, `.dash-sector` classes and cards use `.dash-lift`
+  (all in `globals.css`, inside `prefers-reduced-motion: no-preference`, backwards-fill only so no
+  lingering `transform`). Numbers count up via the client `CountUp` (server renders the final value).
+
+---
+
 ## 17. Current state
 
 Branch `feat/evac` (not yet merged to `main`). Recent work (this may be stale — check `git log`):

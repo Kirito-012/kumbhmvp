@@ -12,7 +12,7 @@ export type { VolumePoint } from './charts'
  *  `ssr: false` because the chart is a client-only measured-layout component (`ResponsiveContainer`
  *  needs a real box), and because `next/dynamic`'s `ssr: false` is only legal inside a Client
  *  Component -- which is why this wrapper exists rather than a `dynamic()` call in `page.tsx`. The
- *  placeholder holds the chart's exact `h-64` box so nothing below it shifts.
+ *  placeholder holds the chart's exact `h-72` box so nothing below it shifts.
  *
  *  The import MUST stay `'./charts'`, not `'./VolumeChart'`: that shared barrel is what keeps this
  *  and [PriorityBreakdown]'s wrapper in one chunk group. Importing the component directly here gives
@@ -20,6 +20,6 @@ export type { VolumePoint } from './charts'
 export const VolumeChart = dynamic(() => import('./charts').then((m) => m.VolumeChart), {
   ssr: false,
   loading: () => (
-    <div className="h-64 w-full animate-pulse rounded-lg bg-muted/20" aria-hidden="true" />
+    <div className="h-72 w-full animate-pulse rounded-lg bg-muted/20" aria-hidden="true" />
   ),
 })

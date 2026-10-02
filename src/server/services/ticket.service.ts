@@ -16,6 +16,12 @@ import { TagModel } from '@/server/db/models/tag.model'
 import { UserModel } from '@/server/db/models/user.model'
 import { nextSequence } from '@/server/db/models/counter.model'
 import { CLASS_GROUP_COLORS } from '@/lib/classColors'
+import {
+  BUCKET_LABELS,
+  BUCKET_ORDER,
+  bucketForStatus,
+  type StatusBucket,
+} from '@/lib/insights/statusBuckets'
 
 const POPULATE = [
   { path: 'ownerId', select: 'fullname email avatarUrl' },
@@ -266,16 +272,14 @@ export async function getDashboardData(assigneeId?: string) {
   // sequential `await` here is a full round-trip to Atlas that the page's first byte waits on. It
   // used to be 7 of them, though only 3 stages are genuinely dependent — so it is now 3.
   //
-  // Stage 1 — the two small lookup-table reads everything below matches against. resolvedIds is
-  // fetched up front (rather than inside stage 2) so the priority/category aggregations can match
-  // directly against it instead of $lookup-joining ticketstatuses per ticket — a small, cheap query
-  // traded for dropping a $lookup + $unwind from two much larger aggregations. `priorities` depends
-  // on nothing at all and just rides along here.
-  const [resolvedStatusIds, priorities] = await Promise.all([
-    TicketStatusModel.find({ isResolved: true }).select('_id').lean(),
-    getPriorities(),
-  ])
-  const resolvedIds = resolvedStatusIds.map((s) => s._id)
+  // Stage 1 — the two small lookup-table reads everything below matches against. resolvedIds comes
+  // from the full status list up front (rather than inside stage 2) so the priority/category
+  // aggregations can match directly against it instead of $lookup-joining ticketstatuses per
+  // ticket — a small, cheap read traded for dropping a $lookup + $unwind from two much larger
+  // aggregations. Both are the request-cached lookups, so the layout/page/service never re-query
+  // them; the status list also names the status-breakdown banner, so it is read once and reused.
+  const [statuses, priorities] = await Promise.all([getStatuses(), getPriorities()])
+  const resolvedIds = statuses.filter((s) => s.isResolved).map((s) => s._id)
   const openMatch: QueryFilter<Ticket> = { ...baseMatch, statusId: { $nin: resolvedIds } }
 
   // Stage 2 — every query that needs nothing beyond resolvedIds, which is all of them bar the two
@@ -293,6 +297,7 @@ export async function getDashboardData(assigneeId?: string) {
     unassignedCount,
     scopedTicketIds,
     workloadRows,
+    statusRows,
   ] = await Promise.all([
     TicketModel.countDocuments({
       ...baseMatch,
@@ -386,6 +391,12 @@ export async function getDashboardData(assigneeId?: string) {
       { $sort: { count: -1 } },
       { $limit: 6 },
     ]),
+    // Every ticket (resolved included) by status, for the status banner. Scoped by baseMatch like
+    // every other widget, so a Surveyor's banner counts only their own tickets.
+    TicketModel.aggregate([
+      { $match: baseMatch },
+      { $group: { _id: '$statusId', count: { $sum: 1 } } },
+    ]),
   ])
 
   // Stage 3 — the only two queries that genuinely depend on stage 2's results: Recent activity
@@ -475,10 +486,31 @@ export async function getDashboardData(assigneeId?: string) {
   const resolvedByDay = new Map<string, number>(
     volumeRows[0].resolved.map((r: { _id: string; n: number }): [string, number] => [r._id, r.n]),
   )
-  const ticketVolume = days.map((iso) => ({
-    day: dayLabel.format(new Date(iso + 'T00:00:00')),
+  // The last bucket is today (see `days` above). "Today" reads at a glance where "Fri" makes the
+  // reader work out which end of the axis is now — and it explains why that last point is usually
+  // lower: the day isn't over yet.
+  const ticketVolume = days.map((iso, i) => ({
+    day: i === days.length - 1 ? 'Today' : dayLabel.format(new Date(iso + 'T00:00:00')),
     created: createdByDay.get(iso) ?? 0,
     resolved: resolvedByDay.get(iso) ?? 0,
+  }))
+
+  // One entry per status bucket (new/open/pending/resolved), in pipeline order. Folded by bucket
+  // rather than listed per status row so a status an admin adds later lands in a bucket that
+  // already has a colour, instead of becoming a fifth, uncoloured segment.
+  const statusCountById = new Map(statusRows.map((r) => [String(r._id), r.count as number]))
+  const countByBucket = new Map<StatusBucket, number>()
+  for (const s of statuses) {
+    const bucket = bucketForStatus(s)
+    countByBucket.set(
+      bucket,
+      (countByBucket.get(bucket) ?? 0) + (statusCountById.get(String(s._id)) ?? 0),
+    )
+  }
+  const statusBreakdown = BUCKET_ORDER.map((bucket) => ({
+    bucket,
+    name: BUCKET_LABELS[bucket],
+    count: countByBucket.get(bucket) ?? 0,
   }))
 
   const nameById = new Map(workloadUsers.map((u) => [String(u._id), u.fullname]))
@@ -494,6 +526,7 @@ export async function getDashboardData(assigneeId?: string) {
     unassignedCount,
     resolvedTodayCount,
     priorityBreakdown,
+    statusBreakdown,
     categoryBreakdown,
     categorySectors,
     ticketVolume,
