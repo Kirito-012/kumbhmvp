@@ -8,7 +8,7 @@ import { CheckCircle2 } from 'lucide-react'
 
 export type PriorityBreakdownEntry = { name: string; slug: string; color: string; value: number }
 
-const CARD_WIDTH = 176
+const CARD_WIDTH = 208
 const CARD_GAP_ABOVE_CURSOR = 20
 const VIEWPORT_MARGIN = 12
 
@@ -80,7 +80,7 @@ function PriorityHoverCard({
             aria-hidden
           />
           <p
-            className="truncate text-[13px] font-semibold"
+            className="truncate text-[15px] font-semibold"
             style={{ color: 'var(--category-heading)' }}
           >
             {entry.name} priority
@@ -95,7 +95,7 @@ function PriorityHoverCard({
             {entry.value.toLocaleString()}
           </span>
           <span
-            className="text-[11px] font-medium"
+            className="text-[13px] font-medium"
             style={{ color: 'var(--category-label-muted)' }}
           >
             open tickets
@@ -113,7 +113,7 @@ function PriorityHoverCard({
         </div>
 
         <div
-          className="mt-2 flex items-center justify-between text-[11px]"
+          className="mt-2 flex items-center justify-between text-[13px]"
           style={{ color: 'var(--category-label-muted)' }}
         >
           <span>Share of open</span>
@@ -202,11 +202,11 @@ export function PriorityBreakdown({ data: priorityBreakdown }: { data: PriorityB
   return (
     <div
       ref={rootRef}
-      className="flex items-center gap-6"
+      className="flex flex-wrap items-center justify-center gap-x-6 gap-y-4"
       onMouseMove={(e) => setCursor({ x: e.clientX, y: e.clientY })}
     >
       <div
-        className="relative h-36 w-36 shrink-0"
+        className="relative h-40 w-40 shrink-0"
         onMouseLeave={() => {
           setHoverSlug(null)
           setChartHoverSlug(null)
@@ -218,8 +218,8 @@ export function PriorityBreakdown({ data: priorityBreakdown }: { data: PriorityB
               data={priorityBreakdown}
               dataKey="value"
               nameKey="name"
-              innerRadius={44}
-              outerRadius={64}
+              innerRadius={50}
+              outerRadius={72}
               paddingAngle={3}
               stroke="none"
               onMouseEnter={(_, index) => {
@@ -253,12 +253,14 @@ export function PriorityBreakdown({ data: priorityBreakdown }: { data: PriorityB
           </PieChart>
         </ResponsiveContainer>
         <div className="pointer-events-none absolute inset-0 z-0 flex flex-col items-center justify-center">
-          <span className="text-xl font-semibold text-foreground">{total}</span>
-          <span className="text-[10px] text-muted">open</span>
+          <span className="text-[32px] font-semibold leading-none text-foreground">
+            {total.toLocaleString()}
+          </span>
+          <span className="mt-1 text-[15px] font-medium text-muted-strong">open</span>
         </div>
       </div>
 
-      <div className="flex-1 space-y-2.5">
+      <div className="min-w-[11rem] flex-1 space-y-1">
         {priorityBreakdown.map((entry) => (
           <div
             key={entry.name}
@@ -274,18 +276,23 @@ export function PriorityBreakdown({ data: priorityBreakdown }: { data: PriorityB
             }}
             onMouseEnter={() => setHoverSlug(entry.slug)}
             onMouseLeave={() => setHoverSlug(null)}
-            className="flex cursor-pointer items-center justify-between rounded-md text-sm outline-none transition-opacity duration-150 focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-lg px-2 text-base outline-none transition-opacity duration-150 hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             style={{ opacity: hoverSlug && hoverSlug !== entry.slug ? 0.5 : 1 }}
           >
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2.5">
               <span
-                className="h-2 w-2 rounded-full"
+                className="h-3.5 w-3.5 shrink-0 rounded-full"
                 style={{ backgroundColor: entry.color }}
                 aria-hidden
               />
-              <span className="text-muted-strong">{entry.name}</span>
+              <span className="font-medium text-foreground">{entry.name}</span>
             </div>
-            <span className="font-medium text-foreground">{entry.value}</span>
+            <span className="font-semibold tabular-nums text-foreground">
+              {entry.value.toLocaleString()}
+              <span className="ml-1.5 text-sm font-medium text-muted-strong">
+                {total > 0 ? Math.round((entry.value / total) * 100) : 0}%
+              </span>
+            </span>
           </div>
         ))}
       </div>

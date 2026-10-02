@@ -33,13 +33,13 @@ export function WorkloadByAssignee({ data }: { data: WorkloadEntry[] }) {
   }, [])
 
   if (data.length === 0) {
-    return <p className="px-0.5 text-sm text-muted">No open tickets are assigned yet.</p>
+    return <p className="px-0.5 text-base text-muted-strong">No open tickets are assigned yet.</p>
   }
 
   const max = Math.max(1, ...data.map((d) => d.count))
 
   return (
-    <div ref={rootRef} className="space-y-3.5">
+    <div ref={rootRef} className="space-y-4">
       {data.map((d, i) => (
         <div
           key={d.id}
@@ -56,15 +56,15 @@ export function WorkloadByAssignee({ data }: { data: WorkloadEntry[] }) {
           className="cursor-pointer rounded-md opacity-0 outline-none animate-fade-in focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           style={{ animationDelay: `${i * STAGGER_MS}ms`, animationFillMode: 'both' }}
         >
-          <div className="mb-1.5 flex items-center justify-between text-sm">
-            <span className="font-medium text-muted-strong">{d.name}</span>
-            <span className="text-xs text-muted">
-              {d.count} open ticket{d.count === 1 ? '' : 's'}
+          <div className="mb-2 flex items-center justify-between gap-3 text-base">
+            <span className="truncate font-medium text-foreground">{d.name}</span>
+            <span className="shrink-0 text-[15px] text-muted-strong">
+              {d.count.toLocaleString()} open ticket{d.count === 1 ? '' : 's'}
             </span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-overlay-strong">
+          <div className="h-2.5 w-full overflow-hidden rounded-full bg-[var(--dash-track)]">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-accent to-accent-strong"
+              className="h-full rounded-full bg-[var(--dash-open)]"
               style={{
                 width: active ? `${(d.count / max) * 100}%` : '0%',
                 transition: `width ${RISE_MS}ms cubic-bezier(0.16, 1, 0.3, 1) ${i * STAGGER_MS}ms`,

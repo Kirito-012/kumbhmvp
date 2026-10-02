@@ -1,13 +1,24 @@
 'use client'
 
-import { useEffect, useId, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { useId, useMemo, useState, type ReactNode } from 'react'
 import dynamic from 'next/dynamic'
-import { AlertCircle, ArrowDown, ArrowUp, Check, ChevronRight } from 'lucide-react'
+import { ArrowDown, ArrowUp, Check, ChevronRight } from 'lucide-react'
 import { formatDonePct, type WorkDoneSummary } from '@/components/map/SectorWorkDone'
 import { useInsightTheme } from '@/components/map/insights/useInsightTheme'
 import type { SectorInsightsState } from '@/components/map/insights/useSectorInsights'
+import {
+  Card,
+  Dot,
+  InlineError,
+  STACK_ORDER,
+  cssVar,
+  doneTextColor,
+  formatDuration,
+  statusOpacity,
+  useGrown,
+  useTween,
+} from '@/components/map/workDoneUi'
 import { BUCKET_COLORS, BUCKET_LABELS, type StatusBucket } from '@/lib/insights/statusBuckets'
-import type { Theme } from '@/lib/insights/heatScale'
 import type { SectorTrendDay } from '@/lib/insights/types'
 
 // "Insights" view of the Work Done tab: live ticket numbers for the selected sector, nothing else.
@@ -27,59 +38,10 @@ const TicketVolumeChart = dynamic(
 // Seven rows in all (six + the roll-up) is what fits the expanded drawer without scrolling.
 const MAX_CATEGORY_BARS = 6
 
-/** Resolved first (the "done" run), then the unresolved buckets from furthest-along to least. */
-const STACK_ORDER: StatusBucket[] = ['resolved', 'pending', 'open', 'new']
-
-/** Unresolved hues are softened so the green "done" run reads as the progress, not one of four. */
-const statusOpacity = (b: StatusBucket, theme: Theme) =>
-  b === 'resolved' ? 1 : theme === 'dark' ? 0.62 : 0.7
-
-/** Text-safe green for "done" copy: the bright map green fails contrast on a light card. */
-const doneTextColor = (theme: Theme) => (theme === 'dark' ? BUCKET_COLORS.resolved.dark : '#15803d')
-
 // Column template shared by the category rows and their skeleton, so loading never shifts them:
 // name | "33% · 4 left" | bar | chevron.
 const CATEGORY_GRID =
   'grid grid-cols-[minmax(0,10rem)_7.5rem_minmax(0,1fr)_1rem] items-center gap-x-3 @min-[900px]:grid-cols-[minmax(0,13rem)_8rem_minmax(0,1fr)_1rem]'
-
-/** Staggers a card's entrance: `--i` feeds the `.insight-rise` delay in globals.css. */
-const cssVar = (name: string, value: string | number) => ({ [name]: value }) as CSSProperties
-
-const prefersReducedMotion = () =>
-  typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-
-/**
- * 0 -> 1 on an ease-out curve over `ms` (after `delay`), driven by rAF so the ring sweep and its
- * percentage stay in lockstep. Starts at 1 when not animating or when the user prefers reduced
- * motion, so those users never depend on a frame tick to see the final state.
- */
-function useTween(animate: boolean, ms: number, delay = 0) {
-  const [t, setT] = useState(() => (animate && !prefersReducedMotion() ? 0 : 1))
-  useEffect(() => {
-    if (!animate || prefersReducedMotion()) return
-    const start = performance.now() + delay
-    let raf = 0
-    const tick = (now: number) => {
-      const p = Math.min(1, Math.max(0, (now - start) / ms))
-      setT(1 - Math.pow(1 - p, 3))
-      if (p < 1) raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [animate, ms, delay])
-  return t
-}
-
-/** False for the first painted frame, then true -- lets CSS transitions animate from empty. */
-function useGrown(animate: boolean) {
-  const [grown, setGrown] = useState(() => !animate || prefersReducedMotion())
-  useEffect(() => {
-    if (!animate || prefersReducedMotion()) return
-    const id = requestAnimationFrame(() => setGrown(true))
-    return () => cancelAnimationFrame(id)
-  }, [animate])
-  return grown
-}
 
 /**
  * Faint gridlines where the chart's own will land, so its arrival doesn't change the picture.
@@ -95,66 +57,6 @@ function ChartPlaceholder() {
         ))}
       </div>
     </div>
-  )
-}
-
-function formatDuration(hours: number) {
-  if (hours < 48) return `${hours < 10 ? hours.toFixed(1) : Math.round(hours)} h`
-  const days = hours / 24
-  return `${days < 10 ? days.toFixed(1) : Math.round(days)} d`
-}
-
-function Card({
-  title,
-  subtitle,
-  index,
-  rise,
-  className = '',
-  aside,
-  children,
-}: {
-  title: string
-  subtitle: ReactNode
-  /** Position in the entrance sequence. */
-  index: number
-  /** Play the entrance (off for revisits and when a skeleton with the same chrome was showing). */
-  rise: boolean
-  className?: string
-  aside?: ReactNode
-  children: ReactNode
-}) {
-  return (
-    <section
-      className={`${rise ? 'insight-rise ' : ''}flex min-w-0 flex-col rounded-xl border p-4 ${className}`}
-      style={{
-        ...cssVar('--i', index),
-        backgroundColor: 'var(--map-surface-alt)',
-        borderColor: 'var(--map-border)',
-      }}
-    >
-      <header className="mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="text-[15px] font-semibold" style={{ color: 'var(--map-fg)' }}>
-            {title}
-          </h3>
-          <div className="mt-0.5 text-[12px]" style={{ color: 'var(--map-fg-muted)' }}>
-            {subtitle}
-          </div>
-        </div>
-        {aside}
-      </header>
-      {children}
-    </section>
-  )
-}
-
-function Dot({ color, opacity = 1 }: { color: string; opacity?: number }) {
-  return (
-    <span
-      className="h-2.5 w-2.5 shrink-0 rounded-full"
-      style={{ backgroundColor: color, opacity }}
-      aria-hidden="true"
-    />
   )
 }
 
@@ -710,35 +612,6 @@ function InsightsSkeleton() {
           </ul>
         </Card>
       </div>
-    </div>
-  )
-}
-
-function InlineError({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div role="alert" className="flex flex-col items-center gap-3 px-5 py-14 text-center">
-      <span
-        className="flex h-10 w-10 items-center justify-center rounded-full"
-        style={{ backgroundColor: 'var(--danger-soft)', color: 'var(--danger)' }}
-      >
-        <AlertCircle className="h-5 w-5" aria-hidden="true" />
-      </span>
-      <div>
-        <p className="text-[14px] font-semibold" style={{ color: 'var(--map-fg)' }}>
-          Couldn’t load this sector’s tickets
-        </p>
-        <p className="mt-0.5 text-[12px]" style={{ color: 'var(--map-fg-muted)' }} title={message}>
-          Check your connection and try again.
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="cursor-pointer rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition-colors hover:bg-[var(--map-surface-hover)]"
-        style={{ borderColor: 'var(--map-border)', color: 'var(--map-fg)' }}
-      >
-        Try again
-      </button>
     </div>
   )
 }

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import { ParcelIcon, GridIcon, RoadIcon } from '@/components/map/icons'
 import SectorWorkTab from '@/components/map/SectorWorkTab'
+import { DemoBadge } from '@/components/map/SectorWorkHeads'
 import { summarizeWorkDone } from '@/components/map/SectorWorkDone'
 import type { InsightsTicketData } from '@/lib/insights/types'
 
@@ -38,6 +39,9 @@ type Report = {
   landSummary: {
     totalGeographicHectares: number
     totalMelaLandHectares: number
+    /** Hectares of Mela land under encroachment. DEMO figure until a survey is loaded. */
+    encroachedHectares: number
+    encroachmentIsDemo?: boolean
     byClass: Record<string, number>
   }
   keyActivities: { classGroup: string; items: { subclass: string; label: string }[] }[]
@@ -64,6 +68,7 @@ const SECTION_THEMES = {
   amber: { bg: 'var(--map-section-amber-bg)', fg: 'var(--map-section-amber-fg)' },
   teal: { bg: 'var(--map-section-teal-bg)', fg: 'var(--map-section-teal-fg)' },
   violet: { bg: 'var(--map-section-violet-bg)', fg: 'var(--map-section-violet-fg)' },
+  red: { bg: 'var(--map-section-red-bg)', fg: 'var(--map-section-red-fg)' },
 } as const
 type Theme = keyof typeof SECTION_THEMES
 
@@ -104,6 +109,25 @@ function IconTent({ className }: { className?: string }) {
         stroke="currentColor"
         strokeWidth={1.8}
         strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+/** Warning triangle: land that has been built on or occupied without permission. */
+function IconEncroach({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M12 3.5l9 16H3l9-16z"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 10v4.5M12 17.2v.1"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
       />
     </svg>
   )
@@ -316,6 +340,7 @@ function StatTile({
   label,
   share,
   note,
+  demo,
 }: {
   theme: Theme
   icon: (p: { className?: string }) => JSX.Element
@@ -325,6 +350,8 @@ function StatTile({
   share?: number
   /** Plain-text alternative to `share`, for a figure measured against a different denominator. */
   note?: string
+  /** Marks a placeholder figure with a small "Demo" tag beside the label. */
+  demo?: boolean
 }) {
   const t = SECTION_THEMES[theme]
   return (
@@ -350,6 +377,7 @@ function StatTile({
           style={{ color: 'var(--map-fg-muted)' }}
         >
           {label}
+          {demo && <DemoBadge className="ml-1.5 align-middle" />}
         </div>
         {note !== undefined && (
           <div
@@ -546,7 +574,7 @@ function UtilRow({
   )
 }
 
-function HeadChip({ value, label }: { value: string; label: string }) {
+function HeadChip({ value, label, demo }: { value: string; label: string; demo?: boolean }) {
   return (
     <span
       className="flex items-baseline gap-1 rounded-md border px-1.5 py-1 text-[10.5px] leading-none"
@@ -556,6 +584,7 @@ function HeadChip({ value, label }: { value: string; label: string }) {
         {value}
       </span>
       <span style={{ color: 'var(--map-fg-muted)' }}>{label}</span>
+      {demo && <DemoBadge />}
     </span>
   )
 }
@@ -971,6 +1000,11 @@ export default function SectorReportDrawer({
         {tab === 'general' && report && (
           <div className="hidden shrink-0 items-center gap-1.5 @min-[380px]:flex">
             <HeadChip value={`${report.landSummary.totalMelaLandHectares} ha`} label="Mela land" />
+            <HeadChip
+              value={`${report.landSummary.encroachedHectares} ha`}
+              label="encroached"
+              demo={report.landSummary.encroachmentIsDemo}
+            />
             {/* Plots, not groups -- `keyActivities.length` is the number of class_group cards,
                 so a sector with 21 plots across 7 groups read as "7 activities". */}
             <HeadChip
@@ -1082,6 +1116,7 @@ export default function SectorReportDrawer({
             key={sectorNo}
             sectorNo={sectorNo ?? 0}
             summary={workSummary}
+            data={workData}
             error={workDone.error}
             onRetry={workDone.onRetry}
             expanded={expanded}
@@ -1193,6 +1228,22 @@ export default function SectorReportDrawer({
                         : undefined
                     }
                   />
+                  <StatTile
+                    theme="red"
+                    icon={IconEncroach}
+                    value={`${report.landSummary.encroachedHectares} ha`}
+                    label="Encroached land"
+                    demo={report.landSummary.encroachmentIsDemo}
+                    // Against Mela land like the class tiles, so the bar reads as "how much of the
+                    // utilized land is affected".
+                    share={
+                      report.landSummary.totalMelaLandHectares > 0 &&
+                      report.landSummary.encroachedHectares > 0
+                        ? report.landSummary.encroachedHectares /
+                          report.landSummary.totalMelaLandHectares
+                        : undefined
+                    }
+                  />
                   {landClasses.map((cls) => (
                     <StatTile
                       key={cls}
@@ -1219,7 +1270,8 @@ export default function SectorReportDrawer({
                   className="mt-2 text-[10px] leading-snug"
                   style={{ color: 'var(--map-fg-muted)' }}
                 >
-                  Bars show each class as a share of utilized Mela land.
+                  Bars show each class as a share of utilized Mela land. Encroached land is demo
+                  data until a survey is loaded.
                 </p>
               </div>
 

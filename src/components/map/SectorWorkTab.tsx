@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 import SectorOverview from '@/components/map/SectorOverview'
 import { useSectorInsights } from '@/components/map/insights/useSectorInsights'
 import SectorWorkHeads, { DemoBadge } from '@/components/map/SectorWorkHeads'
-import { TicketProgress, type WorkDoneSummary } from '@/components/map/SectorWorkDone'
+import SectorTickets from '@/components/map/SectorTickets'
+import type { WorkDoneSummary } from '@/components/map/SectorWorkDone'
+import type { InsightsTicketData } from '@/lib/insights/types'
 
 type View = 'heads' | 'tickets' | 'insights'
 
@@ -25,12 +27,15 @@ const VIEWS: { key: View; label: string; hint: string }[] = [
 export default function SectorWorkTab({
   sectorNo,
   summary,
+  data,
   error,
   onRetry,
   expanded = false,
 }: {
   sectorNo: number
   summary: WorkDoneSummary | null
+  /** The bulk ticket data `summary` was rolled up from; the Tickets view lists its tickets. */
+  data: InsightsTicketData | null
   error: string | null
   onRetry: () => void
   /** Drawer is in Expanded view: jump to the dashboard, which is built for that much room. */
@@ -49,6 +54,11 @@ export default function SectorWorkTab({
   // It is requested (and the chart code warmed up) as soon as the Work Done tab opens, so by the
   // time the Insights view is selected the trend is usually already here and draws with the rest.
   const [insightsLeft, setInsightsLeft] = useState(false)
+  // The Tickets view is mounted on its first visit and then kept (hidden) while another view shows,
+  // so the category, filters, search and scroll position you left are still there when you return,
+  // and its opening choreography plays once.
+  const [ticketsVisited, setTicketsVisited] = useState(view === 'tickets')
+  if (view === 'tickets' && !ticketsVisited) setTicketsVisited(true)
   const insights = useSectorInsights(true, sectorNo)
   useEffect(() => {
     void import('@/components/map/SectorTicketCharts')
@@ -56,13 +66,21 @@ export default function SectorWorkTab({
   // Category the Tickets view should open on (set when a bar in Insights is selected).
   const [focusCategory, setFocusCategory] = useState<string | undefined>(undefined)
 
+  // Plot numbers, read off the subjects of the tickets the sector detail lists (the most pressing
+  // ones); the Tickets view shows these in place of the bare parcel id.
+  const plots = new Map<number, string>()
+  for (const t of insights.data?.tickets ?? []) {
+    const plot = /Plot\s+(\S.*)$/.exec(t.subject)?.[1]
+    if (plot) plots.set(t.number, plot)
+  }
+
   function selectView(next: View, category?: string) {
     if (view === 'insights' && next !== 'insights') setInsightsLeft(true)
     setFocusCategory(category)
     setView(next)
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-2 px-4 pt-3">
         <div
           role="group"
@@ -104,13 +122,29 @@ export default function SectorWorkTab({
           animate={!insightsLeft}
           onOpenCategory={(name) => selectView('tickets', name)}
         />
-      ) : (
-        <TicketProgress
-          summary={summary}
-          error={error}
-          onRetry={onRetry}
-          initialOpen={focusCategory}
-        />
+      ) : null}
+      {ticketsVisited && (
+        // Hidden with visibility, not display:none, so it keeps its layout and scroll position
+        // (and its measurements stay valid); inert takes it out of the tab order and the a11y tree.
+        <div
+          className={
+            view === 'tickets'
+              ? 'flex min-h-0 flex-1 flex-col'
+              : 'pointer-events-none invisible absolute inset-0 flex flex-col'
+          }
+          inert={view !== 'tickets'}
+        >
+          <SectorTickets
+            summary={summary}
+            data={data}
+            sectorNo={sectorNo}
+            error={error}
+            onRetry={onRetry}
+            plots={plots}
+            active={view === 'tickets'}
+            initialOpen={focusCategory}
+          />
+        </div>
       )}
     </div>
   )
