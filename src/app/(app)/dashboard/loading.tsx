@@ -12,67 +12,69 @@ export default function DashboardLoading() {
       />
 
       <main className="flex-1 space-y-6 px-4 py-5 sm:px-8 sm:py-7">
-        {/* Status overview: progress ring + status bar, then the four status tiles */}
-        <DashCard className="p-6 sm:p-8">
-          <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:gap-12">
-            <div className="flex shrink-0 items-center gap-6">
-              <Skeleton className="h-[150px] w-[150px] rounded-full" />
-              <div>
-                <Skeleton className="h-5 w-36" />
-                <Skeleton className="mt-3 h-4 w-44" />
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_21rem] xl:items-start">
+          <div className="min-w-0 space-y-6">
+            {/* Status overview: progress ring + status bar, then the four status tiles */}
+            <DashCard className="p-6 sm:p-8">
+              <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:gap-12">
+                <div className="flex shrink-0 items-center gap-6">
+                  <Skeleton className="h-[150px] w-[150px] rounded-full" />
+                  <div>
+                    <Skeleton className="h-5 w-36" />
+                    <Skeleton className="mt-3 h-4 w-44" />
+                  </div>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <Skeleton className="h-5 w-48" />
+                  <Skeleton className="mt-3 h-10 w-full rounded-xl" />
+                </div>
               </div>
-            </div>
-            <div className="min-w-0 flex-1">
-              <Skeleton className="h-5 w-48" />
-              <Skeleton className="mt-3 h-10 w-full rounded-xl" />
-            </div>
+              <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="rounded-xl border border-[var(--dash-card-border)] p-4">
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="mt-3 h-8 w-20" />
+                    <Skeleton className="mt-3 h-4 w-40" />
+                  </div>
+                ))}
+              </div>
+            </DashCard>
+
+            {/* Sector map + ranked list */}
+            <DashCard>
+              <div className="flex items-start gap-3.5 px-6 pt-6">
+                <Skeleton className="h-11 w-11 rounded-xl" />
+                <div>
+                  <Skeleton className="h-5 w-56" />
+                  <Skeleton className="mt-2.5 h-4 w-80 max-w-full" />
+                </div>
+              </div>
+              <div className="grid gap-7 p-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+                <Skeleton className="aspect-[600/465] w-full rounded-xl" />
+                <div className="space-y-2">
+                  <Skeleton className="h-[3.25rem] w-full rounded-xl" />
+                  <Skeleton className="mt-4 h-5 w-64" />
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <Skeleton key={i} className="h-[3.75rem] w-full rounded-xl" />
+                  ))}
+                </div>
+              </div>
+            </DashCard>
           </div>
-          <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-1">
             {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="rounded-xl border border-[var(--dash-card-border)] p-4">
-                <Skeleton className="h-4 w-24" />
-                <Skeleton className="mt-3 h-8 w-20" />
-                <Skeleton className="mt-3 h-4 w-40" />
-              </div>
+              <DashCard key={i} className="p-6">
+                <div className="flex items-center justify-between">
+                  <Skeleton className="h-5 w-28" />
+                  <Skeleton className="h-11 w-11 rounded-xl" />
+                </div>
+                <Skeleton className="mt-3 h-11 w-24" />
+                <Skeleton className="mt-3 h-4 w-44" />
+                <Skeleton className="mt-4 h-2.5 w-full rounded-full" />
+              </DashCard>
             ))}
           </div>
-        </DashCard>
-
-        {/* Stat cards */}
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <DashCard key={i} className="p-6">
-              <div className="flex items-center justify-between">
-                <Skeleton className="h-5 w-28" />
-                <Skeleton className="h-11 w-11 rounded-xl" />
-              </div>
-              <Skeleton className="mt-3 h-11 w-24" />
-              <Skeleton className="mt-3 h-4 w-44" />
-              <Skeleton className="mt-4 h-2.5 w-full rounded-full" />
-            </DashCard>
-          ))}
         </div>
-
-        {/* Sector map + ranked list */}
-        <DashCard>
-          <div className="flex items-start gap-3.5 px-6 pt-6">
-            <Skeleton className="h-11 w-11 rounded-xl" />
-            <div>
-              <Skeleton className="h-5 w-56" />
-              <Skeleton className="mt-2.5 h-4 w-80 max-w-full" />
-            </div>
-          </div>
-          <div className="grid gap-7 p-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
-            <Skeleton className="aspect-[600/465] w-full rounded-xl" />
-            <div className="space-y-2">
-              <Skeleton className="h-[3.25rem] w-full rounded-xl" />
-              <Skeleton className="mt-4 h-5 w-64" />
-              {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="h-[3.75rem] w-full rounded-xl" />
-              ))}
-            </div>
-          </div>
-        </DashCard>
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
           {/* Volume chart */}

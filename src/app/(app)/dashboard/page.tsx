@@ -57,73 +57,79 @@ export default async function DashboardPage() {
       />
 
       <main className="flex-1 space-y-6 px-4 py-5 sm:px-8 sm:py-7">
-        {/* The lead: how far along everything is, and where each ticket stands. */}
-        <div className="insight-rise" style={rise(0)}>
-          <StatusOverview data={data.statusBreakdown} mine={mine} />
-        </div>
-
-        {/* The four numbers people open the page for, each with a sentence that explains it. */}
+        {/* Two columns on a wide screen: the lead and the map on the left, the four numbers people
+            open the page for stacked down the right (and pinned, so they stay beside the map). Below
+            xl everything stacks. */}
         <div
-          className="insight-rise grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4"
-          style={rise(1)}
+          className="insight-rise grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_21rem] xl:items-start"
+          style={rise(0)}
         >
-          <StatCard
-            label={mine ? 'My open tickets' : 'Open tickets'}
-            value={data.openTicketsCount}
-            caption={`${openPct}% of all tickets still need work`}
-            icon={<Inbox className="h-5 w-5" />}
-            tone="open"
-            meter={share(data.openTicketsCount, data.totalCount)}
-            href="/tickets?status=unresolved"
-          />
-          <StatCard
-            label="Unassigned"
-            value={data.unassignedCount}
-            caption={
-              mine || unassignedPct === null
-                ? undefined
-                : data.openTicketsCount === 0
-                  ? 'Nothing is waiting for an owner'
-                  : `${unassignedPct}% of open tickets have no owner yet`
-            }
-            icon={<UserX className="h-5 w-5" />}
-            tone="attention"
-            meter={
-              mine || data.unassignedCount === null
-                ? undefined
-                : share(data.unassignedCount, data.openTicketsCount)
-            }
-            href={mine ? undefined : '/tickets?assignee=unassigned'}
-          />
-          <StatCard
-            label="Resolved today"
-            value={data.resolvedTodayCount}
-            caption={`${resolvedWeek.toLocaleString()} resolved in the last 7 days`}
-            icon={<CheckCircle2 className="h-5 w-5" />}
-            tone="done"
-            bars={{ values: data.ticketVolume.map((d) => d.resolved), labels: days }}
-          />
-          <StatCard
-            label="Created this week"
-            value={createdWeek}
-            caption="New tickets raised in the last 7 days"
-            icon={<FilePlus2 className="h-5 w-5" />}
-            tone="info"
-            bars={{ values: data.ticketVolume.map((d) => d.created), labels: days }}
-          />
+          <div className="min-w-0 space-y-6">
+            {/* The lead: how far along everything is, and where each ticket stands. */}
+            <StatusOverview data={data.statusBreakdown} mine={mine} />
+
+            {/* Where the work is — sector map + ranked lists by sector or by issue. */}
+            <SectorMapOverview
+              map={sectorMap}
+              sectors={data.categorySectors}
+              categories={data.categoryBreakdown}
+              mine={mine}
+            />
+          </div>
+
+          {/* Each number carries a sentence that explains it. */}
+          <aside
+            aria-label="Key numbers"
+            className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:sticky xl:top-24 xl:grid-cols-1"
+          >
+            <StatCard
+              label={mine ? 'My open tickets' : 'Open tickets'}
+              value={data.openTicketsCount}
+              caption={`${openPct}% of all tickets still need work`}
+              icon={<Inbox className="h-5 w-5" />}
+              tone="open"
+              meter={share(data.openTicketsCount, data.totalCount)}
+              href="/tickets?status=unresolved"
+            />
+            <StatCard
+              label="Unassigned"
+              value={data.unassignedCount}
+              caption={
+                mine || unassignedPct === null
+                  ? undefined
+                  : data.openTicketsCount === 0
+                    ? 'Nothing is waiting for an owner'
+                    : `${unassignedPct}% of open tickets have no owner yet`
+              }
+              icon={<UserX className="h-5 w-5" />}
+              tone="attention"
+              meter={
+                mine || data.unassignedCount === null
+                  ? undefined
+                  : share(data.unassignedCount, data.openTicketsCount)
+              }
+              href={mine ? undefined : '/tickets?assignee=unassigned'}
+            />
+            <StatCard
+              label="Resolved today"
+              value={data.resolvedTodayCount}
+              caption={`${resolvedWeek.toLocaleString()} resolved in the last 7 days`}
+              icon={<CheckCircle2 className="h-5 w-5" />}
+              tone="done"
+              bars={{ values: data.ticketVolume.map((d) => d.resolved), labels: days }}
+            />
+            <StatCard
+              label="Created this week"
+              value={createdWeek}
+              caption="New tickets raised in the last 7 days"
+              icon={<FilePlus2 className="h-5 w-5" />}
+              tone="info"
+              bars={{ values: data.ticketVolume.map((d) => d.created), labels: days }}
+            />
+          </aside>
         </div>
 
-        {/* Where the work is — sector map + ranked lists by sector or by issue. */}
-        <div className="insight-rise" style={rise(2)}>
-          <SectorMapOverview
-            map={sectorMap}
-            sectors={data.categorySectors}
-            categories={data.categoryBreakdown}
-            mine={mine}
-          />
-        </div>
-
-        <div className="insight-rise grid grid-cols-1 gap-6 xl:grid-cols-3" style={rise(3)}>
+        <div className="insight-rise grid grid-cols-1 gap-6 xl:grid-cols-3" style={rise(1)}>
           {/* Volume chart */}
           <DashCard className="xl:col-span-2">
             <DashCardHeader
@@ -176,11 +182,11 @@ export default async function DashboardPage() {
         </div>
 
         {/* Category breakdown — renders its own fixed-dark panel chrome, no Card wrapper */}
-        <div className="insight-rise" style={rise(4)}>
+        <div className="insight-rise" style={rise(2)}>
           <CategoryBreakdown data={data.categoryBreakdown} sectors={data.categorySectors} />
         </div>
 
-        <div className="insight-rise grid grid-cols-1 gap-6 xl:grid-cols-3" style={rise(5)}>
+        <div className="insight-rise grid grid-cols-1 gap-6 xl:grid-cols-3" style={rise(3)}>
           {/* Recent activity */}
           <DashCard className="xl:col-span-2">
             <DashCardHeader

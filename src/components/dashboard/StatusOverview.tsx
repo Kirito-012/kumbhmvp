@@ -55,9 +55,9 @@ export function StatusOverview({
   return (
     <section
       aria-labelledby="status-overview-title"
-      className="rounded-2xl border border-[var(--dash-card-border)] bg-[var(--dash-card)] p-6 sm:p-8"
+      className="@container rounded-2xl border border-[var(--dash-card-border)] bg-[var(--dash-card)] p-6 sm:p-8"
     >
-      <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:gap-12">
+      <div className="flex flex-col gap-6 @min-[560px]:flex-row @min-[560px]:items-center @min-[560px]:gap-8">
         {/* Progress ring */}
         <div className="flex shrink-0 items-center gap-6">
           <div className="relative" style={{ width: RING_SIZE, height: RING_SIZE }}>
@@ -99,7 +99,11 @@ export function StatusOverview({
               <span className="mt-1 text-[15px] font-medium text-muted-strong">resolved</span>
             </div>
           </div>
-          <div className="max-w-[15rem]">
+        </div>
+
+        {/* One bar showing how every ticket divides across the four statuses */}
+        <div className="min-w-0 flex-1">
+          <div>
             <h2
               id="status-overview-title"
               className="text-xl font-semibold leading-snug text-foreground"
@@ -112,11 +116,7 @@ export function StatusOverview({
                 : `${resolved.toLocaleString()} of ${total.toLocaleString()} ${noun} are resolved.`}
             </p>
           </div>
-        </div>
-
-        {/* One bar showing how every ticket divides across the four statuses */}
-        <div className="min-w-0 flex-1">
-          <h3 className="text-lg font-semibold text-foreground">Where every ticket stands</h3>
+          <h3 className="mt-5 text-lg font-semibold text-foreground">Where every ticket stands</h3>
           {total > 0 ? (
             // 2px surface gaps between segments (flex gap) — the gap, not a border, separates them.
             <div className="mt-3 flex h-10 gap-0.5 overflow-hidden rounded-xl" aria-hidden>
@@ -144,7 +144,7 @@ export function StatusOverview({
       </div>
 
       {/* The four statuses, spelled out — a legend you can read and click, not just colours. */}
-      <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-6 grid grid-cols-1 gap-3 @min-[420px]:grid-cols-2 @min-[640px]:grid-cols-4">
         {data.map((s) => (
           <Link
             key={s.bucket}
@@ -158,12 +158,15 @@ export function StatusOverview({
                 aria-hidden
               />
               <span className="text-base font-semibold text-foreground">{s.name}</span>
-              <span className="ml-auto text-[15px] font-medium text-muted-strong">
-                {pctLabel(s.count, total)} of all
-              </span>
             </div>
-            <p className="mt-2.5 text-[34px] font-semibold leading-none tracking-tight text-foreground">
-              <CountUp value={s.count} />
+            <p className="mt-2.5 flex items-baseline justify-between gap-2">
+              <span className="text-[34px] font-semibold leading-none tracking-tight text-foreground">
+                <CountUp value={s.count} />
+              </span>
+              <span className="text-[15px] font-medium text-muted-strong">
+                {pctLabel(s.count, total)}
+                <span className="hidden @min-[860px]:inline"> of all</span>
+              </span>
             </p>
             <p className="mt-2 text-[15px] leading-snug text-muted-strong">
               {BUCKET_HINT[s.bucket]}

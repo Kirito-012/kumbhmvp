@@ -204,7 +204,7 @@ export function SectorMapOverview({
     <section
       ref={sectionRef}
       aria-labelledby="sector-overview-title"
-      className="scroll-mt-24 rounded-2xl border border-[var(--dash-card-border)] bg-[var(--dash-card)]"
+      className="@container scroll-mt-24 rounded-2xl border border-[var(--dash-card-border)] bg-[var(--dash-card)]"
     >
       <div className="flex items-start gap-3.5 px-6 pt-6">
         <div
@@ -231,13 +231,13 @@ export function SectorMapOverview({
       <div
         className={cn(
           'grid gap-7 p-6',
-          map && 'lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] lg:items-start',
+          map && '@min-[640px]:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] @min-[640px]:items-start',
         )}
       >
         {/* ── Map ─────────────────────────────────────────────────────────────────────────── */}
         {map && (
           // Stays in view beside a long (expanded) list; only where the window is tall enough to hold it.
-          <div className="min-w-0 lg:[@media(min-height:720px)]:sticky lg:[@media(min-height:720px)]:top-24">
+          <div className="min-w-0 @min-[640px]:[@media(min-height:720px)]:sticky @min-[640px]:[@media(min-height:720px)]:top-24">
             <div className="relative overflow-hidden rounded-xl border border-[var(--dash-card-border)]">
               <svg
                 viewBox={`0 0 ${map.width} ${map.height}`}
