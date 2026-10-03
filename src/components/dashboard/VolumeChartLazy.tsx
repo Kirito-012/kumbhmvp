@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic'
 export type { VolumePoint } from './charts'
 
 /** recharts is ~314 KB raw / ~92 KB gzipped and is the bulk of `/dashboard`'s client JS. Both charts
- *  that pull it in sit in the second grid row, below the four StatCards carrying the numbers the
+ *  that pull it in sit in the second grid row, below the work-heads panels carrying the numbers the
  *  page is opened for -- so eagerly importing it meant parsing and executing it before any of the
  *  above-the-fold content became interactive, to render something not yet on screen.
  *

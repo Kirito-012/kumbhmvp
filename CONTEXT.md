@@ -1076,12 +1076,16 @@ before/after, so read the comment before "simplifying" any of these:
 Designed for readers in their 45-55s: large type (title 20px, body 15-16px, headline numbers 34-44px),
 plain-language captions, big click targets, text labels alongside every colour.
 
-- **Order:** `StatusOverview` (progress ring + segmented bar + 4 clickable status tiles linking to
-  `/tickets?status=<bucket>`) → 4 `StatCard`s → `SectorMapOverview` → volume + priority → the unchanged
-  `CategoryBreakdown` tubes → activity + workload. The old "Total tickets" card became "Created this
-  week" (the banner already shows the total).
-- **Data:** `getDashboardData` returns `statusBreakdown` (`{bucket, name, count}` in `BUCKET_ORDER`,
-  folded by `bucketForStatus`). Surveyors see only their own tickets (`forcedAssigneeId`).
+- **Order:** left column `WorkHeadsOverview` (a tile per main head: icon, % complete, stacked status bar,
+  "delayed in N sectors") → `SectorMapOverview`; right column `WorkHeadsHighlights` (all-tasks status
+  split + the heads with the most delayed tasks); then volume + priority → the unchanged
+  `CategoryBreakdown` tubes → activity + workload. The ticket status banner and four stat cards were
+  removed in favour of the heads; `getDashboardData` still returns `statusBreakdown` for reuse.
+- **Work heads data is DEMO:** `src/lib/workHeads/overview.ts` rolls `buildSectorWorkHeads` (demo.ts)
+  up over every sector on the map. Replace that source with a real fetch and these panels follow. Head
+  icons / status labels live in `src/lib/workHeads/ui.ts`, shared with the Sector Report tab; status
+  colours are the `--dash-wh-*` tokens.
+- **Data:** surveyors see only their own tickets (`forcedAssigneeId`) in the ticket widgets below.
 - **Sector map:** `src/server/services/sector-map.service.ts` projects `kumbh.sector_boundary` and
   `kumbh.river` on the server (simplified, equirectangular) and caches the promise per process; it
   returns `null` if Postgres is down and the page just omits the map. `SectorMapOverview` draws it as
