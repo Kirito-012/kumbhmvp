@@ -58,6 +58,10 @@
   --dash-status-open: #ffc933;
   --dash-status-pending: #a78bfa;
   --dash-status-resolved: #22c55e;
+  --dash-wh-completed: #22c55e;
+  --dash-wh-progress: #38bdf8;
+  --dash-wh-delayed: #f87171;
+  --dash-wh-idle: #94a3b8;
   --dash-ramp-0: #262b34;
   --dash-ramp-1: #1d4f66;
   --dash-ramp-2: #1f7391;
@@ -216,6 +220,10 @@
   --dash-status-open: #f5b50a;
   --dash-status-pending: #7c3aed;
   --dash-status-resolved: #16a34a;
+  --dash-wh-completed: #16a34a;
+  --dash-wh-progress: #0284c7;
+  --dash-wh-delayed: #dc2626;
+  --dash-wh-idle: #64748b;
   --dash-ramp-0: #e3e8ee;
   --dash-ramp-1: #cfeef7;
   --dash-ramp-2: #8fd8ec;

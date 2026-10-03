@@ -1,7 +1,7 @@
 import { Topbar } from '@/components/layout/Topbar'
 import { DashCard, DashCardHeader } from '@/components/dashboard/DashCard'
-import { StatCard } from '@/components/dashboard/StatCard'
-import { StatusOverview } from '@/components/dashboard/StatusOverview'
+import { WorkHeadsOverview } from '@/components/dashboard/WorkHeadsOverview'
+import { WorkHeadsHighlights } from '@/components/dashboard/WorkHeadsHighlights'
 import { SectorMapOverview } from '@/components/dashboard/SectorMapOverview'
 import { VolumeChart } from '@/components/dashboard/VolumeChartLazy'
 import { PriorityBreakdown } from '@/components/dashboard/PriorityBreakdownLazy'
@@ -9,23 +9,14 @@ import { CategoryBreakdown } from '@/components/dashboard/CategoryBreakdown'
 import { WorkloadByAssignee } from '@/components/dashboard/WorkloadByAssignee'
 import { ActivityFeed } from '@/components/dashboard/ActivityFeed'
 import { DashboardAutoRefresh } from '@/components/dashboard/DashboardAutoRefresh'
-import {
-  Inbox,
-  CheckCircle2,
-  UserX,
-  FilePlus2,
-  TrendingUp,
-  AlertTriangle,
-  Users2,
-} from 'lucide-react'
+import { Inbox, TrendingUp, AlertTriangle, Users2 } from 'lucide-react'
 import { requireTicketScope } from '@/server/auth/session'
 import { getDashboardData } from '@/server/services/ticket.service'
 import { getSectorMapData } from '@/server/services/sector-map.service'
+import { buildWorkHeadsOverview } from '@/lib/workHeads/overview'
 
 /** Sections rise into place one after another (`--i` is the position); see .insight-rise. */
 const rise = (i: number) => ({ '--i': i }) as React.CSSProperties
-
-const share = (part: number, whole: number) => (whole > 0 ? part / whole : 0)
 
 export default async function DashboardPage() {
   const { forcedAssigneeId } = await requireTicketScope()
@@ -37,15 +28,13 @@ export default async function DashboardPage() {
     getSectorMapData(),
   ])
 
-  const days = data.ticketVolume.map((d) => d.day)
   const createdWeek = data.ticketVolume.reduce((sum, d) => sum + d.created, 0)
   const resolvedWeek = data.ticketVolume.reduce((sum, d) => sum + d.resolved, 0)
 
-  const openPct = Math.round(share(data.openTicketsCount, data.totalCount) * 100)
-  const unassignedPct =
-    data.unassignedCount === null
-      ? null
-      : Math.round(share(data.unassignedCount, data.openTicketsCount) * 100)
+  // DEMO figures (no work-progress store yet): one roll-up over every sector on the map.
+  const workHeads = buildWorkHeadsOverview(
+    sectorMap?.sectors.map((s) => s.sectorNo) ?? Array.from({ length: 30 }, (_, i) => i + 1),
+  )
 
   return (
     <>
@@ -57,16 +46,14 @@ export default async function DashboardPage() {
       />
 
       <main className="flex-1 space-y-6 px-4 py-5 sm:px-8 sm:py-7">
-        {/* Two columns on a wide screen: the lead and the map on the left, the four numbers people
-            open the page for stacked down the right (and pinned, so they stay beside the map). Below
-            xl everything stacks. */}
+        {/* Two columns on a wide screen: the work heads and the map on the left, the status of all
+            tasks and the heads needing attention on the right. Below xl everything stacks. */}
         <div
           className="insight-rise grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_21rem] xl:items-start"
           style={rise(0)}
         >
           <div className="min-w-0 space-y-6">
-            {/* The lead: how far along everything is, and where each ticket stands. */}
-            <StatusOverview data={data.statusBreakdown} mine={mine} />
+            <WorkHeadsOverview data={workHeads} />
 
             {/* Where the work is — sector map + ranked lists by sector or by issue. */}
             <SectorMapOverview
@@ -77,56 +64,9 @@ export default async function DashboardPage() {
             />
           </div>
 
-          {/* Each number carries a sentence that explains it. */}
-          <aside
-            aria-label="Key numbers"
-            className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:sticky xl:top-24 xl:grid-cols-1"
-          >
-            <StatCard
-              label={mine ? 'My open tickets' : 'Open tickets'}
-              value={data.openTicketsCount}
-              caption={`${openPct}% of all tickets still need work`}
-              icon={<Inbox className="h-5 w-5" />}
-              tone="open"
-              meter={share(data.openTicketsCount, data.totalCount)}
-              href="/tickets?status=unresolved"
-            />
-            <StatCard
-              label="Unassigned"
-              value={data.unassignedCount}
-              caption={
-                mine || unassignedPct === null
-                  ? undefined
-                  : data.openTicketsCount === 0
-                    ? 'Nothing is waiting for an owner'
-                    : `${unassignedPct}% of open tickets have no owner yet`
-              }
-              icon={<UserX className="h-5 w-5" />}
-              tone="attention"
-              meter={
-                mine || data.unassignedCount === null
-                  ? undefined
-                  : share(data.unassignedCount, data.openTicketsCount)
-              }
-              href={mine ? undefined : '/tickets?assignee=unassigned'}
-            />
-            <StatCard
-              label="Resolved today"
-              value={data.resolvedTodayCount}
-              caption={`${resolvedWeek.toLocaleString()} resolved in the last 7 days`}
-              icon={<CheckCircle2 className="h-5 w-5" />}
-              tone="done"
-              bars={{ values: data.ticketVolume.map((d) => d.resolved), labels: days }}
-            />
-            <StatCard
-              label="Created this week"
-              value={createdWeek}
-              caption="New tickets raised in the last 7 days"
-              icon={<FilePlus2 className="h-5 w-5" />}
-              tone="info"
-              bars={{ values: data.ticketVolume.map((d) => d.created), labels: days }}
-            />
-          </aside>
+          <div className="xl:sticky xl:top-24">
+            <WorkHeadsHighlights data={workHeads} />
+          </div>
         </div>
 
         <div className="insight-rise grid grid-cols-1 gap-6 xl:grid-cols-3" style={rise(1)}>
