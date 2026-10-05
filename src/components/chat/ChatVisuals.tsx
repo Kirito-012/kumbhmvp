@@ -1,6 +1,7 @@
 'use client'
 
-import { MapPin, Ticket } from 'lucide-react'
+import Link from 'next/link'
+import { MapPin } from 'lucide-react'
 import type {
   ChatVisual,
   ProgressVisual,
@@ -21,15 +22,8 @@ const COLOR: Record<WorkStatus, string> = {
   'not-started': 'var(--dash-wh-idle)',
 }
 
-const HI_LABEL: Record<WorkStatus, string> = {
-  completed: 'पूर्ण',
-  'in-progress': 'प्रगति पर',
-  delayed: 'विलंबित',
-  'not-started': 'शुरू नहीं',
-}
-
 const CARD =
-  'rounded-2xl border border-[var(--border-strong)] bg-[var(--background-elevated)] p-3.5'
+  'rounded-[var(--radius-md)] border border-[var(--border-strong)] bg-[var(--background-elevated)] p-3.5'
 const TRACK = 'var(--dash-track)'
 
 function titleCase(s: string) {
@@ -43,10 +37,10 @@ function sectorLabel(s: SectorRef) {
 function DemoPill() {
   return (
     <span
-      className="rounded-full border border-[var(--border-strong)] px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-strong"
+      className="rounded-[4px] border border-[var(--border-strong)] px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-strong"
       title="Sample figures — no live work-progress data yet"
     >
-      Demo
+      Demo data
     </span>
   )
 }
@@ -55,14 +49,14 @@ function StatusChip({ status }: { status: WorkStatus }) {
   const Icon = STATUS_ICON[status]
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[12px] font-semibold"
+      className="inline-flex shrink-0 items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[12px] font-semibold"
       style={{
-        color: COLOR[status],
+        color: `color-mix(in srgb, ${COLOR[status]} 70%, var(--foreground))`,
         backgroundColor: `color-mix(in srgb, ${COLOR[status]} 16%, transparent)`,
       }}
     >
       <Icon className="h-3 w-3" aria-hidden />
-      {STATUS_LABEL[status]} / {HI_LABEL[status]}
+      {STATUS_LABEL[status]}
     </span>
   )
 }
@@ -88,7 +82,7 @@ function Donut({
   const c = 2 * Math.PI * r
   const total = segments.reduce((n, s) => n + s.value, 0)
   const live = segments.filter((s) => s.value > 0)
-  const gap = live.length > 1 ? Math.min(3, c / 60) : 0
+  const gap = live.filter((x) => x.color !== 'transparent').length > 1 ? Math.min(3, c / 60) : 0
   let offset = 0
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
@@ -131,7 +125,10 @@ function Donut({
           })}
       </svg>
       {center && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+        <div
+          className="absolute inset-0 flex flex-col items-center justify-center text-center"
+          aria-hidden
+        >
           {center}
         </div>
       )}
@@ -152,6 +149,7 @@ function ProgressRing({
   color?: string
   big?: boolean
 }) {
+  percent = Math.max(0, Math.min(100, percent))
   return (
     <Donut
       size={size}
@@ -175,45 +173,36 @@ function ProgressRing({
   )
 }
 
-function StatusDonut({ counts }: { counts: StatusCounts }) {
+function StatusBar({ counts }: { counts: StatusCounts }) {
   const total = STATUS_ORDER.reduce((n, s) => n + counts[s], 0)
   return (
-    <div className="flex items-center gap-4">
-      <Donut
-        size={132}
-        thickness={20}
-        label="Sub-heads by status"
-        segments={STATUS_ORDER.map((s) => ({ value: counts[s], color: COLOR[s] }))}
-        center={
-          <>
-            <span className="text-3xl font-semibold leading-none text-foreground">{total}</span>
-            <span className="mt-1 text-[11px] leading-tight text-muted-strong">
-              sub-heads
-              <br />
-              उप-कार्य
-            </span>
-          </>
-        }
-      />
-      <ul className="min-w-0 flex-1 space-y-1.5">
+    <div className="min-w-0 flex-1">
+      <div
+        className="flex h-2.5 gap-px overflow-hidden rounded-[2px] bg-[var(--dash-track)]"
+        role="img"
+        aria-label={`${total} sub-heads by status`}
+      >
+        {STATUS_ORDER.filter((s) => counts[s] > 0).map((s) => (
+          <span
+            key={s}
+            className="chat-bar h-full"
+            style={{ width: `${(counts[s] / total) * 100}%`, backgroundColor: COLOR[s] }}
+          />
+        ))}
+      </div>
+      <ul className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5">
         {STATUS_ORDER.map((s) => {
           const Icon = STATUS_ICON[s]
           return (
-            <li key={s} className="flex items-center gap-2 text-[13px]">
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: COLOR[s] }}
-                aria-hidden
-              />
-              <Icon className="h-3.5 w-3.5 shrink-0 text-muted-strong" aria-hidden />
-              <span className="min-w-0 flex-1 truncate text-foreground">
-                {STATUS_LABEL[s]} / {HI_LABEL[s]}
-              </span>
+            <li key={s} className="flex items-center gap-1.5 text-[13px]">
+              <Icon className="h-3.5 w-3.5 shrink-0" style={{ color: COLOR[s] }} aria-hidden />
+              <span className="min-w-0 flex-1 truncate text-foreground">{STATUS_LABEL[s]}</span>
               <span className="font-semibold tabular-nums text-foreground">{counts[s]}</span>
             </li>
           )
         })}
       </ul>
+      <p className="mt-2 text-[12px] text-muted-strong">{total} sub-heads</p>
     </div>
   )
 }
@@ -221,10 +210,10 @@ function StatusDonut({ counts }: { counts: StatusCounts }) {
 function CardHeader({ sector, right }: { sector?: SectorRef; right?: React.ReactNode }) {
   return (
     <div className="mb-3 flex items-center gap-2">
-      <MapPin className="h-4 w-4 shrink-0 text-[var(--accent-strong)]" aria-hidden />
+      <MapPin className="h-4 w-4 shrink-0 text-[var(--accent-text)]" aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="truncate text-[15px] font-semibold text-foreground">
-          {sector ? `${sectorLabel(sector)} · Sector ${sector.no}` : 'All sectors / सभी सेक्टर'}
+          {sector ? `${sectorLabel(sector)} · Sector ${sector.no}` : 'All sectors'}
         </p>
         {sector?.zone && (
           <p className="truncate text-[12px] text-muted-strong">{titleCase(sector.zone)}</p>
@@ -253,27 +242,27 @@ function ProgressCard({ v }: { v: ProgressVisual }) {
         </p>
       )}
 
-      <div className="grid grid-cols-1 gap-4 @min-[560px]:grid-cols-[auto_1fr] @min-[560px]:items-center">
-        <div className="flex items-center gap-4 @min-[560px]:pr-4">
-          <ProgressRing percent={headline} size={132} thickness={20} big />
-          <div>
-            <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-strong">
-              {focus ? 'Head progress' : 'Overall progress'}
-            </p>
-            <p className="text-[12px] text-muted-strong">{focus ? 'कार्य प्रगति' : 'कुल प्रगति'}</p>
-          </div>
+      <div className="flex flex-col gap-4 @min-[420px]:flex-row @min-[420px]:items-center">
+        <div className="shrink-0">
+          <p className="text-4xl font-semibold leading-none tabular-nums text-foreground">
+            {headline}
+            <span className="text-xl text-muted-strong">%</span>
+          </p>
+          <p className="mt-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-strong">
+            {focus ? 'Head progress' : 'Overall progress'}
+          </p>
         </div>
-        <StatusDonut counts={counts} />
+        <StatusBar counts={counts} />
       </div>
 
       {focus && (
-        <ul className="mt-4 grid grid-cols-1 gap-2.5 @min-[520px]:grid-cols-2">
+        <ul className="mt-4 grid grid-cols-1 gap-x-4 gap-y-3 @min-[520px]:grid-cols-2">
           {[...focus.subs]
             .sort((a, b) => STATUS_ORDER.indexOf(b.status) - STATUS_ORDER.indexOf(a.status))
             .map((s) => (
               <li
                 key={s.name}
-                className="flex items-start gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3"
+                className="flex items-start gap-3 border-t border-[var(--border)] pt-3"
               >
                 <div className="shrink-0">
                   <ProgressRing
@@ -301,24 +290,37 @@ function ProgressCard({ v }: { v: ProgressVisual }) {
       )}
 
       <details className="group mt-4" open={!focus}>
-        <summary className="cursor-pointer select-none text-[13px] font-semibold text-[var(--accent-strong)]">
-          {focus ? 'All work heads / सभी कार्य शीर्ष' : 'Work heads / कार्य शीर्ष'}
+        <summary className="cursor-pointer select-none text-[11px] font-semibold uppercase tracking-wider text-muted-strong hover:text-foreground">
+          {focus ? 'All work heads' : 'Work heads'}
         </summary>
         <ul className="mt-3 grid grid-cols-2 gap-2 @min-[560px]:grid-cols-3 @min-[820px]:grid-cols-4">
           {v.heads.map((h) => (
             <li
               key={h.no}
-              className="flex items-center gap-2.5 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2.5"
+              className="flex items-center gap-2.5 border-t border-[var(--border)] pt-2.5"
               title={h.name}
             >
               <ProgressRing
                 percent={h.percent}
                 size={46}
                 thickness={6}
-                color={h.counts.delayed > 0 ? COLOR.delayed : COLOR.completed}
+                color={
+                  h.counts.delayed > 0
+                    ? COLOR.delayed
+                    : h.percent >= 100
+                      ? COLOR.completed
+                      : COLOR['in-progress']
+                }
               />
               <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-strong">
+                <p className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-strong">
+                  {h.counts.delayed > 0 && (
+                    <STATUS_ICON.delayed
+                      className="h-3 w-3"
+                      style={{ color: COLOR.delayed }}
+                      aria-label="Has delayed work"
+                    />
+                  )}
                   Head {h.no}
                 </p>
                 <p className="line-clamp-2 text-[12.5px] leading-tight text-foreground">{h.name}</p>
@@ -326,51 +328,80 @@ function ProgressCard({ v }: { v: ProgressVisual }) {
             </li>
           ))}
         </ul>
-        <p className="mt-2 text-[12px] text-muted-strong">
-          <span
-            className="mr-1 inline-block h-2 w-2 rounded-full align-middle"
-            style={{ backgroundColor: COLOR.delayed }}
-            aria-hidden
-          />
-          Red ring: has delayed work / लाल: विलंबित कार्य
-        </p>
+        <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted-strong">
+          {(
+            [
+              ['delayed', 'Has delayed work'],
+              ['in-progress', 'In progress'],
+              ['completed', '100% done'],
+            ] as const
+          ).map(([st, label]) => {
+            const Icon = STATUS_ICON[st]
+            return (
+              <li key={st} className="flex items-center gap-1">
+                <Icon className="h-3 w-3" style={{ color: COLOR[st] }} aria-hidden />
+                {label}
+              </li>
+            )
+          })}
+        </ul>
       </details>
     </section>
   )
 }
 
 function TicketsCard({ v }: { v: TicketsVisual }) {
+  const label = v.statusFilter === 'unresolved' ? 'open' : v.statusFilter
+  const qs = new URLSearchParams()
+  if (v.statusFilter) qs.set('status', v.statusFilter)
   return (
     <section className={CARD} aria-label="Tickets">
       <CardHeader
         sector={v.sector}
         right={
-          <span className="inline-flex items-center gap-1 rounded-full bg-[var(--accent-soft)] px-2.5 py-0.5 text-[12px] font-semibold text-[var(--accent-strong)]">
-            <Ticket className="h-3.5 w-3.5" aria-hidden />
-            {v.total} {v.statusFilter === 'unresolved' ? 'open / खुले' : v.statusFilter}
+          <span className="text-[12px] font-semibold tabular-nums text-muted-strong">
+            {v.total} {label}
           </span>
         }
       />
       {v.tickets.length === 0 ? (
-        <p className="text-[14px] text-muted-strong">No matching tickets. / कोई टिकट नहीं मिला।</p>
+        <p className="text-[14px] text-muted-strong">No matching tickets.</p>
       ) : (
-        <ul className="divide-y divide-[var(--border)]">
+        <ul className="-mx-1.5 divide-y divide-[var(--border)]">
           {v.tickets.map((t) => (
-            <li key={t.number} className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0">
-              <span className="mt-0.5 shrink-0 rounded-md bg-[var(--overlay)] px-1.5 py-0.5 text-[12px] font-semibold tabular-nums text-muted-strong">
-                #{t.number}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-[14px] leading-snug text-foreground">{t.subject}</p>
-                <p className="mt-0.5 text-[12.5px] text-muted-strong">
-                  {t.status}
-                  {t.priority ? ` · ${t.priority}` : ''}
-                  {t.date ? ` · ${t.date}` : ''}
-                </p>
-              </div>
+            <li key={t.number}>
+              <Link
+                href={`/tickets/${t.number}`}
+                className="flex items-start gap-3 rounded-[var(--radius-sm)] px-1.5 py-2.5 hover:bg-[var(--surface-hover)]"
+              >
+                <span className="mt-0.5 shrink-0 rounded-[4px] bg-[var(--overlay)] px-1.5 py-0.5 font-mono text-[12px] font-semibold tabular-nums text-muted-strong">
+                  #{t.number}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[14px] leading-snug text-foreground">{t.subject}</p>
+                  <p className="mt-0.5 text-[12.5px] text-muted-strong">
+                    {t.status}
+                    {t.priority ? ` · ${t.priority}` : ''}
+                    {t.date ? ` · ${t.date}` : ''}
+                  </p>
+                </div>
+              </Link>
             </li>
           ))}
         </ul>
+      )}
+      {v.tickets.length > 0 && v.tickets.length < v.total && (
+        <p className="mt-2 flex items-center justify-between border-t border-[var(--border)] pt-2.5 text-[12.5px] text-muted-strong">
+          <span>
+            Showing {v.tickets.length} of {v.total}
+          </span>
+          <Link
+            href={qs.toString() ? `/tickets?${qs}` : '/tickets'}
+            className="font-semibold text-[var(--accent-text)] hover:underline"
+          >
+            View all →
+          </Link>
+        </p>
       )}
     </section>
   )

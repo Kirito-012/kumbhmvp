@@ -1,6 +1,6 @@
 import { getCurrentUser } from '@/server/auth/session'
 import { defineAbilityFor } from '@/server/auth/ability'
-import { answer, ChatConfigError, type ChatTurn } from '@/server/chatbot/llm'
+import { answer, ChatBusyError, ChatConfigError, type ChatTurn } from '@/server/chatbot/llm'
 
 export const runtime = 'nodejs'
 
@@ -40,6 +40,12 @@ export async function POST(request: Request) {
   } catch (err) {
     if (err instanceof ChatConfigError) {
       return Response.json({ error: 'Assistant is not configured yet.' }, { status: 503 })
+    }
+    if (err instanceof ChatBusyError) {
+      return Response.json(
+        { error: 'The assistant is busy right now. Please try again in a minute.' },
+        { status: 429 },
+      )
     }
     console.error('[chat] failed', err)
     return Response.json(

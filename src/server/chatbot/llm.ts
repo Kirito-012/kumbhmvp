@@ -14,6 +14,8 @@ const MAX_STEPS = 5
 export type ChatTurn = { role: 'user' | 'assistant'; text: string }
 
 export class ChatConfigError extends Error {}
+/** The model deployment is rate limited and stayed that way after retries. */
+export class ChatBusyError extends Error {}
 
 let skillCache: Promise<string> | undefined
 function loadSkill() {
@@ -47,6 +49,31 @@ function lowerTypes(node: unknown): unknown {
   return node
 }
 
+/** POST to Azure OpenAI, waiting out a rate limit (429) a couple of times before giving up. */
+async function postWithRetry(url: string, apiKey: string, body: unknown): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'api-key': apiKey },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (res.status === 429 && attempt < 2) {
+      const wait = Number(res.headers.get('retry-after'))
+      await new Promise((r) =>
+        setTimeout(r, Math.min(8, Number.isFinite(wait) && wait > 0 ? wait : 3) * 1000),
+      )
+      continue
+    }
+    if (!res.ok) {
+      console.error('[chat] azure openai error', res.status, (await res.text()).slice(0, 300))
+      if (res.status === 429) throw new ChatBusyError('rate limited')
+      throw new Error(`Azure OpenAI request failed (${res.status})`)
+    }
+    return res
+  }
+}
+
 export type ChatAnswer = { reply: string; visuals: ChatVisual[] }
 
 async function answerAzure(
@@ -74,22 +101,13 @@ async function answerAzure(
   ]
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'api-key': apiKey },
-      body: JSON.stringify({
-        model: deployment,
-        messages,
-        tools,
-        temperature: 0.3,
-        max_tokens: 1500,
-      }),
-      signal: AbortSignal.timeout(30_000),
+    const res = await postWithRetry(url, apiKey, {
+      model: deployment,
+      messages,
+      tools,
+      temperature: 0.3,
+      max_tokens: 1500,
     })
-    if (!res.ok) {
-      console.error('[chat] azure openai error', res.status, (await res.text()).slice(0, 300))
-      throw new Error(`Azure OpenAI request failed (${res.status})`)
-    }
     const data = (await res.json()) as {
       choices?: { message?: { content?: string | null; tool_calls?: AzureToolCall[] } }[]
     }
