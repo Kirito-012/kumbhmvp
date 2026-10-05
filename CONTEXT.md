@@ -1020,6 +1020,7 @@ existing `_<table>_map` pattern. `SOURCE_TAG_2027`/`SOURCE_TAG_SHP` are the two 
 | `NEXT_PUBLIC_MAPTILER_KEY`                           | MapTiler key for the light basemap (client-bundled)                        |
 | `NEXT_PUBLIC_ARCGIS_API_KEY`                         | ArcGIS Location Platform key for the satellite basemap (client-bundled)    |
 | `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET` | Photo upload signing (server-only)                                         |
+| `AZURE_OPENAI_ENDPOINT` / `_DEPLOYMENT` / `_API_KEY` | Chat assistant LLM (server-only); unset: chat says "not configured"        |
 | `LOG_LEVEL`                                          | pino level                                                                 |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`           | In `.env.example`, but `seed.ts` now hardcodes accounts — likely vestigial |
 
@@ -1100,6 +1101,31 @@ plain-language captions, big click targets, text labels alongside every colour.
   `.dash-grow-x`, `.dash-grow-y`, `.dash-ring`, `.dash-sector` classes and cards use `.dash-lift`
   (all in `globals.css`, inside `prefers-reduced-motion: no-preference`, backwards-fill only so no
   lingering `transform`). Numbers count up via the client `CountUp` (server renders the final value).
+
+---
+
+## 16c. The chat assistant
+
+A floating bilingual (English / Hindi) assistant on every `(app)` page and the map
+(`<ChatWidget>` in `AppShell`; on the map it sits left of the zoom controls). It answers questions
+like "update on roads in Bairagicamp" from two read-only tools and draws the data as donut/ring cards.
+
+- **Skill file:** `src/server/chatbot/SKILL.md` is the system prompt (languages, the 32 sector names
+  with Hindi spellings, tool use, answer style). It is read with `fs` at runtime, so
+  `outputFileTracingIncludes` in `next.config.ts` ships it in the standalone build.
+- **LLM:** Azure OpenAI chat-completions with tools, over plain `fetch` (no SDK) against the
+  versionless `/openai/v1` route (`model` = the deployment name). Loop in `src/server/chatbot/llm.ts`.
+- **Tools** (`tools.ts`): `get_work_progress(sector, head?)` (DEMO data from `buildSectorWorkHeads`)
+  and `search_tickets(sector?, query?, status?, ...)` (real tickets via `listTickets`). Surveyors only
+  see their own tickets: `forcedAssigneeId` is applied server-side, never from model arguments.
+- **Sector names:** `sectors.ts` resolves a number or free-text name (spacing, case, small typos,
+  zones) against Postgres `kumbh.sector_boundary` (cached 10 min).
+- **Visuals:** each tool also returns a structured `ChatVisual` (`src/lib/chat/visuals.ts`); the route
+  returns `{ reply, visuals }` and `ChatVisuals.tsx` draws them (charts first, tickets after).
+- **Voice:** mic input and spoken replies use the browser Web Speech API (no server cost); the mic has
+  its own EN/hi switch because browsers cannot auto-detect the spoken language.
+- **Endpoint:** `POST /api/chat`, session-authenticated, last 10 turns, 1000 chars each.
+- **Tests:** `src/server/chatbot/tools.test.ts` (mocks Postgres + ticket service).
 
 ---
 
