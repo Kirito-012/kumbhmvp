@@ -24,6 +24,8 @@ const COLOR: Record<WorkStatus, string> = {
 
 const CARD =
   'rounded-[var(--radius-md)] border border-[var(--border-strong)] bg-[var(--background-elevated)] p-3.5'
+/** Most urgent first when listing sub-heads. */
+const URGENCY: WorkStatus[] = ['delayed', 'in-progress', 'not-started', 'completed']
 const TRACK = 'var(--dash-track)'
 
 function titleCase(s: string) {
@@ -34,10 +36,17 @@ function sectorLabel(s: SectorRef) {
   return titleCase(s.name.replace(/-\d+$/, '').replace(/-/g, ' '))
 }
 
+/** Ticket status colours, the same ones the dashboard uses. */
+function ticketColor(status: string) {
+  const k = status.toLowerCase()
+  const key = ['new', 'open', 'pending', 'resolved'].find((x) => k.includes(x))
+  return key ? `var(--dash-status-${key})` : 'var(--muted-strong, currentColor)'
+}
+
 function DemoPill() {
   return (
     <span
-      className="rounded-[4px] border border-[var(--border-strong)] px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-strong"
+      className="rounded-[4px] border border-[color-mix(in_srgb,var(--warning)_45%,transparent)] bg-[var(--warning-soft)] px-1.5 py-0.5 text-[13px] font-semibold uppercase tracking-wide text-[var(--warning-text)]"
       title="Sample figures — no live work-progress data yet"
     >
       Demo data
@@ -49,9 +58,9 @@ function StatusChip({ status }: { status: WorkStatus }) {
   const Icon = STATUS_ICON[status]
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[12px] font-semibold"
+      className="inline-flex shrink-0 items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[13px] font-semibold"
       style={{
-        color: `color-mix(in srgb, ${COLOR[status]} 70%, var(--foreground))`,
+        color: `color-mix(in srgb, ${COLOR[status]} 50%, var(--foreground))`,
         backgroundColor: `color-mix(in srgb, ${COLOR[status]} 16%, transparent)`,
       }}
     >
@@ -164,7 +173,7 @@ function ProgressRing({
           className={`font-semibold leading-none text-foreground ${big ? 'text-3xl' : 'text-[13px]'}`}
         >
           {percent}
-          <span className={big ? 'text-base text-muted-strong' : 'text-[10px] text-muted-strong'}>
+          <span className={big ? 'text-base text-muted-strong' : 'text-[11px] text-muted-strong'}>
             %
           </span>
         </span>
@@ -178,14 +187,14 @@ function StatusBar({ counts }: { counts: StatusCounts }) {
   return (
     <div className="min-w-0 flex-1">
       <div
-        className="flex h-2.5 gap-px overflow-hidden rounded-[2px] bg-[var(--dash-track)]"
+        className="chat-bar flex h-2.5 gap-px overflow-hidden rounded-[2px] bg-[var(--dash-track)]"
         role="img"
         aria-label={`${total} sub-heads by status`}
       >
         {STATUS_ORDER.filter((s) => counts[s] > 0).map((s) => (
           <span
             key={s}
-            className="chat-bar h-full"
+            className="h-full"
             style={{ width: `${(counts[s] / total) * 100}%`, backgroundColor: COLOR[s] }}
           />
         ))}
@@ -202,7 +211,7 @@ function StatusBar({ counts }: { counts: StatusCounts }) {
           )
         })}
       </ul>
-      <p className="mt-2 text-[12px] text-muted-strong">{total} sub-heads</p>
+      <p className="mt-2 text-[13px] text-muted-strong">{total} sub-heads</p>
     </div>
   )
 }
@@ -216,7 +225,7 @@ function CardHeader({ sector, right }: { sector?: SectorRef; right?: React.React
           {sector ? `${sectorLabel(sector)} · Sector ${sector.no}` : 'All sectors'}
         </p>
         {sector?.zone && (
-          <p className="truncate text-[12px] text-muted-strong">{titleCase(sector.zone)}</p>
+          <p className="truncate text-[13px] text-muted-strong">{titleCase(sector.zone)}</p>
         )}
       </div>
       {right}
@@ -235,7 +244,7 @@ function ProgressCard({ v }: { v: ProgressVisual }) {
 
       {focus && (
         <p className="mb-3 line-clamp-2 text-[15px] font-semibold leading-snug text-foreground">
-          <span className="mr-2 text-[12px] font-semibold uppercase tracking-wide text-muted-strong">
+          <span className="mr-2 text-[13px] font-semibold uppercase tracking-wide text-muted-strong">
             Head {focus.no}
           </span>
           {focus.name}
@@ -248,7 +257,7 @@ function ProgressCard({ v }: { v: ProgressVisual }) {
             {headline}
             <span className="text-xl text-muted-strong">%</span>
           </p>
-          <p className="mt-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-strong">
+          <p className="mt-1.5 text-[13px] font-semibold uppercase tracking-wider text-muted-strong">
             {focus ? 'Head progress' : 'Overall progress'}
           </p>
         </div>
@@ -258,7 +267,7 @@ function ProgressCard({ v }: { v: ProgressVisual }) {
       {focus && (
         <ul className="mt-4 grid grid-cols-1 gap-x-4 gap-y-3 @min-[520px]:grid-cols-2">
           {[...focus.subs]
-            .sort((a, b) => STATUS_ORDER.indexOf(b.status) - STATUS_ORDER.indexOf(a.status))
+            .sort((a, b) => URGENCY.indexOf(a.status) - URGENCY.indexOf(b.status))
             .map((s) => (
               <li
                 key={s.name}
@@ -277,10 +286,10 @@ function ProgressCard({ v }: { v: ProgressVisual }) {
                   <div className="mt-1.5">
                     <StatusChip status={s.status} />
                   </div>
-                  <p className="mt-1.5 text-[12.5px] leading-snug text-muted-strong">
+                  <p className="mt-1.5 text-[13px] leading-snug text-muted-strong">
                     {s.completed} of {s.required} · balance {s.balance}
                   </p>
-                  <p className="text-[12.5px] leading-snug text-muted-strong">
+                  <p className="text-[13px] leading-snug text-muted-strong">
                     Target {s.targetDate} · {s.department}
                   </p>
                 </div>
@@ -290,7 +299,7 @@ function ProgressCard({ v }: { v: ProgressVisual }) {
       )}
 
       <details className="group mt-4" open={!focus}>
-        <summary className="cursor-pointer select-none text-[11px] font-semibold uppercase tracking-wider text-muted-strong hover:text-foreground">
+        <summary className="cursor-pointer select-none text-[13px] font-semibold uppercase tracking-wider text-muted-strong hover:text-foreground">
           {focus ? 'All work heads' : 'Work heads'}
         </summary>
         <ul className="mt-3 grid grid-cols-2 gap-2 @min-[560px]:grid-cols-3 @min-[820px]:grid-cols-4">
@@ -313,7 +322,7 @@ function ProgressCard({ v }: { v: ProgressVisual }) {
                 }
               />
               <div className="min-w-0">
-                <p className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-strong">
+                <p className="flex items-center gap-1 text-[13px] font-semibold uppercase tracking-wide text-muted-strong">
                   {h.counts.delayed > 0 && (
                     <STATUS_ICON.delayed
                       className="h-3 w-3"
@@ -323,12 +332,12 @@ function ProgressCard({ v }: { v: ProgressVisual }) {
                   )}
                   Head {h.no}
                 </p>
-                <p className="line-clamp-2 text-[12.5px] leading-tight text-foreground">{h.name}</p>
+                <p className="line-clamp-2 text-[13px] leading-tight text-foreground">{h.name}</p>
               </div>
             </li>
           ))}
         </ul>
-        <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted-strong">
+        <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-muted-strong">
           {(
             [
               ['delayed', 'Has delayed work'],
@@ -351,15 +360,17 @@ function ProgressCard({ v }: { v: ProgressVisual }) {
 }
 
 function TicketsCard({ v }: { v: TicketsVisual }) {
-  const label = v.statusFilter === 'unresolved' ? 'open' : v.statusFilter
+  const LABELS: Record<string, string> = { unresolved: 'open', all: 'total' }
+  const label = LABELS[v.statusFilter] ?? v.statusFilter
   const qs = new URLSearchParams()
-  if (v.statusFilter) qs.set('status', v.statusFilter)
+  if (v.statusFilter && v.statusFilter !== 'all') qs.set('status', v.statusFilter)
+  if (v.sector) qs.set('sector', String(v.sector.no))
   return (
     <section className={CARD} aria-label="Tickets">
       <CardHeader
         sector={v.sector}
         right={
-          <span className="text-[12px] font-semibold tabular-nums text-muted-strong">
+          <span className="text-[13px] font-semibold tabular-nums text-muted-strong">
             {v.total} {label}
           </span>
         }
@@ -372,17 +383,24 @@ function TicketsCard({ v }: { v: TicketsVisual }) {
             <li key={t.number}>
               <Link
                 href={`/tickets/${t.number}`}
-                className="flex items-start gap-3 rounded-[var(--radius-sm)] px-1.5 py-2.5 hover:bg-[var(--surface-hover)]"
+                className="flex items-start gap-3 rounded-[var(--radius-sm)] px-1.5 py-2.5 hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent-strong)]"
               >
-                <span className="mt-0.5 shrink-0 rounded-[4px] bg-[var(--overlay)] px-1.5 py-0.5 font-mono text-[12px] font-semibold tabular-nums text-muted-strong">
+                <span className="mt-0.5 shrink-0 rounded-[4px] bg-[var(--overlay)] px-1.5 py-0.5 font-mono text-[13px] font-semibold tabular-nums text-muted-strong">
                   #{t.number}
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-[14px] leading-snug text-foreground">{t.subject}</p>
-                  <p className="mt-0.5 text-[12.5px] text-muted-strong">
-                    {t.status}
-                    {t.priority ? ` · ${t.priority}` : ''}
-                    {t.date ? ` · ${t.date}` : ''}
+                  <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-strong">
+                    <span
+                      className="rounded-[4px] px-1.5 py-0.5 text-[13px] font-semibold"
+                      style={{
+                        color: `color-mix(in srgb, ${ticketColor(t.status)} 50%, var(--foreground))`,
+                        backgroundColor: `color-mix(in srgb, ${ticketColor(t.status)} 16%, transparent)`,
+                      }}
+                    >
+                      {t.status}
+                    </span>
+                    {[t.priority, t.date].filter(Boolean).join(' · ')}
                   </p>
                 </div>
               </Link>
@@ -391,7 +409,7 @@ function TicketsCard({ v }: { v: TicketsVisual }) {
         </ul>
       )}
       {v.tickets.length > 0 && v.tickets.length < v.total && (
-        <p className="mt-2 flex items-center justify-between border-t border-[var(--border)] pt-2.5 text-[12.5px] text-muted-strong">
+        <p className="mt-2 flex items-center justify-between border-t border-[var(--border)] pt-2.5 text-[13px] text-muted-strong">
           <span>
             Showing {v.tickets.length} of {v.total}
           </span>
@@ -414,7 +432,7 @@ export function ChatVisuals({ visuals }: { visuals: ChatVisual[] }) {
     (a, b) => Number(a.type === 'tickets') - Number(b.type === 'tickets'),
   )
   return (
-    <div className="mt-2.5 space-y-2.5">
+    <div className="mt-2.5 space-y-2.5" aria-live="off">
       {ordered.map((v, i) =>
         v.type === 'progress' ? <ProgressCard key={i} v={v} /> : <TicketsCard key={i} v={v} />,
       )}

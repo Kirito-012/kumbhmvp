@@ -209,7 +209,7 @@ function CountChips({
           <span
             key={st}
             title={`${counts[st]} ${STATUS_LABEL[st].toLowerCase()}`}
-            className="inline-flex items-center gap-1 rounded-full py-[3px] pl-1.5 pr-2 text-[13px] font-bold leading-none tabular-nums"
+            className="inline-flex items-center gap-1 rounded-full py-[3px] pl-1.5 pr-2 text-[12px] font-bold leading-none tabular-nums"
             style={{
               backgroundColor: `color-mix(in srgb, ${color} 16%, transparent)`,
               color: 'var(--map-fg)',
@@ -231,7 +231,7 @@ function StatusChip({ status, now, target }: { status: WorkStatus; now: number; 
   const overdueDays = status === 'delayed' ? Math.max(1, Math.round((now - target) / DAY_MS)) : 0
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1.5 rounded-full py-1 pl-2 pr-2.5 text-[13px] font-semibold leading-none"
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-full py-1 pl-2 pr-2.5 text-[12px] font-semibold leading-none"
       style={{
         backgroundColor: `color-mix(in srgb, ${color} 16%, transparent)`,
         color: 'var(--map-fg)',
@@ -297,7 +297,7 @@ function SubHeadRow({
       >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <span
-            className="min-w-0 flex-1 basis-48 text-[15px] font-semibold leading-snug"
+            className="min-w-0 flex-1 basis-48 text-[14px] font-semibold leading-snug"
             style={{ color: 'var(--map-fg)' }}
             title={sub.details ? `Includes: ${sub.details.join(' · ')}` : sub.name}
           >
@@ -309,8 +309,8 @@ function SubHeadRow({
         <QuantityBar sub={sub} color={color} />
 
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
-          <p className="text-[14px] tabular-nums" style={{ color: 'var(--map-fg)' }}>
-            <strong className="text-[16px] font-bold">
+          <p className="text-[13px] tabular-nums" style={{ color: 'var(--map-fg)' }}>
+            <strong className="text-[15px] font-bold">
               {formatQuantity(sub.completed, sub.unit)}
             </strong>
             <span style={{ color: 'var(--map-fg-muted)' }}>
@@ -318,13 +318,13 @@ function SubHeadRow({
               of {formatQuantity(sub.required, sub.unit)} · {formatPct(sub.fraction)}
             </span>
           </p>
-          <p className="text-[13px] tabular-nums" style={{ color: 'var(--map-fg-muted)' }}>
+          <p className="text-[12px] tabular-nums" style={{ color: 'var(--map-fg-muted)' }}>
             {formatQuantity(sub.balance, sub.unit)} left
           </p>
         </div>
 
         <p
-          className="flex flex-wrap items-center gap-x-2 text-[13px] leading-snug"
+          className="flex flex-wrap items-center gap-x-2 text-[12px] leading-snug"
           style={{ color: 'var(--map-fg-muted)' }}
         >
           <span>Target {DATE_FMT.format(sub.targetDate)}</span>
@@ -343,7 +343,7 @@ function SubHeadRow({
           )}
         </p>
         <span
-          className="mt-0.5 inline-flex items-center gap-0.5 self-end text-[13px] font-semibold"
+          className="mt-0.5 inline-flex items-center gap-0.5 self-end text-[12px] font-semibold"
           style={{ color: 'var(--map-accent-fg)' }}
         >
           View details
@@ -406,7 +406,7 @@ function HeadRow({
             Head {head.no}
           </span>
           <span
-            className="line-clamp-2 text-[15px] font-bold leading-snug"
+            className="line-clamp-2 text-[14px] font-bold leading-snug"
             style={{ color: 'var(--map-fg)' }}
             title={head.name}
           >
@@ -414,12 +414,12 @@ function HeadRow({
           </span>
         </span>
         <span className="flex shrink-0 flex-col items-end gap-1.5">
-          <span className="text-[16px] font-bold tabular-nums" style={{ color: 'var(--map-fg)' }}>
+          <span className="text-[15px] font-bold tabular-nums" style={{ color: 'var(--map-fg)' }}>
             {formatPct(head.fraction)}
           </span>
           {delayed > 0 && (
             <span
-              className="inline-flex shrink-0 items-center gap-1 rounded-full py-1 pl-1.5 pr-2 text-[13px] font-bold leading-none tabular-nums"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full py-1 pl-1.5 pr-2 text-[12px] font-bold leading-none tabular-nums"
               style={{
                 backgroundColor: `color-mix(in srgb, ${statusColor('delayed', theme)} 18%, transparent)`,
                 color: 'var(--map-fg)',
@@ -471,21 +471,21 @@ function HeadDetail({
           size={104}
           stroke={11}
           color={ringColor}
-          labelClass="text-[26px]"
+          labelClass="text-[22px]"
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-2.5">
             <span
-              className="mt-0.5 flex h-7 min-w-[34px] shrink-0 items-center justify-center rounded-md px-1.5 text-[14px] font-bold tabular-nums"
+              className="mt-0.5 flex h-7 min-w-[34px] shrink-0 items-center justify-center rounded-md px-1.5 text-[13px] font-bold tabular-nums"
               style={{ backgroundColor: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }}
             >
               {head.no}
             </span>
-            <h4 className="text-[19px] font-bold leading-snug" style={{ color: 'var(--map-fg)' }}>
+            <h4 className="text-[16px] font-bold leading-snug" style={{ color: 'var(--map-fg)' }}>
               <Highlight text={head.name} query={query} />
             </h4>
           </div>
-          <p className="mt-1.5 text-[14px] leading-snug" style={{ color: 'var(--map-fg-muted)' }}>
+          <p className="mt-1.5 text-[13px] leading-snug" style={{ color: 'var(--map-fg-muted)' }}>
             {head.purpose}
           </p>
           <div className="mt-3">
@@ -497,7 +497,7 @@ function HeadDetail({
 
       <div className="border-t" style={{ borderColor: 'var(--map-border)' }}>
         <h5
-          className="px-4 pb-1 pt-3 text-[15px] font-bold @min-[560px]:px-5"
+          className="px-4 pb-1 pt-3 text-[14px] font-bold @min-[560px]:px-5"
           style={{ color: 'var(--map-fg)' }}
         >
           Sub-heads{' '}
@@ -555,7 +555,7 @@ function Panel({
       style={{ backgroundColor: 'var(--map-surface-alt)', borderColor: 'var(--map-border)' }}
     >
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h4 className="text-[16px] font-bold" style={{ color: 'var(--map-fg)' }}>
+        <h4 className="text-[15px] font-bold" style={{ color: 'var(--map-fg)' }}>
           {title}
         </h4>
         {right}
@@ -748,13 +748,13 @@ function SubHeadDetail({
           type="button"
           autoFocus
           onClick={onBack}
-          className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border px-3.5 text-[14px] font-semibold hover:bg-[var(--map-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--map-accent)]"
+          className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border px-3.5 text-[13px] font-semibold hover:bg-[var(--map-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--map-accent)]"
           style={{ borderColor: 'var(--map-border)', color: 'var(--map-fg)' }}
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           Back to work heads
         </button>
-        <p className="text-[14px]" style={{ color: 'var(--map-fg-muted)' }}>
+        <p className="text-[13px]" style={{ color: 'var(--map-fg-muted)' }}>
           Head {head.no} · {head.name}
         </p>
       </div>
@@ -774,13 +774,13 @@ function SubHeadDetail({
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-              <h3 className="text-[21px] font-bold leading-snug" style={{ color: 'var(--map-fg)' }}>
+              <h3 className="text-[18px] font-bold leading-snug" style={{ color: 'var(--map-fg)' }}>
                 {sub.name}
               </h3>
               <StatusChip status={sub.status} now={now} target={sub.targetDate} />
               <DemoBadge />
             </div>
-            <p className="mt-1.5 text-[14px] leading-snug" style={{ color: 'var(--map-fg-muted)' }}>
+            <p className="mt-1.5 text-[13px] leading-snug" style={{ color: 'var(--map-fg-muted)' }}>
               {head.purpose}
             </p>
             {sub.details && (
@@ -788,7 +788,7 @@ function SubHeadDetail({
                 {sub.details.map((d) => (
                   <li
                     key={d}
-                    className="rounded-full border px-3 py-1 text-[13px]"
+                    className="rounded-full border px-3 py-1 text-[12px]"
                     style={{ borderColor: 'var(--map-border)', color: 'var(--map-fg)' }}
                   >
                     {d}
@@ -796,7 +796,7 @@ function SubHeadDetail({
                 ))}
               </ul>
             )}
-            <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-[14px]">
+            <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-[13px]">
               <div className="flex items-center gap-2" style={{ color: 'var(--map-fg)' }}>
                 <CalendarClock className="h-4 w-4" aria-hidden="true" />
                 <dt className="sr-only">Target date</dt>
@@ -844,7 +844,7 @@ function SubHeadDetail({
               }}
             >
               <span
-                className="flex items-center gap-2 text-[14px] font-semibold"
+                className="flex items-center gap-2 text-[13px] font-semibold"
                 style={{ color: 'var(--map-fg-muted)' }}
               >
                 <span
@@ -859,12 +859,12 @@ function SubHeadDetail({
                 {label}
               </span>
               <p
-                className="mt-2 text-[28px] font-bold leading-none tabular-nums"
+                className="mt-2 text-[22px] font-bold leading-none tabular-nums"
                 style={{ color: 'var(--map-fg)' }}
               >
                 {plainNumber(value, sub.unit)}
                 <span
-                  className="ml-1.5 whitespace-nowrap text-[14px] font-semibold"
+                  className="ml-1.5 whitespace-nowrap text-[13px] font-semibold"
                   style={{ color: 'var(--map-fg-muted)' }}
                 >
                   {sub.unit}
@@ -880,7 +880,7 @@ function SubHeadDetail({
             title="Progress over time"
             right={
               <span
-                className="flex items-center gap-4 text-[13px]"
+                className="flex items-center gap-4 text-[12px]"
                 style={{ color: 'var(--map-fg)' }}
               >
                 <span className="flex items-center gap-1.5">
@@ -917,7 +917,7 @@ function SubHeadDetail({
                   style={{ borderColor: 'var(--map-border)' }}
                 >
                   <dt
-                    className="flex items-center gap-1.5 text-[13px]"
+                    className="flex items-center gap-1.5 text-[12px]"
                     style={{ color: 'var(--map-fg-muted)' }}
                   >
                     {i === 2 && (
@@ -926,7 +926,7 @@ function SubHeadDetail({
                     {x.label}
                   </dt>
                   <dd
-                    className="mt-0.5 text-[16px] font-bold tabular-nums"
+                    className="mt-0.5 text-[15px] font-bold tabular-nums"
                     style={{ color: x.color ?? 'var(--map-fg)' }}
                   >
                     {x.value}
@@ -948,7 +948,7 @@ function SubHeadDetail({
                 sizes="(min-width: 900px) 40vw, 90vw"
                 className="object-cover"
               />
-              <p className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 pb-2 pt-6 text-[13px] text-white">
+              <p className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 pb-2 pt-6 text-[12px] text-white">
                 Photo {photo + 1} of {photos.length}
               </p>
             </div>
@@ -976,7 +976,7 @@ function SubHeadDetail({
             title="Completion"
             right={
               <span
-                className="text-[15px] font-bold tabular-nums"
+                className="text-[14px] font-bold tabular-nums"
                 style={{ color: 'var(--map-fg)' }}
               >
                 {formatPct(sub.fraction)} complete
@@ -1015,7 +1015,7 @@ function SubHeadDetail({
                   ),
                 )}
               </svg>
-              <ul className="space-y-2.5 text-[14px]" style={{ color: 'var(--map-fg)' }}>
+              <ul className="space-y-2.5 text-[13px]" style={{ color: 'var(--map-fg)' }}>
                 {segs.map((sg) => (
                   <li key={sg.label} className="flex items-center gap-2.5">
                     <span
@@ -1026,7 +1026,7 @@ function SubHeadDetail({
                     <span>
                       {sg.label}
                       <span
-                        className="block text-[13px] tabular-nums"
+                        className="block text-[12px] tabular-nums"
                         style={{ color: 'var(--map-fg-muted)' }}
                       >
                         {formatQuantity(sg.value, sub.unit)} · {formatPct(sg.value / required)}
@@ -1051,7 +1051,7 @@ function SubHeadDetail({
                 return (
                   <li
                     key={tk.id}
-                    className="flex flex-wrap items-center gap-x-3 gap-y-1 py-3 text-[14px]"
+                    className="flex flex-wrap items-center gap-x-3 gap-y-1 py-3 text-[13px]"
                   >
                     <span
                       className="w-16 shrink-0 font-semibold tabular-nums"
@@ -1066,7 +1066,7 @@ function SubHeadDetail({
                       {tk.title}
                     </span>
                     <span
-                      className="inline-flex items-center gap-1.5 rounded-full py-1 pl-2 pr-2.5 text-[13px] font-semibold"
+                      className="inline-flex items-center gap-1.5 rounded-full py-1 pl-2 pr-2.5 text-[12px] font-semibold"
                       style={{
                         backgroundColor: `color-mix(in srgb, ${c} 16%, transparent)`,
                         color: 'var(--map-fg)',
@@ -1076,7 +1076,7 @@ function SubHeadDetail({
                       {tk.status}
                     </span>
                     <span
-                      className="w-24 shrink-0 text-right text-[13px]"
+                      className="w-24 shrink-0 text-right text-[12px]"
                       style={{ color: 'var(--map-fg-muted)' }}
                     >
                       {tk.updated}
@@ -1093,7 +1093,6 @@ function SubHeadDetail({
 }
 
 export default function SectorWorkHeads({ sectorNo }: { sectorNo: number }) {
-  const theme = useInsightTheme()
   // Captured once so "overdue" doesn't tick mid-session and demo targets stay put.
   const [now] = useState(() => Date.now())
   const data = useMemo(() => buildSectorWorkHeads(sectorNo, now), [sectorNo, now])
@@ -1101,7 +1100,6 @@ export default function SectorWorkHeads({ sectorNo }: { sectorNo: number }) {
   const [query, setQuery] = useState('')
   const q = query.trim()
   const [sortKey, setSortKey] = useState<SortKey>('no')
-  const [statusFilter, setStatusFilter] = useState<WorkStatus | null>(null)
   const [pick, setPick] = useState<string | null>(null)
   const [openSub, setOpenSub] = useState<{ headNo: string; subName: string } | null>(null)
 
@@ -1126,7 +1124,7 @@ export default function SectorWorkHeads({ sectorNo }: { sectorNo: number }) {
     const needle = q.toLowerCase()
     const out: { head: HeadProgress; subs: SubHeadProgress[] }[] = []
     for (const head of sorted) {
-      const byStatus = statusFilter ? head.subs.filter((s) => s.status === statusFilter) : head.subs
+      const byStatus = head.subs
       if (byStatus.length === 0) continue
       if (!needle) {
         out.push({ head, subs: byStatus })
@@ -1138,11 +1136,11 @@ export default function SectorWorkHeads({ sectorNo }: { sectorNo: number }) {
         out.push({ head, subs: byStatus })
     }
     return out
-  }, [sorted, q, statusFilter])
+  }, [sorted, q])
 
   // The head shown on the right: the one picked, else the first that survives search/filters.
   const selected = visible.find((v) => v.head.no === pick) ?? visible[0] ?? null
-  const filtering = q !== '' || statusFilter !== null
+  const filtering = q !== ''
 
   const openHead = openSub ? data.heads.find((h) => h.no === openSub.headNo) : undefined
   const openSubHead = openHead?.subs.find((x) => x.name === openSub?.subName)
@@ -1160,118 +1158,9 @@ export default function SectorWorkHeads({ sectorNo }: { sectorNo: number }) {
 
   return (
     <div className="kumbh-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-5">
-      {/* Summary: the readiness ring, one bar for every sub-head, and four big status tiles that
-          double as filters. */}
-      <div
-        className="mt-3 rounded-2xl border p-4 @min-[640px]:p-5"
-        style={{ backgroundColor: 'var(--map-surface-alt)', borderColor: 'var(--map-border)' }}
-      >
-        <div className="flex flex-col gap-5 @min-[640px]:flex-row @min-[640px]:items-center @min-[640px]:gap-7">
-          <div className="flex items-center gap-4 @min-[640px]:shrink-0">
-            <WorkRing
-              fraction={data.fraction}
-              size={132}
-              stroke={13}
-              color={statusColor('completed', theme)}
-              labelClass="text-[34px]"
-            />
-            <div className="max-w-[14rem]">
-              <div className="flex flex-wrap items-center gap-2">
-                <p
-                  className="text-[18px] font-bold leading-tight"
-                  style={{ color: 'var(--map-fg)' }}
-                >
-                  Sector readiness
-                </p>
-                <DemoBadge />
-              </div>
-              <p
-                className="mt-1.5 text-[14px] leading-snug"
-                style={{ color: 'var(--map-fg-muted)' }}
-              >
-                {data.heads.length} main heads
-                <br />
-                {data.subHeadCount} sub-heads
-              </p>
-            </div>
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <p className="mb-2 text-[15px] font-semibold" style={{ color: 'var(--map-fg)' }}>
-              All {data.subHeadCount} sub-heads at a glance
-            </p>
-            <StatusBar counts={data.counts} total={data.subHeadCount} height={18} theme={theme} />
-          </div>
-        </div>
-
-        {/* The legend doubles as a filter: press a status to list only its sub-heads. */}
-        <div className="mt-5 grid grid-cols-2 gap-3 @min-[640px]:grid-cols-4">
-          {STATUS_ORDER.map((st, i) => {
-            const active = statusFilter === st
-            const color = statusColor(st, theme)
-            const Icon = STATUS_ICON[st]
-            const share = data.subHeadCount > 0 ? data.counts[st] / data.subHeadCount : 0
-            return (
-              <button
-                key={st}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setStatusFilter(active ? null : st)}
-                title={
-                  active ? 'Show all sub-heads' : `Show only ${STATUS_LABEL[st].toLowerCase()}`
-                }
-                disabled={data.counts[st] === 0}
-                className="dash-lift flex cursor-pointer flex-col gap-2 rounded-xl border-2 px-3.5 py-3 text-left hover:bg-[var(--map-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--map-accent)] disabled:cursor-default disabled:opacity-50"
-                style={{
-                  borderColor: active ? color : 'var(--map-border)',
-                  backgroundColor: active
-                    ? `color-mix(in srgb, ${color} 14%, transparent)`
-                    : undefined,
-                }}
-              >
-                <span className="flex items-center justify-between gap-2">
-                  <span
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full"
-                    style={{ backgroundColor: `color-mix(in srgb, ${color} 20%, transparent)` }}
-                  >
-                    <Icon className="h-5 w-5" style={{ color }} aria-hidden="true" />
-                  </span>
-                  <span
-                    className="text-[34px] font-bold leading-none tabular-nums"
-                    style={{ color: 'var(--map-fg)' }}
-                  >
-                    {data.counts[st]}
-                  </span>
-                </span>
-                <span
-                  className="text-[15px] font-semibold leading-tight"
-                  style={{ color: 'var(--map-fg)' }}
-                >
-                  {STATUS_LABEL[st]}
-                </span>
-                <span
-                  className="h-1.5 w-full overflow-hidden rounded-full"
-                  style={{ backgroundColor: 'var(--map-switch-track)' }}
-                  aria-hidden="true"
-                >
-                  <span
-                    className="dash-grow-x block h-full rounded-full"
-                    style={{
-                      ['--i' as string]: i,
-                      width: `${Math.max(share > 0 ? 3 : 0, share * 100)}%`,
-                      backgroundColor: color,
-                    }}
-                  />
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
       {/* Toolbar */}
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 pb-3 pt-2">
-        <h3 className="text-[16px] font-bold" style={{ color: 'var(--map-fg)' }}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pb-3 pt-3">
+        <h3 className="text-[15px] font-bold" style={{ color: 'var(--map-fg)' }}>
           Main heads{' '}
           <span style={{ color: 'var(--map-fg-muted)' }}>
             · {filtering ? `${visible.length} of ${data.heads.length}` : data.heads.length}
@@ -1294,7 +1183,7 @@ export default function SectorWorkHeads({ sectorNo }: { sectorNo: number }) {
             aria-label="Search main heads and sub-heads"
             autoComplete="off"
             spellCheck={false}
-            className="h-10 w-full rounded-lg border py-1 pl-9 pr-9 text-[14px] outline-none focus-visible:ring-2 focus-visible:ring-[var(--map-accent)] [&::-webkit-search-cancel-button]:hidden"
+            className="h-10 w-full rounded-lg border py-1 pl-9 pr-9 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-[var(--map-accent)] [&::-webkit-search-cancel-button]:hidden"
             style={{
               backgroundColor: 'var(--map-surface-alt)',
               borderColor: 'var(--map-border)',
@@ -1313,7 +1202,7 @@ export default function SectorWorkHeads({ sectorNo }: { sectorNo: number }) {
           )}
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2.5">
-          <span className="text-[13px] font-semibold" style={{ color: 'var(--map-fg-muted)' }}>
+          <span className="text-[12px] font-semibold" style={{ color: 'var(--map-fg-muted)' }}>
             Sort by
           </span>
           <div
@@ -1331,7 +1220,7 @@ export default function SectorWorkHeads({ sectorNo }: { sectorNo: number }) {
                   aria-pressed={active}
                   title={opt.title}
                   onClick={() => setSortKey(opt.key)}
-                  className="h-9 cursor-pointer whitespace-nowrap rounded-md px-3 text-[14px] font-semibold transition-colors"
+                  className="h-9 cursor-pointer whitespace-nowrap rounded-md px-3 text-[13px] font-semibold transition-colors"
                   style={
                     active
                       ? { backgroundColor: 'var(--map-accent-bg)', color: 'var(--map-accent-fg)' }
@@ -1407,23 +1296,22 @@ export default function SectorWorkHeads({ sectorNo }: { sectorNo: number }) {
       )}
       {visible.length === 0 && (
         <div role="status" className="flex flex-col items-center gap-2 px-5 py-10 text-center">
-          <p className="text-[16px] font-semibold" style={{ color: 'var(--map-fg)' }}>
+          <p className="text-[15px] font-semibold" style={{ color: 'var(--map-fg)' }}>
             No matching heads or sub-heads
           </p>
           <button
             type="button"
             onClick={() => {
               setQuery('')
-              setStatusFilter(null)
             }}
-            className="cursor-pointer text-[14px] font-semibold underline underline-offset-2"
+            className="cursor-pointer text-[13px] font-semibold underline underline-offset-2"
             style={{ color: 'var(--map-accent)' }}
           >
-            Clear search and filters
+            Clear search
           </button>
         </div>
       )}
-      <p className="mt-4 text-[13px] leading-snug" style={{ color: 'var(--map-fg-muted)' }}>
+      <p className="mt-4 text-[12px] leading-snug" style={{ color: 'var(--map-fg-muted)' }}>
         <DemoBadge className="mr-1.5 align-middle" />
         Figures are generated for illustration. Heads and sub-heads follow the Kumbh Mela 2027
         planning document; each sub-head is measured Required → Planned → Completed → Balance.
