@@ -6,6 +6,11 @@ const nextConfig: NextConfig = {
   // `next start`. This keeps the deployed tree small and — because the traced paths
   // and the shipped files are produced by the same build — self-consistent.
   output: 'standalone',
+  // The chat route reads its SKILL.md at runtime (fs, not an import), so the build trace can't see
+  // it; include it explicitly or the standalone deploy would ship without it.
+  outputFileTracingIncludes: {
+    '/api/chat': ['./src/server/chatbot/SKILL.md'],
+  },
   // Files in public/ are served with `Cache-Control: public, max-age=0` by default, because their
   // paths are unhashed and Next cannot know when they change. For this app that default is
   // expensive: the vendored MapLibre worker pair and the vendored basemap style JSONs are 593 KB on

@@ -1,3 +1,4 @@
+import { ChatWidget } from '@/components/chat/ChatWidget'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { SidebarProvider } from '@/components/layout/SidebarContext'
 import { SidebarToggle } from '@/components/layout/SidebarToggle'
@@ -45,6 +46,7 @@ export function AppShell({
         >
           {children}
         </div>
+        <ChatWidget variant={variant} />
       </div>
     </SidebarProvider>
   )
