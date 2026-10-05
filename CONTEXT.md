@@ -126,7 +126,7 @@ src/
     api/            # All API routes (see §8)
     login/ register/
   components/
-    map/            # MapView.tsx (~4,700 lines) + StatsPanel, SectorReportDrawer, ...
+    map/            # MapView.tsx (~4,700 lines) + StatsPanel, SectorReportDrawer, SectorWorkTab (+ SectorTickets/Overview/WorkHeads, §9), ...
     tickets/        # Ticket UI incl. questionnaire/ subfolder
     accounts/ auth/ dashboard/ editor/ layout/ ui/
   lib/
@@ -775,6 +775,87 @@ coordinates up to z19 until it appeared. Fixed in `mapBadgeIcon.ts`'s `makeChevr
 near-black pair emergency exits' own casing already uses), `icon-size` raised to 1.3/1.1. See
 `PLAN-evacuation.md` §16.
 
+### Sector Report drawer and its Work Done tab
+
+`SectorReportDrawer` is the bottom drawer MapView shows in **Map and Ticket modes** for the selected
+sector (`drawerSector`; Map mode keys it off `selectedSector`, Ticket mode off `insightSector`). It always
+restarts collapsed when a different sector is picked — selecting a sector isn't a request to open the
+report. It has two tabs: **General Info** (everyone) and **Work Done** (only users with `ticket:read:all`;
+MapView omits the `workDone` prop otherwise and the drawer renders General Info alone, with no tab bar).
+`preferredTab` opens Map mode on General Info and Ticket mode on Work Done; a user's own tab click wins
+until that preference changes. An **Expanded view** toggle (controlled by MapView's `drawerExpanded`)
+hides the docked side panels and gives the drawer the full width and nearly the full height; entering it
+lands Work Done on Insights.
+
+**Data.** Work Done reads the same bulk ticket tuples as Heatmap/Ticket mode (`useTicketInsights`). In Map
+mode they're fetched only when the tab is first opened (`onActivate` → `requestWorkDoneData`) and then
+stay cached. `summarizeWorkDone(data, sectorNo)` (`SectorWorkDone.tsx`) rolls them up into
+category → sub-category tallies split by status bucket (`WorkDoneSummary`); `SectorWorkDone.tsx` is now just
+that rollup plus a few shared bits (`ProgressRing`, `PctPill`, `Highlight`) and **must not import
+`insights/charts.tsx`** — that pulls in recharts, and this file is reachable from MapView's static import.
+Shared view primitives (tweens, `Card`, `Dot`, `InlineError`, `STACK_ORDER`, `doneTextColor`…) are in
+`workDoneUi.tsx`.
+
+**`SectorWorkTab`** hosts three views behind a segmented control: **Work heads** (`SectorWorkHeads`, the
+planning document's heads/sub-heads — **demo data**, flagged by `DemoBadge`), **Insights**
+(`SectorOverview`: resolution ring, 7-day ticket-volume chart — `SectorTicketCharts`, recharts, loaded via
+`next/dynamic` — and by-category bars; clicking a bar drills into Tickets on that category through
+`focusCategory` → `initialOpen`) and **Tickets** (`SectorTickets`). The per-sector detail
+(`useSectorInsights(true, sectorNo)` → `/api/insights/sectors/:n`) is fetched here, not in the views, so
+switching views never refetches. Gotcha in that hook (the old "no data in the graph / median / oldest open"
+bug): its idempotency key must be reset when a cleanup lands before the response, or React Strict Mode's
+mount → cleanup → mount makes the second run bail while the first run's result is discarded.
+
+**Tickets view (`SectorTickets.tsx`)** — an explorer for the sector's tickets:
+
+- **Layout:** one search bar on top; below it a category rail (sortable; each row a status bar) beside a
+  detail panel — `Hero` (progress, status chips that are also filters, longest waiting / median), a
+  sub-category list that drills in (`GlideHeight` opens/closes it), then the ticket list. The two-column
+  layout needs ≥900px of _container_ width (`@min-[900px]:` — the drawer root is the `@container`); below
+  that the rail becomes a row of chips. The ticket row's wide grid kicks in at `@min-[1300px]:`.
+- **Data:** `collectTickets` reads the sector's tickets straight from the bulk tuples (`TicketField`
+  indexes). Plot numbers are **not** in those tuples: `SectorWorkTab` regexes `Plot <n>` out of the subjects
+  of the (200 most pressing) tickets `/api/insights/sectors/:n` returns and passes a `plots` Map; tickets
+  outside it show `Parcel <id>`. Both the row title and the search treat that label as the same thing.
+- **Ticket list = a work queue:** default sort puts unresolved first, priority descending, longest-waiting
+  first, with resolved tickets last, and groups rows under priority headings; Newest / Longest wait are
+  flat. Each row has a wait bar (red from `WAIT_ALERT_MS`), links to `/tickets/{number}`, and a Locate link to
+  `/?parcel=<sectorPlanId>&lng=&lat=&sector=` (opens in a new tab; consumed by `(shell)/page.tsx` →
+  MapView `initialParcel`). Paged: 12, then +24 per `IntersectionObserver` hit (rooted at the list's
+  scroll parent, not the window) or the "Show more" button. Hero KPIs follow the status filter but not the
+  search text.
+- **One search bar (`SearchHub`, `findHits`):** a combobox that matches tickets (number, `#number`, plot/
+  parcel, sub-class, category, status name, priority — every typed word must match) **and** categories and
+  sub-categories (a category with a single sub-category isn't offered its sub). Results: ≤4 categories,
+  ≤5 sub-categories, ≤6 tickets ("6 of 47") and a "Show all N matching tickets" row. A category/sub result
+  jumps there and clears the text; a ticket result opens `/tickets/{n}` in a new tab; "Show all" sets
+  `applied`, which resets scope to the whole sector and turns the text into a live list filter (accent
+  border on the bar, a `“text” ×` chip in the list header, "N of M"). Enter takes the highlighted result —
+  by default the first category/sub, else an exact ticket number, else "Show all". Clicking a rail category
+  while a search is applied keeps the filter (category ∩ search). Keyboard: ↑/↓ (wraps), Enter, **Esc closes
+  the list → clears the text → (nothing left) reaches the map**; with a search applied and focus elsewhere,
+  Esc steps back sub-category → status filter → search.
+- **Esc must beat the map's handler.** MapView's Esc handler is a _bubble_ listener on `document` that
+  closes things; the view installs a **capture-phase** `document` listener (`preventDefault` +
+  `stopImmediatePropagation`) only while there is something to step back out of, and the search input's
+  own React `stopPropagation` is enough for its Escapes (React's root listener sits below `document`).
+- **Stays mounted:** `SectorWorkTab` mounts Tickets on first visit and keeps it, hidden, while another view
+  shows — `invisible absolute inset-0 pointer-events-none` plus `inert`, **not `display:none`**, so scroll
+  position and measurements survive; filters/search persist and the opening choreography plays once. The
+  `active` prop pauses its Esc listener and refreshes `now` (so "waiting 3 d" doesn't go stale) on
+  re-show or new data.
+- **Motion** (`globals.css` + the `useMotion` family): panels use `.insight-rise`, rows `.row-rise` with
+  `--i` (position), `--rs` (stagger, 24ms), `--rd` (duration, 0.42s) and `--ry` (travel, 8px); anything
+  mounted _because the user did something_ uses the quick variant (220ms / 16ms / 3px). `useMotion`
+  snapshots its settings at mount — adding the rise class to an element already on screen replays its
+  animation, so never toggle it. `MotionCtx.interacted` flips on the first pointer/key/wheel/touch;
+  `useFlip` (WAAPI) slides rail rows on re-sort; `Count`/`useTweenTo` glide numbers.
+- **React Compiler lint rules apply** (eslint `react-hooks`): no synchronous `setState` in effect bodies
+  (use an rAF callback, an event handler, or adjust-state-during-render), no ref reads during render, and
+  `Date.now()` only in a `useState` initializer or async callback.
+- **No automated tests** cover this view (§12); it was verified in an isolated esbuild harness with demo
+  data (outside the repo) in both themes and at narrow widths.
+
 ---
 
 ## 10. The geospatial data
@@ -1021,6 +1102,7 @@ existing `_<table>_map` pattern. `SOURCE_TAG_2027`/`SOURCE_TAG_SHP` are the two 
 | `NEXT_PUBLIC_ARCGIS_API_KEY`                         | ArcGIS Location Platform key for the satellite basemap (client-bundled)    |
 | `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET` | Photo upload signing (server-only)                                         |
 | `AZURE_OPENAI_ENDPOINT` / `_DEPLOYMENT` / `_API_KEY` | Chat assistant LLM (server-only); unset: chat says "not configured"        |
+| `AZURE_SPEECH_ENDPOINT` / `_KEY` / `_API_VERSION`    | Optional chat mic: Azure Speech fast transcription (MAI-Transcribe)        |
 | `LOG_LEVEL`                                          | pino level                                                                 |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`           | In `.env.example`, but `seed.ts` now hardcodes accounts — likely vestigial |
 
@@ -1122,8 +1204,10 @@ like "update on roads in Bairagicamp" from two read-only tools and draws the dat
   zones) against Postgres `kumbh.sector_boundary` (cached 10 min).
 - **Visuals:** each tool also returns a structured `ChatVisual` (`src/lib/chat/visuals.ts`); the route
   returns `{ reply, visuals }` and `ChatVisuals.tsx` draws them (charts first, tickets after).
-- **Voice:** mic input and spoken replies use the browser Web Speech API (no server cost); the mic has
-  its own EN/hi switch because browsers cannot auto-detect the spoken language.
+- **Voice:** spoken replies use the browser `speechSynthesis` (Hindi voice picked when the reply has
+  Devanagari). The mic records a clip (`MediaRecorder`, stops on a pause) and `POST /api/transcribe`
+  sends it (as 16 kHz WAV, converted in the browser) to Azure Speech fast transcription with candidate
+  locales en-US + hi-IN, so the service detects English vs Hindi itself and there is no language switch. Browser `SpeechRecognition` was dropped because it cannot auto-detect.
 - **Endpoint:** `POST /api/chat`, session-authenticated, last 10 turns, 1000 chars each.
 - **Tests:** `src/server/chatbot/tools.test.ts` (mocks Postgres + ticket service).
 
@@ -1136,6 +1220,10 @@ Branch `feat/evac` (not yet merged to `main`). Recent work (this may be stale �
 - Performance pass (`fec649a`, §16) and satellite basemap (`ccbb561`, §9).
 - Ticket mode: every parcel keeps its class hairline, and sector progress labels now draw above the
   parcels (§9 "Ticket mode parcel rendering"). The label fix is uncommitted as of 2026-09-29.
+- Sector Report drawer's **Work Done tab** (§9 "Sector Report drawer and its Work Done tab"): Work heads
+  (demo) / Insights / Tickets views, an Expanded view, and a redesigned **Tickets explorer with one unified
+  search bar** (`SectorTickets.tsx`, committed in `2021414`). Next candidates: tests for `findHits`/
+  `collectTickets`, and replacing the demo Work heads data.
 
 Earlier work:
 

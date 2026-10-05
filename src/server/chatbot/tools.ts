@@ -154,22 +154,31 @@ async function getWorkProgress(args: Json): Promise<ToolOutput> {
       demo_data: true,
       sector: { no: sector.no, name: sector.name, zone: sector.zone },
       sector_overall_percent: pct(data.fraction),
+      // The cards already show every head, so the model only needs detail for the head(s) the
+      // user asked about; a whole-sector question gets one summary line per head. This keeps the
+      // reply small (the deployment has a tokens-per-minute quota).
       heads: heads.map((h) => ({
         head_no: h.no,
         name: h.name,
         percent_complete: pct(h.fraction),
         sub_heads_by_status: h.counts,
-        sub_heads: h.subs.map((s) => ({
-          name: s.name,
-          status: s.status,
-          required: formatQuantity(s.required, s.unit),
-          completed: formatQuantity(s.completed, s.unit),
-          balance: formatQuantity(s.balance, s.unit),
-          percent_complete: pct(s.fraction),
-          target_date: iso(s.targetDate),
-          department: s.department,
-          verified: s.verified,
-        })),
+        ...(heads.length <= 2
+          ? {
+              sub_heads: h.subs.map((s) => ({
+                name: s.name,
+                status: s.status,
+                completed: formatQuantity(s.completed, s.unit),
+                required: formatQuantity(s.required, s.unit),
+                percent_complete: pct(s.fraction),
+                target_date: iso(s.targetDate),
+                department: s.department,
+              })),
+            }
+          : {
+              delayed_sub_heads: h.subs
+                .filter((s) => s.status === 'delayed')
+                .map((s) => `${s.name} (${pct(s.fraction)}%, target ${iso(s.targetDate)})`),
+            }),
       })),
     },
   }
