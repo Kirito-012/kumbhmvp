@@ -267,23 +267,28 @@ function ProgressCard({ v }: { v: ProgressVisual }) {
       </div>
 
       {focus && (
-        <ul className="mt-4 space-y-2.5">
+        <ul className="mt-4 grid grid-cols-1 gap-2.5 @min-[520px]:grid-cols-2">
           {[...focus.subs]
             .sort((a, b) => STATUS_ORDER.indexOf(b.status) - STATUS_ORDER.indexOf(a.status))
             .map((s) => (
               <li
                 key={s.name}
-                className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3"
+                className="flex items-start gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3"
               >
-                <ProgressRing percent={s.percent} size={52} thickness={7} color={COLOR[s.status]} />
+                <div className="shrink-0">
+                  <ProgressRing
+                    percent={s.percent}
+                    size={52}
+                    thickness={7}
+                    color={COLOR[s.status]}
+                  />
+                </div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1">
-                    <p className="min-w-0 flex-1 text-[14px] font-medium leading-snug text-foreground">
-                      {s.name}
-                    </p>
+                  <p className="text-[14px] font-medium leading-snug text-foreground">{s.name}</p>
+                  <div className="mt-1.5">
                     <StatusChip status={s.status} />
                   </div>
-                  <p className="mt-1 text-[12.5px] leading-snug text-muted-strong">
+                  <p className="mt-1.5 text-[12.5px] leading-snug text-muted-strong">
                     {s.completed} of {s.required} · balance {s.balance}
                   </p>
                   <p className="text-[12.5px] leading-snug text-muted-strong">
