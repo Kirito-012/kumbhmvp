@@ -363,7 +363,13 @@ export function ChatWidget({ variant = 'pinned' }: { variant?: 'pinned' | 'overl
       aria-label={t.title}
       className={`chat-pop fixed inset-x-3 bottom-3 z-40 flex flex-col overflow-hidden rounded-3xl border border-[var(--border-strong)] bg-[var(--surface)] shadow-2xl transition-[width,height] duration-200 sm:inset-x-auto sm:bottom-5 ${variant === 'overlay' ? 'sm:right-[76px]' : 'sm:right-5'} ${
         expanded
-          ? 'h-[calc(100dvh-24px)] sm:h-[calc(100dvh-40px)] sm:w-[min(1000px,calc(100vw-40px))]'
+          ? `h-[calc(100dvh-24px)] sm:h-[calc(100dvh-40px)] ${
+              // The map page keeps 76px clear on the right for its zoom controls, so the wide
+              // panel must leave that much room too or it runs off the left edge on tablets.
+              variant === 'overlay'
+                ? 'sm:w-[min(1000px,calc(100vw-96px))]'
+                : 'sm:w-[min(1000px,calc(100vw-40px))]'
+            }`
           : 'h-[min(680px,calc(100dvh-24px))] sm:w-[420px]'
       }`}
     >
