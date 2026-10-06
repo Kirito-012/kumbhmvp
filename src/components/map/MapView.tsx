@@ -1543,6 +1543,7 @@ function FloatingLegend({
 export default function MapView({
   initialParcel = null,
   canUseInsights = false,
+  ticketModeOnly = false,
 }: {
   /** Set when arriving from a ticket's "View on map" link — flies straight to that parcel
    *  instead of the default Haridwar-wide view, and pre-selects its sector. */
@@ -1552,6 +1553,9 @@ export default function MapView({
    *  never renders and `?mode=`/`?isector=` are ignored for them; /api/insights/* enforce the
    *  same grant server-side regardless, since that's the actual security boundary. */
   canUseInsights?: boolean
+  /** Surveyors: locked to Ticket mode -- no ModeSwitcher, no 1-4 shortcuts, `?mode=` ignored.
+   *  Only meaningful with canUseInsights true (which creates the Ticket layers). */
+  ticketModeOnly?: boolean
 }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -1831,6 +1835,7 @@ export default function MapView({
   // this drives are the actual 403 boundary regardless.
   const [mode, setMode] = useState<MapMode>(() => {
     if (!canUseInsights) return 'map'
+    if (ticketModeOnly) return 'tickets'
     const m = searchParams.get('mode')
     return m === 'heatmap' || m === 'tickets' || m === 'evacuation' ? m : 'map'
   })
@@ -2378,7 +2383,7 @@ export default function MapView({
     // Deliberate: SSR renders with the hydration-safe defaults above, and this is the one-time
     // post-mount read of the real localStorage value the comment above describes; there's no
     // non-effect way to defer a browser-only read past hydration.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     setVisibility(loadStoredVisibility())
   }, [])
 
@@ -2408,7 +2413,7 @@ export default function MapView({
   // separate store (PLAN-evacuation.md §5.1).
   useEffect(() => {
     // Deliberate, same as the visibility hydration effect above.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     setEvacVisibility(loadStoredEvacVisibility())
   }, [])
 
@@ -4727,7 +4732,7 @@ export default function MapView({
   // measuring toggles). Never registered for a surveyor: canUseInsights false means there's no
   // switcher to drive and nothing mode-specific to clear.
   useEffect(() => {
-    if (!canUseInsights) return
+    if (!canUseInsights || ticketModeOnly) return
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
@@ -4749,7 +4754,7 @@ export default function MapView({
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [canUseInsights, mode, evacSelection, evacFocus])
+  }, [canUseInsights, ticketModeOnly, mode, evacSelection, evacFocus])
 
   // Layer visibility -- reacts to toggling the sidebar's switches, and also
   // catches the one-time swap from SSR-safe defaults to the
@@ -6227,7 +6232,7 @@ export default function MapView({
             </button>
           </>
         )}
-        {canUseInsights && <ModeSwitcher mode={mode} onChange={setMode} />}
+        {canUseInsights && !ticketModeOnly && <ModeSwitcher mode={mode} onChange={setMode} />}
       </div>
 
       {/* Expanded view hides the docked side panels with CSS, not by unmounting them, so their

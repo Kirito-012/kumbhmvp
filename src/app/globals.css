@@ -20,6 +20,7 @@
   --accent-strong: #34d399;
   --accent-soft: rgba(16, 185, 129, 0.14);
   --accent-text: #34d399;
+  --on-accent: #04120c;
   --warning-text: #fbbf24;
 
   --violet: #818cf8;
@@ -191,6 +192,7 @@
   --accent-strong: #059669;
   --accent-soft: rgba(16, 185, 129, 0.12);
   --accent-text: #047857;
+  --on-accent: #ffffff;
   --warning-text: #b45309;
 
   --violet: #6366f1;
@@ -349,7 +351,7 @@
   --color-info: var(--info);
   --color-info-soft: var(--info-soft);
 
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-geist-sans), var(--font-devanagari);
   --font-mono: var(--font-geist-mono);
 }
 
@@ -851,21 +853,55 @@ input[type='checkbox'].kumbh-checkbox {
   }
 }
 @keyframes chat-pop {
+  /* Grows out of the launcher's footprint in the same corner. The settled clip is oversized so
+     it never cuts the panel's shadow, and `backwards` fill drops it once the animation ends. */
+  from {
+    opacity: 0.3;
+    clip-path: inset(
+      calc(100% - 56px - var(--fb, 0px)) var(--fr, 0px) var(--fb, 0px)
+        calc(100% - var(--fw, 300px) - var(--fr, 0px)) round 28px
+    );
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(-40px -40px -64px -40px round calc(var(--radius-lg) + 40px));
+    transform: none;
+  }
+}
+@keyframes chat-pop-out {
+  from {
+    opacity: 1;
+    clip-path: inset(-40px -40px -64px -40px round calc(var(--radius-lg) + 40px));
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    clip-path: inset(
+      calc(100% - 56px - var(--fb, 0px)) var(--fr, 0px) var(--fb, 0px)
+        calc(100% - var(--fw, 300px) - var(--fr, 0px)) round 28px
+    );
+    transform: translateY(6px);
+  }
+}
+@keyframes chat-rise {
   from {
     opacity: 0;
-    transform: translateY(12px) scale(0.97);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
     transform: none;
   }
 }
-@keyframes chat-mic-pulse {
-  0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 55%, transparent);
+@keyframes chat-launcher-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
   }
-  100% {
-    box-shadow: 0 0 0 10px transparent;
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -873,10 +909,19 @@ input[type='checkbox'].kumbh-checkbox {
     animation: chat-in 0.25s ease-out both;
   }
   .chat-pop {
-    animation: chat-pop 0.22s ease-out both;
+    transform-origin: bottom right;
+    animation: chat-pop 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
   }
-  .chat-mic-live {
-    animation: chat-mic-pulse 1.2s ease-out infinite;
+  .chat-pop-out {
+    transform-origin: bottom right;
+    animation: chat-pop-out 0.2s cubic-bezier(0.4, 0, 1, 1) both;
+    pointer-events: none;
+  }
+  .chat-rise {
+    animation: chat-rise 0.45s cubic-bezier(0.16, 1, 0.3, 1) var(--d, 0ms) both;
+  }
+  .chat-launcher {
+    animation: chat-launcher-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) 60ms both;
   }
 }
 @keyframes chat-bar-grow {
@@ -908,13 +953,22 @@ input[type='checkbox'].kumbh-checkbox {
 }
 
 /* Tailwind's preflight resets buttons to the default cursor; the chat's controls are clickable. */
-.chat-launcher,
+.chat-launcher button,
 [data-chat] button:not(:disabled),
 [data-chat] summary {
   cursor: pointer;
 }
 [data-chat] button:disabled {
   cursor: not-allowed;
+}
+
+/* A page's fixed bottom CTA bar (e.g. QuestionnaireEntry's "Fill questionnaire", ~72px tall plus the
+   safe-area inset) would sit under the launcher on phones, so lift the launcher clear of it. The
+   bar opts in with data-mobile-cta; below the `sm` breakpoint only, since the bar is sm:hidden. */
+@media (max-width: 639px) {
+  body:has([data-mobile-cta]) .chat-launcher {
+    bottom: calc(5.75rem + env(safe-area-inset-bottom));
+  }
 }
 
 @keyframes chat-busy {
@@ -926,4 +980,9 @@ input[type='checkbox'].kumbh-checkbox {
   .chat-busy {
     animation: chat-busy 1s ease-in-out infinite;
   }
+}
+
+/* The map's sector report drawer covers the corner the launcher lives in. */
+html[data-sector-report] .chat-launcher {
+  display: none;
 }

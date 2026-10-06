@@ -8,7 +8,6 @@ export default function DashboardLoading() {
       <Topbar
         title="Dashboard"
         description="Here's what's happening across your workspace today"
-        primaryAction={{ label: 'New ticket', href: '/tickets/new' }}
       />
 
       <main className="flex-1 space-y-6 px-4 py-5 sm:px-8 sm:py-7">

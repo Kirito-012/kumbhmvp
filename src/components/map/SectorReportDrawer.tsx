@@ -694,6 +694,17 @@ export default function SectorReportDrawer({
   // the DRAWER_ANIM_MS timeout below, which is what actually unmounts it.
   const [closing, setClosing] = useState(false)
   const [mounted, setMounted] = useState(sectorNo !== null)
+
+  // The chat launcher sits in the same corner as this drawer's content, so it steps aside while the
+  // report is open (CSS keys off this attribute; see `.chat-launcher` in globals.css).
+  const reportOpen = mounted && !closing && !collapsed
+  useEffect(() => {
+    if (!reportOpen) return
+    document.documentElement.dataset.sectorReport = 'open'
+    return () => {
+      delete document.documentElement.dataset.sectorReport
+    }
+  }, [reportOpen])
   // Drawer opens as a short strip and grows only when the user drags the
   // handle -- same resize-by-drag model as Panel.tsx's width handle, just
   // measured in viewport-height px instead of width px.

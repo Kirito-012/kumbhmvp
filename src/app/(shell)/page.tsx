@@ -1,5 +1,6 @@
 import MapView from '@/components/map/MapView'
 import { requireTicketScope } from '@/server/auth/session'
+import { canUseMapModes } from '@/server/auth/ability'
 
 export default async function Home({
   searchParams,
@@ -7,9 +8,10 @@ export default async function Home({
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const { ability } = await requireTicketScope()
-  // Heatmap/Ticket modes are Admin & Manager only -- surveyors never see the switch (not just a
-  // hidden UI: /api/insights/* enforce the same grant server-side, see those routes).
-  const canUseInsights = ability.can('read:all', 'ticket')
+  // Admin/Manager get the full mode switcher. Surveyors are locked to Ticket mode only (no Map,
+  // Heatmap or Evacuation) -- /api/insights/* admits them, /api/evacuation/* stays read:all.
+  const canUseInsights = canUseMapModes(ability)
+  const ticketModeOnly = !ability.can('read:all', 'ticket')
 
   const sp = await searchParams
   const get = (key: string) => (Array.isArray(sp[key]) ? sp[key][0] : sp[key])
@@ -34,5 +36,11 @@ export default async function Home({
         }
       : null
 
-  return <MapView initialParcel={initialParcel} canUseInsights={canUseInsights} />
+  return (
+    <MapView
+      initialParcel={initialParcel}
+      canUseInsights={canUseInsights}
+      ticketModeOnly={ticketModeOnly}
+    />
+  )
 }

@@ -30,7 +30,6 @@ export function QuestionnaireEntry({
   // bottom of the screen.
   const [mounted, setMounted] = useState(false)
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true)
   }, [])
 
@@ -51,7 +50,10 @@ export function QuestionnaireEntry({
 
       {mounted &&
         createPortal(
-          <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-md sm:hidden">
+          <div
+            data-mobile-cta
+            className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-md sm:hidden"
+          >
             <Button
               type="button"
               size="lg"

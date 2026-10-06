@@ -9,6 +9,7 @@ import { CommentThread } from '@/components/tickets/CommentThread'
 import { ActivityTimeline } from '@/components/tickets/ActivityTimeline'
 import { TicketDetailSidebar } from '@/components/tickets/TicketDetailSidebar'
 import { TicketLocationMap } from '@/components/map/TicketLocationMap'
+import { DeleteTicketButton } from '@/components/tickets/DeleteTicketButton'
 import { SitePhotos } from '@/components/tickets/SitePhotos'
 import { QuestionnaireEntry } from '@/components/tickets/questionnaire/QuestionnaireEntry'
 import { requireTicketScope } from '@/server/auth/session'
@@ -79,6 +80,7 @@ export default async function TicketDetailPage({
 
   const canUpdate = ability.can('update', 'ticket')
   const canAssign = ability.can('assign', 'ticket')
+  const canDelete = ability.can('delete', 'ticket')
   const canComment = ability.can('create', 'comment')
   const canNote = ability.can('create', 'note')
   const canUploadPhoto = ability.can('create', 'attachment')
@@ -175,6 +177,11 @@ export default async function TicketDetailPage({
                   </div>
                 )}
               </div>
+              {canDelete && (
+                <div className="mt-5 flex justify-end border-t border-border pt-4">
+                  <DeleteTicketButton ticketNumber={ticket.number} />
+                </div>
+              )}
             </div>
 
             <section aria-labelledby="issue-heading" className="p-4 sm:p-6">

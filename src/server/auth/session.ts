@@ -3,7 +3,7 @@ import 'server-only'
 import { redirect } from 'next/navigation'
 import { cache } from 'react'
 import { auth } from '@/server/auth/auth'
-import { defineAbilityFor } from '@/server/auth/ability'
+import { defineAbilityFor, ticketScopeAssigneeId } from '@/server/auth/ability'
 
 /** Memoized per-request so repeated calls in the same render don't re-decode the session. */
 export const getSession = cache(async () => auth())
@@ -38,17 +38,13 @@ export async function requireAbility(grant?: { action: string; subject: string }
 }
 
 /**
- * Ticket-list/dashboard visibility scoping. Groups/Teams/Departments don't exist, so this is
- * deliberately coarse: a Surveyor (`ticket:read:own`, not `ticket:read:all`) only ever sees
- * tickets assigned to them — the caller's `assigneeId` filter is force-overridden server-side,
- * not just hidden in the UI. Admin/Manager (`ticket:read:all`) see everything.
- *
- * Returns `forcedAssigneeId: undefined` for anyone with `ticket:read:all` (no restriction).
+ * Ticket-list/dashboard visibility scoping, delegated to `ticketScopeAssigneeId`. Surveyors
+ * currently see every ticket like Admin/Manager, so `forcedAssigneeId` is `undefined` for all roles.
  */
 export async function requireTicketScope() {
   // Every seeded role has *some* ticket:read:* grant, so this is authn-only, not authz-gated —
   // the scoping below is the actual access control.
   const { user, ability } = await requireAbility()
-  const forcedAssigneeId = ability.can('read:all', 'ticket') ? undefined : user.id
+  const forcedAssigneeId = ticketScopeAssigneeId()
   return { user, ability, forcedAssigneeId }
 }
