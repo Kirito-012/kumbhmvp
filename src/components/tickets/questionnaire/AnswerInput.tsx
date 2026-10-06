@@ -144,6 +144,49 @@ export function AnswerInput({
         </div>
       )
 
+    case 'yes_no_size':
+      return (
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <ChoicePill
+              label="Yes"
+              active={answer.choice === 'yes'}
+              onClick={() => set({ choice: 'yes', length: null, width: null, height: null })}
+            />
+            <ChoicePill
+              label="No"
+              active={answer.choice === 'no'}
+              tone="negative"
+              onClick={() => set({ choice: 'no' })}
+            />
+          </div>
+          {answer.choice === 'no' && (
+            <div className="flex items-end gap-2">
+              <NumberField
+                label="Length"
+                unit={question.unit}
+                value={answer.length ?? null}
+                onChange={(v) => set({ length: v })}
+              />
+              <span className="mb-3.5 text-muted">×</span>
+              <NumberField
+                label="Width"
+                unit={question.unit}
+                value={answer.width ?? null}
+                onChange={(v) => set({ width: v })}
+              />
+              <span className="mb-3.5 text-muted">×</span>
+              <NumberField
+                label="Height"
+                unit={question.unit}
+                value={answer.height ?? null}
+                onChange={(v) => set({ height: v })}
+              />
+            </div>
+          )}
+        </div>
+      )
+
     case 'required_actual':
       return (
         <div className="flex gap-2">

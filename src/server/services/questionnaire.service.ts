@@ -4,8 +4,9 @@ import { dbConnect } from '@/server/db/connect'
 import { TicketModel } from '@/server/db/models/ticket.model'
 import { TicketCommentModel } from '@/server/db/models/ticket-comment.model'
 import { TicketEventModel } from '@/server/db/models/ticket-event.model'
+import { TicketTypeModel } from '@/server/db/models/ticket-type.model'
 import { TicketQuestionnaireModel } from '@/server/db/models/ticket-questionnaire.model'
-import { getTemplate } from '@/lib/questionnaire/general-camping'
+import { getTemplate, templateKeyForTicket } from '@/lib/questionnaire/general-camping'
 import { summarizeAnswers } from '@/lib/questionnaire/summarize'
 import type { QuestionnaireAnswer } from '@/lib/schemas/questionnaire'
 
@@ -23,6 +24,21 @@ export async function submitQuestionnaire(input: {
 
   const template = getTemplate(input.templateKey)
   if (!template) throw new Error('Unknown questionnaire template')
+
+  // A ticket only ever takes its own category's questionnaire -- reject a stale or forged key.
+  const ticketLocation = ticket.get('location') as {
+    classGroup?: string | null
+    subclass?: string | null
+  } | null
+  const ticketType = await TicketTypeModel.findById(ticket.typeId).select('name').lean()
+  const expectedKey = templateKeyForTicket({
+    location: ticketLocation,
+    subject: ticket.subject,
+    typeName: ticketType?.name,
+  })
+  if (input.templateKey !== expectedKey) {
+    throw new Error('This questionnaire does not apply to this ticket')
+  }
 
   const { answeredCount, skippedCount, flaggedQuestionIds } = summarizeAnswers(
     input.templateKey,

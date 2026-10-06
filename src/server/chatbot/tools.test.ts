@@ -26,7 +26,7 @@ describe('chatbot tools', () => {
       {},
     )
     expect(result.demo_data).toBe(true)
-    expect((result.heads as { name: string }[])[0].name).toMatch(/Roads/)
+    expect((result.heads as { name: string }[])[0].name).toMatch(/Road/)
     expect(visual?.type).toBe('progress')
     if (visual?.type === 'progress') {
       expect(visual.sector.name).toBe('LAXMANJHULA-30')

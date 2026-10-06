@@ -12,7 +12,7 @@ import {
 import { Sheet } from '@/components/ui/Sheet'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
-import { GENERAL_CAMPING, type Question } from '@/lib/questionnaire/general-camping'
+import { getTemplate, type Question } from '@/lib/questionnaire/general-camping'
 import type { QuestionnaireAnswer } from '@/lib/schemas/questionnaire'
 import type { QuestionnaireView } from '@/lib/ticket-view'
 import { AnswerInput } from '@/components/tickets/questionnaire/AnswerInput'
@@ -21,8 +21,6 @@ import {
   type QuestionnaireActionState,
 } from '@/server/actions/questionnaire.actions'
 import { updateTicketFieldAction } from '@/server/actions/ticket.actions'
-
-const TEMPLATE = GENERAL_CAMPING
 
 function emptyAnswer(questionId: string): QuestionnaireAnswer {
   return { questionId, skipped: false }
@@ -38,6 +36,13 @@ function isAnswered(question: Question, answer: QuestionnaireAnswer | undefined)
       return answer.choice != null || answer.required != null || answer.actual != null
     case 'required_actual':
       return answer.required != null || answer.actual != null
+    case 'yes_no_size':
+      return (
+        answer.choice != null ||
+        answer.length != null ||
+        answer.width != null ||
+        answer.height != null
+      )
     case 'dimensions':
       return answer.length != null || answer.width != null
     case 'measurement':
@@ -60,37 +65,33 @@ function isHandled(question: Question, answer: QuestionnaireAnswer | undefined) 
   return isSkipped(answer) || isAnswered(question, answer)
 }
 
-function draftKey(ticketNumber: number) {
-  return `questionnaire-draft:${ticketNumber}:${TEMPLATE.key}:v${TEMPLATE.version}`
+function draftKey(ticketNumber: number, templateKey: string, version: number) {
+  return `questionnaire-draft:${ticketNumber}:${templateKey}:v${version}`
 }
 
 function loadDraft(
-  ticketNumber: number,
+  key: string,
 ): { answers: Record<string, QuestionnaireAnswer>; remarks: string } | null {
   try {
-    const raw = localStorage.getItem(draftKey(ticketNumber))
+    const raw = localStorage.getItem(key)
     return raw ? JSON.parse(raw) : null
   } catch {
     return null
   }
 }
 
-function saveDraft(
-  ticketNumber: number,
-  answers: Record<string, QuestionnaireAnswer>,
-  remarks: string,
-) {
+function saveDraft(key: string, answers: Record<string, QuestionnaireAnswer>, remarks: string) {
   try {
-    localStorage.setItem(draftKey(ticketNumber), JSON.stringify({ answers, remarks }))
+    localStorage.setItem(key, JSON.stringify({ answers, remarks }))
   } catch {
     // localStorage can throw (private mode, quota, disabled) — draft autosave is a convenience,
     // not a requirement, so failures here are silently ignored.
   }
 }
 
-function clearDraft(ticketNumber: number) {
+function clearDraft(key: string) {
   try {
-    localStorage.removeItem(draftKey(ticketNumber))
+    localStorage.removeItem(key)
   } catch {
     // see saveDraft
   }
@@ -110,6 +111,7 @@ function answersFromPrevious(view: QuestionnaireView): Record<string, Questionna
       actual: a.actual,
       length: a.length,
       width: a.width,
+      height: a.height,
       value: a.value,
       text: a.text,
     }
@@ -136,6 +138,7 @@ export function QuestionnaireForm({
   open,
   onClose,
   ticketNumber,
+  templateKey,
   resolvedStatusId,
   canUpdateStatus,
   previousQuestionnaire,
@@ -143,12 +146,16 @@ export function QuestionnaireForm({
   open: boolean
   onClose: () => void
   ticketNumber: number
+  /** Which questionnaire this ticket's category takes (see templateKeyForTicket). */
+  templateKey: string
   /** First status row with isResolved:true, if any — offered as the one-tap post-submit action. */
   resolvedStatusId: string | null
   canUpdateStatus: boolean
   /** The ticket's most recent submitted response, if any — used to prefill a new submission. */
   previousQuestionnaire: QuestionnaireView | null
 }) {
+  const TEMPLATE = getTemplate(templateKey)!
+  const storageKey = draftKey(ticketNumber, TEMPLATE.key, TEMPLATE.version)
   const [answers, setAnswers] = useState<Record<string, QuestionnaireAnswer>>({})
   const [remarks, setRemarks] = useState('')
   const [step, setStep] = useState(0) // section index; sections.length === review step
@@ -189,14 +196,14 @@ export function QuestionnaireForm({
   if (open !== prevOpen) {
     setPrevOpen(open)
     if (open) {
-      const draft = loadDraft(ticketNumber)
+      const draft = loadDraft(storageKey)
       const resumed = draft && Object.keys(draft.answers).length > 0
       const resume = resumed && window.confirm('Resume your saved draft for this questionnaire?')
       if (resume) {
         setAnswers(draft.answers)
         setRemarks(draft.remarks)
       } else {
-        if (resumed) clearDraft(ticketNumber)
+        if (resumed) clearDraft(storageKey)
         setAnswers(previousQuestionnaire ? answersFromPrevious(previousQuestionnaire) : {})
         setRemarks(previousQuestionnaire ? remarksFromPrevious(previousQuestionnaire) : '')
       }
@@ -209,7 +216,7 @@ export function QuestionnaireForm({
     const wasPending = prevPending
     setPrevPending(pending)
     if (wasPending && !pending && state?.success) {
-      clearDraft(ticketNumber)
+      clearDraft(storageKey)
       if (canUpdateStatus && resolvedStatusId) setResolvePrompt(true)
       else handleFullClose()
     }
@@ -219,9 +226,9 @@ export function QuestionnaireForm({
   // external system, localStorage, on a timer), which is exactly what useEffect is for.
   useEffect(() => {
     if (!open) return
-    const t = setTimeout(() => saveDraft(ticketNumber, answers, remarks), 500)
+    const t = setTimeout(() => saveDraft(storageKey, answers, remarks), 500)
     return () => clearTimeout(t)
-  }, [open, ticketNumber, answers, remarks])
+  }, [open, storageKey, answers, remarks])
 
   function handleFullClose() {
     setStep(0)
@@ -496,7 +503,8 @@ export function QuestionnaireForm({
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 xl:items-start xl:gap-5">
               {currentSection.questions.map((q) => {
                 const answer = answers[q.id] ?? emptyAnswer(q.id)
-                const wide = q.kind === 'text' || q.kind === 'yes_no_measure'
+                const wide =
+                  q.kind === 'text' || q.kind === 'yes_no_measure' || q.kind === 'yes_no_size'
                 return (
                   <div
                     key={q.id}

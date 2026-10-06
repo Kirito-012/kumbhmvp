@@ -26,6 +26,7 @@ import {
   toAttachmentView,
   toQuestionnaireView,
 } from '@/lib/ticket-view'
+import { templateKeyForTicket } from '@/lib/questionnaire/general-camping'
 import { cn } from '@/lib/utils'
 
 export default async function TicketDetailPage({
@@ -94,8 +95,16 @@ export default async function TicketDetailPage({
   const afterPhotoCount = photos.filter((photo) => photo.phase === 'after').length
   const questionnaireCount = questionnaires.length
   // listQuestionnaires sorts createdAt ascending, so the last entry is the most recent submission.
+  const questionnaireTemplateKey = templateKeyForTicket(ticket)
+  // Only prefill from a previous response to the *same* questionnaire -- a ticket's category (and so
+  // its questionnaire) can change, and a different template's answers don't map onto these questions.
+  const sameTemplateResponses = questionnaires.filter(
+    (q) => q.templateKey === questionnaireTemplateKey,
+  )
   const latestQuestionnaire =
-    questionnaires.length > 0 ? questionnaires[questionnaires.length - 1] : null
+    sameTemplateResponses.length > 0
+      ? sameTemplateResponses[sameTemplateResponses.length - 1]
+      : null
   const isResolved = Boolean(status?.isResolved)
   const isOverdue = Boolean(ticket.dueDate && !isResolved && new Date(ticket.dueDate) < new Date())
   const dueDateLabel = ticket.dueDate
@@ -169,6 +178,7 @@ export default async function TicketDetailPage({
                   <div className="w-full shrink-0 xl:w-72">
                     <QuestionnaireEntry
                       ticketNumber={ticket.number}
+                      templateKey={questionnaireTemplateKey}
                       hasExistingResponse={questionnaireCount > 0}
                       resolvedStatusId={resolvedStatus ? String(resolvedStatus._id) : null}
                       canUpdateStatus={canUpdate}

@@ -14,6 +14,8 @@
  * TicketQuestionnaire model) so edits here never retroactively change what a past survey meant.
  */
 
+import { TOILETS } from '@/lib/questionnaire/toilets'
+
 export type AnswerKind =
   | 'yes_no'
   | 'yes_no_na'
@@ -21,6 +23,7 @@ export type AnswerKind =
   | 'dimensions'
   | 'required_actual'
   | 'yes_no_measure'
+  | 'yes_no_size'
   | 'text'
 
 export type Question = {
@@ -382,7 +385,30 @@ export const GENERAL_CAMPING: QuestionnaireTemplate = {
   ],
 }
 
-export const QUESTIONNAIRE_TEMPLATES = { [GENERAL_CAMPING.key]: GENERAL_CAMPING } as const
+export const QUESTIONNAIRE_TEMPLATES = {
+  [GENERAL_CAMPING.key]: GENERAL_CAMPING,
+  [TOILETS.key]: TOILETS,
+} as const
+
+/** Which questionnaire a ticket gets. Toilet tickets (toilets and urinals) get the Toilets
+ *  questionnaire; every other category keeps the General Camping one until it has its own.
+ *  A ticket counts as a toilet ticket if its parcel's sub-class or class, its subject, or its
+ *  ticket type mentions a toilet or urinal (case-insensitive). */
+const TOILET_PATTERN = /toilet|urinal/i
+
+export function templateKeyForTicket(ticket: {
+  location?: { classGroup?: string | null; subclass?: string | null } | null
+  subject?: string | null
+  typeName?: string | null
+}): string {
+  const fields = [
+    ticket.location?.subclass,
+    ticket.location?.classGroup,
+    ticket.subject,
+    ticket.typeName,
+  ]
+  return fields.some((f) => TOILET_PATTERN.test(f ?? '')) ? TOILETS.key : GENERAL_CAMPING.key
+}
 
 export function getTemplate(key: string): QuestionnaireTemplate | null {
   return QUESTIONNAIRE_TEMPLATES[key as keyof typeof QUESTIONNAIRE_TEMPLATES] ?? null

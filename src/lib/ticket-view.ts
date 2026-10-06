@@ -44,6 +44,7 @@ export type TicketDetailView = {
   id: string
   number: number
   subject: string
+  typeName: string | null
   issueHtml: string
   droneSevaUrl: string | null
   priorityId: string | null
@@ -60,6 +61,7 @@ export type TicketDetailView = {
     sectorPlanId: number
     sectorNo: number | null
     classGroup: string
+    subclass: string | null
     lng: number
     lat: number
   } | null
@@ -77,6 +79,7 @@ export function toTicketDetailView(t: any): TicketDetailView {
     priorityId: t.priorityId ? String(t.priorityId._id) : null,
     statusId: t.statusId ? String(t.statusId._id) : null,
     typeId: t.typeId ? String(t.typeId._id) : null,
+    typeName: t.typeId?.name ?? null,
     assigneeId: t.assigneeId ? String(t.assigneeId._id) : null,
     assignee: toPerson(t.assigneeId),
     owner: toPerson(t.ownerId),
@@ -93,6 +96,7 @@ export function toTicketDetailView(t: any): TicketDetailView {
           sectorPlanId: t.location.sectorPlanId,
           sectorNo: t.location.sectorNo ?? null,
           classGroup: t.location.classGroup,
+          subclass: t.location.subclass ?? null,
           lng: t.location.lng,
           lat: t.location.lat,
         }
@@ -154,6 +158,7 @@ export type QuestionnaireAnswerView = {
   actual: number | null
   length: number | null
   width: number | null
+  height: number | null
   value: number | null
   text: string | null
 }
@@ -184,6 +189,7 @@ export function toQuestionnaireView(q: any): QuestionnaireView {
       actual: a.actual ?? null,
       length: a.length ?? null,
       width: a.width ?? null,
+      height: a.height ?? null,
       value: a.value ?? null,
       text: a.text ?? null,
     })),

@@ -14,6 +14,7 @@ export const questionnaireAnswerSchema = z.object({
   actual: z.number().nullable().optional(),
   length: z.number().nullable().optional(),
   width: z.number().nullable().optional(),
+  height: z.number().nullable().optional(),
   value: z.number().nullable().optional(),
   text: z.string().trim().max(500).nullable().optional(),
 })

@@ -33,12 +33,13 @@ tool says a name is a zone, list its sectors and ask which one (one short questi
 
 ## Tools
 
-1. `get_work_progress(sector, head?)` — progress of the 14 main work heads and their sub-heads
+1. `get_work_progress(sector, head?)` — progress of the 13 main work heads and their sub-heads
    in a sector (required / completed / balance / % / target date / department / status). The chat
    window also draws KPI cards and bars from this call, so do not repeat every number in text.
-   - `head` is an optional English keyword (`road`, `water`, `electric`, `sewer`, `tent`, `fire`,
-     `medical`, `traffic`, `ghat` …). Translate Hindi words first (सड़क → road, पानी → water,
-     बिजली → electric, सीवर → sewer, घाट → ghat).
+   - `head` is an optional English keyword (`site`, `road`, `electric`, `water`, `tent`,
+     `sanitation`, `telecom`, `isbt`, `fire`, `medical`, `police`, `signage`, `parking`).
+     Translate Hindi words first (सड़क → road, पानी → water, बिजली → electric, शौचालय/सफाई →
+     sanitation, पार्किंग → parking, पुलिस → police).
    - **This data is DEMO data.** Always say so once per answer ("demo figures" / "डेमो आँकड़े").
 2. `search_tickets(sector?, query?, status?, class_group?, limit?)` — real tickets from the
    ticketing system. Use it for "any complaints / issues / tickets on …". `status` is one of

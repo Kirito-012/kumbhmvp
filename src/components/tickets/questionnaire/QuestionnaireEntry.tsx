@@ -10,12 +10,14 @@ import type { QuestionnaireView } from '@/lib/ticket-view'
 
 export function QuestionnaireEntry({
   ticketNumber,
+  templateKey,
   hasExistingResponse,
   resolvedStatusId,
   canUpdateStatus,
   previousQuestionnaire,
 }: {
   ticketNumber: number
+  templateKey: string
   hasExistingResponse: boolean
   resolvedStatusId: string | null
   canUpdateStatus: boolean
@@ -72,6 +74,7 @@ export function QuestionnaireEntry({
         open={open}
         onClose={() => setOpen(false)}
         ticketNumber={ticketNumber}
+        templateKey={templateKey}
         resolvedStatusId={resolvedStatusId}
         canUpdateStatus={canUpdateStatus}
         previousQuestionnaire={previousQuestionnaire}
