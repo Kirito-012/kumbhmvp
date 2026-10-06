@@ -29,6 +29,7 @@ export default async function TicketsPage({
   const { ability, forcedAssigneeId } = await requireTicketScope()
   const canUpdate = ability.can('update', 'ticket')
   const canAssign = ability.can('assign', 'ticket')
+  const canCreate = ability.can('create', 'ticket')
 
   const page = Number(get('page') ?? '1') || 1
   const sector = get('sector')
@@ -84,7 +85,7 @@ export default async function TicketsPage({
       <Topbar
         title="Tickets"
         description={`${statusCounts.total} tickets`}
-        primaryAction={{ label: 'New ticket', href: '/tickets/new' }}
+        primaryAction={canCreate ? { label: 'New ticket', href: '/tickets/new' } : undefined}
       />
 
       <main className="flex-1 space-y-4 px-4 py-4 sm:px-8 sm:py-6 animate-fade-in">

@@ -1,3 +1,4 @@
+import { requireAbility } from '@/server/auth/session'
 import { Topbar } from '@/components/layout/Topbar'
 import { Card } from '@/components/ui/Card'
 import { NewTicketForm } from '@/components/tickets/NewTicketForm'
@@ -5,6 +6,7 @@ import { dbConnect } from '@/server/db/connect'
 import { getPriorities, getTypes } from '@/server/services/lookups'
 
 export default async function NewTicketPage() {
+  await requireAbility({ action: 'create', subject: 'ticket' })
   await dbConnect()
   const [types, priorities] = await Promise.all([getTypes(), getPriorities()])
 

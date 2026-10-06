@@ -81,9 +81,10 @@ const ROLES = [
     // 'own' not 'group' — Groups/Teams/Departments aren't built. A Surveyor's ticket list and
     // dashboard are scoped server-side to assigneeId === self (see requireTicketScope() in
     // src/server/auth/session.ts). ticket:assign is NOT granted — only Admin/Manager assign.
+    // Surveyors also cannot create or delete tickets -- tickets are filed by Admin/Manager (or the
+    // DroneSeva integration); delete is Admin-only. Re-run `npm run seed` and re-login to apply.
     grants: [
       'ticket:read:own',
-      'ticket:create',
       'ticket:update',
       'comment:create',
       'comment:update:own',

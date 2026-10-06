@@ -19,7 +19,8 @@ import { buildWorkHeadsOverview } from '@/lib/workHeads/overview'
 const rise = (i: number) => ({ '--i': i }) as React.CSSProperties
 
 export default async function DashboardPage() {
-  const { forcedAssigneeId } = await requireTicketScope()
+  const { ability, forcedAssigneeId } = await requireTicketScope()
+  const canCreate = ability.can('create', 'ticket')
   const mine = Boolean(forcedAssigneeId)
   // Independent reads (Mongo vs Postgres), so they run side by side. The map data is cached for the
   // life of the server process and resolves to null — never throws — if Postgres is unreachable.
@@ -42,7 +43,7 @@ export default async function DashboardPage() {
       <Topbar
         title="Dashboard"
         description="Here's what's happening across your workspace today"
-        primaryAction={{ label: 'New ticket', href: '/tickets/new' }}
+        primaryAction={canCreate ? { label: 'New ticket', href: '/tickets/new' } : undefined}
       />
 
       <main className="flex-1 space-y-6 px-4 py-5 sm:px-8 sm:py-7">

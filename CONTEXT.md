@@ -187,7 +187,7 @@ Authoritative grant list: [`scripts/seed.ts`](scripts/seed.ts).
 
 | Area                  | Admin          | Manager                                                 | Surveyor                     |
 | --------------------- | -------------- | ------------------------------------------------------- | ---------------------------- |
-| ticket                | all            | read:all, create, update, assign, merge (**no delete**) | read:**own**, create, update |
+| ticket                | all            | read:all, create, update, assign, merge (**no delete**) | read:**own**, update (**no create/delete**) |
 | comment               | all            | all                                                     | create, update:own           |
 | note                  | read, create   | read, create                                            | read, create                 |
 | attachment            | create, delete | create, delete                                          | create only                  |
