@@ -1,5 +1,5 @@
 import { getCurrentUser } from '@/server/auth/session'
-import { defineAbilityFor } from '@/server/auth/ability'
+import { ticketScopeAssigneeId } from '@/server/auth/ability'
 import { answer, ChatBusyError, ChatConfigError, type ChatTurn } from '@/server/chatbot/llm'
 
 export const runtime = 'nodejs'
@@ -31,8 +31,7 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Send a user message' }, { status: 400 })
   }
 
-  const ability = defineAbilityFor(user.grants)
-  const forcedAssigneeId = ability.can('read:all', 'ticket') ? undefined : user.id
+  const forcedAssigneeId = ticketScopeAssigneeId()
 
   try {
     const { reply, visuals } = await answer(history, { forcedAssigneeId })

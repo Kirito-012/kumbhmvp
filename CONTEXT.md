@@ -526,7 +526,7 @@ override table for DB colours sitting right at the contrast threshold.
 - **Layer visibility** — seeded to SSR-safe defaults, then hydrated from `localStorage` post-mount to
   avoid hydration mismatch, and mirrored into a ref for the once-registered `load` handler.
 
-### Insights (Heatmap/Ticket mode) — admin & manager only, see `PLAN-heatmap.md`
+### Insights (Heatmap/Ticket mode) — admin & manager get all modes; surveyors are locked to Ticket mode (`ticketModeOnly`), see `PLAN-heatmap.md`
 
 `ModeSwitcher` (top-left control strip, gated on `canUseInsights`) swaps `MapView` between three modes:
 Map (the default subsystem above), Heatmap, and Tickets (parcels coloured by status-bucket feature-state —

@@ -1,5 +1,5 @@
 import { getCurrentUser } from '@/server/auth/session'
-import { defineAbilityFor } from '@/server/auth/ability'
+import { defineAbilityFor, ticketScopeAssigneeId } from '@/server/auth/ability'
 import { searchTickets } from '@/server/services/ticket.service'
 import { searchUsers } from '@/server/services/user.service'
 
@@ -23,7 +23,7 @@ export async function GET(request: Request) {
   if (query.length < 2) return Response.json({ tickets: [], people: [] })
 
   const ability = defineAbilityFor(user.grants)
-  const forcedAssigneeId = ability.can('read:all', 'ticket') ? undefined : user.id
+  const forcedAssigneeId = ticketScopeAssigneeId()
   const canSearchPeople = ability.can('read', 'account')
 
   const [tickets, people] = await Promise.all([

@@ -19,3 +19,21 @@ export function defineAbilityFor(grants: string[]): AppAbility {
 
   return build()
 }
+
+/**
+ * Gate for Ticket mode and the /api/insights/* feeds behind it -- every role that can read tickets,
+ * Surveyors (`ticket:read:own`) included. Heatmap/Evacuation/Map-switching stay `read:all` only.
+ */
+export function canUseMapModes(ability: AppAbility): boolean {
+  return ability.can('read:all', 'ticket') || ability.can('read:own', 'ticket')
+}
+
+/**
+ * Assignee a ticket query is force-scoped to, or `undefined` for no restriction. Surveyors used to
+ * be pinned to their own tickets (`ticket:read:own`); they now see every ticket, so nobody is
+ * scoped. Kept as one function so call sites (lists, search, dashboard, chat, detail page) stay in
+ * step if scoping ever returns.
+ */
+export function ticketScopeAssigneeId(): string | undefined {
+  return undefined
+}

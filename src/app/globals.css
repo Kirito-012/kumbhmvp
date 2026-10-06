@@ -962,6 +962,15 @@ input[type='checkbox'].kumbh-checkbox {
   cursor: not-allowed;
 }
 
+/* A page's fixed bottom CTA bar (e.g. QuestionnaireEntry's "Fill questionnaire", ~72px tall plus the
+   safe-area inset) would sit under the launcher on phones, so lift the launcher clear of it. The
+   bar opts in with data-mobile-cta; below the `sm` breakpoint only, since the bar is sm:hidden. */
+@media (max-width: 639px) {
+  body:has([data-mobile-cta]) .chat-launcher {
+    bottom: calc(5.75rem + env(safe-area-inset-bottom));
+  }
+}
+
 @keyframes chat-busy {
   50% {
     opacity: 0.3;

@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react'
 import Image from 'next/image'
-import { Camera, X, RotateCw, Loader2 } from 'lucide-react'
+import { Camera, ImageIcon, X, RotateCw, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { compressImage } from '@/lib/image-compress'
 import { uploadToCloudinary } from '@/lib/cloudinary-upload'
@@ -40,7 +40,11 @@ function PhaseGroup({
   onOpenLightbox: (id: string) => void
 }) {
   const [pending, setPending] = useState<PendingUpload[]>([])
-  const inputRef = useRef<HTMLInputElement>(null)
+  // Two inputs because `capture` is all-or-nothing on phones: with it, the OS goes straight to the
+  // camera and never offers the gallery; without it, the picker offers gallery (and usually camera).
+  const cameraRef = useRef<HTMLInputElement>(null)
+  const galleryRef = useRef<HTMLInputElement>(null)
+  const [chooserOpen, setChooserOpen] = useState(false)
   const remaining = MAX_PER_PHASE - photos.length - pending.length
 
   async function uploadOne(file: File) {
@@ -91,7 +95,9 @@ function PhaseGroup({
     if (!files) return
     const toUpload = Array.from(files).slice(0, Math.max(0, remaining))
     toUpload.forEach(uploadOne)
-    if (inputRef.current) inputRef.current.value = ''
+    if (cameraRef.current) cameraRef.current.value = ''
+    if (galleryRef.current) galleryRef.current.value = ''
+    setChooserOpen(false)
   }
 
   function retry(item: PendingUpload) {
@@ -176,18 +182,48 @@ function PhaseGroup({
           </div>
         ))}
 
-        {canUpload && remaining > 0 && (
+        {canUpload && remaining > 0 && !chooserOpen && (
           <button
             type="button"
-            onClick={() => inputRef.current?.click()}
+            onClick={() => setChooserOpen(true)}
             className={cn(
               'flex aspect-square min-h-24 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border text-muted-strong transition-colors hover:border-accent/60 hover:bg-accent-soft/30 hover:text-accent-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 active:bg-overlay',
             )}
+            aria-haspopup="true"
             aria-label={`Add ${label.toLowerCase()} work photos`}
           >
             <Camera className="h-6 w-6" />
             <span className="text-sm font-medium">Add photos</span>
           </button>
+        )}
+
+        {canUpload && remaining > 0 && chooserOpen && (
+          <div className="relative flex aspect-square min-h-24 flex-col gap-1.5 rounded-xl border-2 border-dashed border-accent/60 p-1.5">
+            <button
+              type="button"
+              onClick={() => cameraRef.current?.click()}
+              className="flex flex-1 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg bg-accent-soft/30 text-xs font-medium text-accent-strong transition-colors hover:bg-accent-soft/50 active:bg-accent-soft/60"
+            >
+              <Camera className="h-5 w-5" />
+              Take photo
+            </button>
+            <button
+              type="button"
+              onClick={() => galleryRef.current?.click()}
+              className="flex flex-1 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg bg-overlay text-xs font-medium text-muted-strong transition-colors hover:bg-overlay-strong active:bg-border"
+            >
+              <ImageIcon className="h-5 w-5" />
+              Gallery
+            </button>
+            <button
+              type="button"
+              onClick={() => setChooserOpen(false)}
+              className="absolute -right-2 -top-2 flex h-6 w-6 cursor-pointer items-center justify-center rounded-full border border-border bg-background text-muted-strong"
+              aria-label="Cancel"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         )}
       </div>
 
@@ -198,13 +234,21 @@ function PhaseGroup({
       )}
 
       <input
-        ref={inputRef}
+        ref={cameraRef}
         type="file"
         accept="image/*"
         capture="environment"
+        hidden
+        aria-label={`Take ${label.toLowerCase()} work photo with camera`}
+        onChange={(e) => handleFiles(e.target.files)}
+      />
+      <input
+        ref={galleryRef}
+        type="file"
+        accept="image/*"
         multiple
         hidden
-        aria-label={`Upload ${label.toLowerCase()} work photos`}
+        aria-label={`Choose ${label.toLowerCase()} work photos from gallery`}
         onChange={(e) => handleFiles(e.target.files)}
       />
     </section>

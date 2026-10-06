@@ -1,5 +1,5 @@
 import { getCurrentUser } from '@/server/auth/session'
-import { defineAbilityFor } from '@/server/auth/ability'
+import { canUseMapModes, defineAbilityFor } from '@/server/auth/ability'
 import { getSectorInsights } from '@/server/services/insights.service'
 
 export const runtime = 'nodejs'
@@ -17,7 +17,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ sectorN
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const ability = defineAbilityFor(user.grants)
-  if (!ability.can('read:all', 'ticket')) {
+  if (!canUseMapModes(ability)) {
     return Response.json({ error: 'Forbidden' }, { status: 403 })
   }
 
