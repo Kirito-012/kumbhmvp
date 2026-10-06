@@ -14,6 +14,13 @@ function hasAnswerData(question: Question, answer: QuestionnaireAnswer): boolean
       return answer.choice != null || answer.required != null || answer.actual != null
     case 'required_actual':
       return answer.required != null || answer.actual != null
+    case 'yes_no_size':
+      return (
+        answer.choice != null ||
+        answer.length != null ||
+        answer.width != null ||
+        answer.height != null
+      )
     case 'dimensions':
       return answer.length != null || answer.width != null
     case 'measurement':
@@ -30,7 +37,8 @@ function isFlagged(question: Question, answer: QuestionnaireAnswer): boolean {
   if (
     question.kind === 'yes_no' ||
     question.kind === 'yes_no_na' ||
-    question.kind === 'yes_no_measure'
+    question.kind === 'yes_no_measure' ||
+    question.kind === 'yes_no_size'
   ) {
     return answer.choice === 'no'
   }

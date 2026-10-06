@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { ChevronDown, ClipboardCheck, AlertTriangle } from 'lucide-react'
 import { cn, timeAgo } from '@/lib/utils'
-import { GENERAL_CAMPING, type Question } from '@/lib/questionnaire/general-camping'
+import { GENERAL_CAMPING, getTemplate, type Question } from '@/lib/questionnaire/general-camping'
 import type { QuestionnaireView, QuestionnaireAnswerView } from '@/lib/ticket-view'
 
 /** Whether an answer actually carries a value, as opposed to a placeholder the form submits for
@@ -21,6 +21,13 @@ function hasAnswerData(question: Question, answer: QuestionnaireAnswerView | und
       return answer.choice != null || answer.required != null || answer.actual != null
     case 'required_actual':
       return answer.required != null || answer.actual != null
+    case 'yes_no_size':
+      return (
+        answer.choice != null ||
+        answer.length != null ||
+        answer.width != null ||
+        answer.height != null
+      )
     case 'dimensions':
       return answer.length != null || answer.width != null
     case 'measurement':
@@ -45,6 +52,15 @@ function formatAnswer(question: Question, answer: QuestionnaireAnswerView | unde
       if (answer.required != null || answer.actual != null) {
         parts.push(
           `Req ${answer.required ?? '—'}${question.unit ?? ''} / Actual ${answer.actual ?? '—'}${question.unit ?? ''}`,
+        )
+      }
+      return { text: parts.filter(Boolean).join(' · ') || '—', flagged: answer.choice === 'no' }
+    }
+    case 'yes_no_size': {
+      const parts = [answer.choice ? answer.choice.toUpperCase() : null]
+      if (answer.length != null || answer.width != null || answer.height != null) {
+        parts.push(
+          `Actual ${answer.length ?? '—'} × ${answer.width ?? '—'} × ${answer.height ?? '—'} ${question.unit ?? ''}`.trim(),
         )
       }
       return { text: parts.filter(Boolean).join(' · ') || '—', flagged: answer.choice === 'no' }
@@ -77,7 +93,7 @@ export function QuestionnaireResponseCard({
   surveyorName: string
 }) {
   const [expanded, setExpanded] = useState(false)
-  const template = GENERAL_CAMPING // only template today; templateKey is stored for future ones
+  const template = getTemplate(questionnaire.templateKey) ?? GENERAL_CAMPING
   const answerById = new Map(questionnaire.answers.map((a) => [a.questionId, a]))
 
   const allQuestions = template.sections.flatMap((s) => s.questions)

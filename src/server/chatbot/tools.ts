@@ -29,8 +29,8 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: 'get_work_progress',
     description:
-      'Progress of Kumbh Mela work heads and sub-heads (roads, water, electricity, sewerage, ' +
-      'tentage, fire, medical, traffic, ghats, ...) in one sector: required, completed, balance, ' +
+      'Progress of Kumbh Mela work heads and sub-heads (site clearance, roads, electrical, water, ' +
+      'tentage, sanitation, telecom, ISBT, fire, medical, police, signage, parking) in one sector: required, completed, balance, ' +
       'percent, target date, department and status. DEMO data. Shows KPI cards to the user.',
     parameters: {
       type: 'OBJECT',

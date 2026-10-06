@@ -9,6 +9,7 @@ const questionnaireAnswerSchema = new Schema(
     actual: { type: Number, default: null },
     length: { type: Number, default: null },
     width: { type: Number, default: null },
+    height: { type: Number, default: null },
     value: { type: Number, default: null },
     text: { type: String, default: null },
   },
