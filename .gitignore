@@ -60,3 +60,5 @@ next-env.d.ts
 Kumbh_Mela_JSON/
 Kumbh_Mela_Shape/
 Kumbh_Mela_2027_V1_07_07/
+# local data
+/data/

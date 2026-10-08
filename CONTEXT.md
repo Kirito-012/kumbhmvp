@@ -880,6 +880,29 @@ As of 2026-09-11: **67 of 67 loaded** (57 source layers → 72 tables, some merg
   reproducible via `ST_Buffer` if ever needed.
 - Also skipped: superseded plan versions, ArcGIS scratch/annotation layers, and layers with 0 features.
 
+### October 2026 update: `sector_plan`, `dustbins`, `sanitation` (2026-10-08)
+
+A third drop, `data/Updated Data/` (shapefiles, gitignored), replaced three tables via
+[`scripts/load-updated-data.ts`](scripts/load-updated-data.ts) (`--analyze` / `--apply`), not the
+Python loader: fiona/GDAL isn't installed and these are plain shapefiles, so the script reads them itself
+and reprojects in PostGIS. Backups: `kumbh.{sector_plan,dustbins,sanitation}_backup_20261008`.
+
+- `dustbins` 1,381 → 3,656 rows, `sanitation` 124 → 379 rows (straight replace).
+- `sector_plan` 3,314 → 3,014 parcels. Parcels are matched to the previous table by geometry (both
+  covering ≥ 90% of each other): matched parcels keep their id, new ones get ids above the old max.
+- **Ticket ↔ parcel ids were already misaligned before this.** All Map Parcel tickets were imported from
+  the 3,612-row table now in `sector_plan_backup_20260906`; the 2026-09-06 reload (`TRUNCATE … RESTART
+  IDENTITY`) renumbered parcels, so ~1,741 tickets pointed at the wrong parcel and 298 at none.
+  [`scripts/sync-tickets-to-sector-plan.ts`](scripts/sync-tickets-to-sector-plan.ts)` --from
+  sector_plan_backup_20260906` re-matched every ticket's *original* parcel to the new table: 2,249 moved
+  to their matching parcel (snapshot refreshed), 1,360 Map Parcel tickets whose parcel is gone were
+  soft-deleted (event reason "Parcel removed in the 2026-10 sector plan update"), then
+  `import-map-tickets.ts` created tickets for parcels with none. Every parcel now has a live ticket.
+  Ticket subjects were not rewritten, so ~245 still name the parcel's old class.
+- **Any future parcel reload** must go through the same match-and-sync, never a bare
+  `TRUNCATE … RESTART IDENTITY`. `import-map-tickets.ts` now ignores soft-deleted tickets when deciding
+  which parcels already have one.
+
 ### The `tertiary_road` story
 
 `Sector_Tertiary_Road` turned out **not** to be a second dataset — it's a near-total _subset_ of
