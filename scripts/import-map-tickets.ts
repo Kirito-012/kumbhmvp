@@ -1,6 +1,8 @@
 // One-off bulk import: creates one TCSticket ticket per kumbh.sector_plan parcel (Postgres),
 // so the 3,600+ map blocks become the ticketing system's master worklist. Safe to re-run —
-// skips parcels that already have a ticket (matched by location.sectorPlanId).
+// skips parcels that already have a live ticket (matched by location.sectorPlanId). Soft-deleted
+// tickets are ignored on purpose: after a parcel reload their sectorPlanId can be an id from an
+// older table that now belongs to a different parcel (see scripts/sync-tickets-to-sector-plan.ts).
 import { config } from 'dotenv'
 config({ path: '.env.local' })
 
@@ -94,7 +96,7 @@ async function main() {
   console.log(`Fetched ${rows.length} parcels.`)
 
   const existing = await TicketModel.find(
-    { 'location.sectorPlanId': { $in: rows.map((r) => r.id) } },
+    { deletedAt: null, 'location.sectorPlanId': { $in: rows.map((r) => r.id) } },
     { 'location.sectorPlanId': 1 },
   ).lean()
   const existingIds = new Set(existing.map((t) => t.location?.sectorPlanId))
